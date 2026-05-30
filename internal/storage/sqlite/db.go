@@ -591,6 +591,116 @@ func (s *Store) ResolveOAuthBearerCredential(ctx context.Context, providerInstan
 	return credentials.ResolvedOAuthBearerCredential{}, credentials.ErrNoEligibleCredential
 }
 
+func (s *Store) ResolveOAuthRefreshCredential(ctx context.Context, credentialID int64) (credentials.ResolvedOAuthRefreshCredential, error) {
+	var out credentials.ResolvedOAuthRefreshCredential
+	err := s.DB.QueryRowContext(ctx, `
+		SELECT pc.id, pc.provider_instance_id, ot.access_token_secret_id, ot.refresh_token_secret_id
+		FROM provider_credentials pc
+		JOIN oauth_tokens ot ON ot.credential_id = pc.id
+		JOIN credential_secrets access_secret
+			ON access_secret.id = ot.access_token_secret_id
+			AND access_secret.credential_id = pc.id
+			AND access_secret.secret_kind = 'oauth_access'
+		JOIN credential_secrets refresh_secret
+			ON refresh_secret.id = ot.refresh_token_secret_id
+			AND refresh_secret.credential_id = pc.id
+			AND refresh_secret.secret_kind = 'oauth_refresh'
+		WHERE pc.id = ?
+			AND pc.kind = 'oauth'
+			AND pc.disabled_at IS NULL
+			AND ot.refresh_token_secret_id IS NOT NULL
+			AND ot.access_token_secret_id IS NOT NULL
+	`, credentialID).Scan(&out.ID, &out.ProviderInstanceID, &out.AccessTokenSecretID, &out.RefreshTokenSecretID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return credentials.ResolvedOAuthRefreshCredential{}, credentials.ErrNoEligibleCredential
+		}
+		return credentials.ResolvedOAuthRefreshCredential{}, err
+	}
+	return out, nil
+}
+
+func (s *Store) ResolveOAuthRefreshToken(ctx context.Context, credentialID, refreshSecretID int64) (string, error) {
+	var refreshToken string
+	err := s.DB.QueryRowContext(ctx, `
+		SELECT secret_material
+		FROM credential_secrets
+		WHERE id = ?
+			AND credential_id = ?
+			AND secret_kind = 'oauth_refresh'
+	`, refreshSecretID, credentialID).Scan(&refreshToken)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", credentials.ErrNoEligibleCredential
+		}
+		return "", err
+	}
+	return refreshToken, nil
+}
+
+func (s *Store) UpdateOAuthTokens(ctx context.Context, credentialID int64, update credentials.OAuthTokenUpdate) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var accessSecretID, refreshSecretID int64
+	err = tx.QueryRowContext(ctx, `
+		SELECT ot.access_token_secret_id, ot.refresh_token_secret_id
+		FROM provider_credentials pc
+		JOIN oauth_tokens ot ON ot.credential_id = pc.id
+		WHERE pc.id = ?
+			AND pc.kind = 'oauth'
+			AND pc.disabled_at IS NULL
+			AND ot.access_token_secret_id IS NOT NULL
+			AND ot.refresh_token_secret_id IS NOT NULL
+	`, credentialID).Scan(&accessSecretID, &refreshSecretID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return credentials.ErrNoEligibleCredential
+		}
+		return err
+	}
+	ts := update.RefreshedAt.UTC().Format(time.RFC3339Nano)
+	if err := updateCredentialSecret(ctx, tx, credentialID, accessSecretID, "oauth_access", update.AccessToken, ts); err != nil {
+		return err
+	}
+	if update.RefreshToken != "" {
+		if err := updateCredentialSecret(ctx, tx, credentialID, refreshSecretID, "oauth_refresh", update.RefreshToken, ts); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE oauth_tokens
+		SET expires_at = ?, last_refresh_at = ?, refresh_failure_class = ''
+		WHERE credential_id = ?
+	`, nullableTime(update.ExpiresAt), ts, credentialID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func updateCredentialSecret(ctx context.Context, tx *sql.Tx, credentialID, secretID int64, kind, material, ts string) error {
+	res, err := tx.ExecContext(ctx, `
+		UPDATE credential_secrets
+		SET secret_material = ?, updated_at = ?
+		WHERE id = ?
+			AND credential_id = ?
+			AND secret_kind = ?
+	`, material, ts, secretID, credentialID, kind)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return credentials.ErrNoEligibleCredential
+	}
+	return nil
+}
+
 func (s *Store) ListFallbackPolicies(ctx context.Context) ([]credentials.FallbackPolicyMetadata, error) {
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT groups.provider_instance_id, groups.group_label,

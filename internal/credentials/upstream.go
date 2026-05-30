@@ -20,6 +20,7 @@ var (
 	ErrDuplicateCredential   = errors.New("duplicate credential")
 	ErrInvalidSecretDomain   = errors.New("invalid secret domain")
 	ErrInvalidOAuthInput     = errors.New("invalid oauth input")
+	ErrOAuthRefreshFailed    = errors.New("oauth refresh failed")
 )
 
 const DefaultFallbackGroup = "default"
@@ -49,6 +50,9 @@ type UpstreamCredentialRepository interface {
 	ResolveAPIKeyCredential(ctx context.Context, providerInstanceID string) (ResolvedAPIKeyCredential, error)
 	ResolveAPIKeyCredentials(ctx context.Context, providerInstanceID string) ([]ResolvedAPIKeyCredential, error)
 	ResolveOAuthBearerCredential(ctx context.Context, providerInstanceID string, now time.Time) (ResolvedOAuthBearerCredential, error)
+	ResolveOAuthRefreshCredential(ctx context.Context, credentialID int64) (ResolvedOAuthRefreshCredential, error)
+	ResolveOAuthRefreshToken(ctx context.Context, credentialID, refreshSecretID int64) (string, error)
+	UpdateOAuthTokens(ctx context.Context, credentialID int64, update OAuthTokenUpdate) error
 	ListFallbackPolicies(ctx context.Context) ([]FallbackPolicyMetadata, error)
 	SetFallbackGroupEnabled(ctx context.Context, providerInstanceID, groupLabel string, enabled bool, now time.Time) error
 	InsertOAuthCredential(ctx context.Context, meta NewOAuthCredential, accessToken, refreshToken string) (OAuthCredentialMetadata, error)
@@ -60,6 +64,7 @@ type UpstreamCredentialRepository interface {
 type OAuthCredentialManager interface {
 	AddOAuthCredential(ctx context.Context, input NewOAuthCredentialInput) (OAuthCredentialMetadata, error)
 	MarkOAuthRefreshFailure(ctx context.Context, credentialID int64, failureClass string) error
+	RefreshOAuthCredential(ctx context.Context, credentialID int64) error
 }
 
 type OAuthMetadataReader interface {
@@ -67,10 +72,15 @@ type OAuthMetadataReader interface {
 	ListProviderAccounts(ctx context.Context) ([]ProviderAccountMetadata, error)
 }
 
+type OAuthRefreshController interface {
+	RefreshOAuthCredential(ctx context.Context, credentialID int64) error
+}
+
 type UpstreamService struct {
-	Registry provider.Registry
-	Repo     UpstreamCredentialRepository
-	Now      func() time.Time
+	Registry       provider.Registry
+	Repo           UpstreamCredentialRepository
+	OAuthRefresher provider.OAuthTokenRefresher
+	Now            func() time.Time
 }
 
 type NewUpstreamCredential struct {
@@ -164,6 +174,20 @@ type ResolvedOAuthBearerCredential struct {
 	ProviderInstanceID string
 	BearerToken        string
 	ExpiresAt          *time.Time
+}
+
+type ResolvedOAuthRefreshCredential struct {
+	ID                   int64
+	ProviderInstanceID   string
+	AccessTokenSecretID  int64
+	RefreshTokenSecretID int64
+}
+
+type OAuthTokenUpdate struct {
+	AccessToken  string
+	RefreshToken string
+	ExpiresAt    *time.Time
+	RefreshedAt  time.Time
 }
 
 func (c ResolvedOAuthBearerCredential) String() string {
@@ -314,6 +338,74 @@ func (s UpstreamService) ResolveOAuthBearer(ctx context.Context, providerInstanc
 	return s.Repo.ResolveOAuthBearerCredential(ctx, providerInstanceID, now.UTC())
 }
 
+func (s UpstreamService) RefreshOAuthCredential(ctx context.Context, credentialID int64) error {
+	credential, err := s.Repo.ResolveOAuthRefreshCredential(ctx, credentialID)
+	if err != nil {
+		return err
+	}
+	instance, ok := s.Registry.Get(credential.ProviderInstanceID)
+	if !ok {
+		return ErrCredentialNotFound
+	}
+	if !instance.OAuth || !instance.OAuthRefresh || instance.Type != "codex" {
+		return fmt.Errorf("%w: provider %q does not support oauth refresh", ErrUnsupportedCredential, credential.ProviderInstanceID)
+	}
+	if s.OAuthRefresher == nil {
+		return fmt.Errorf("%w: oauth refresh adapter is unavailable", ErrUnsupportedCredential)
+	}
+	refreshToken, err := s.Repo.ResolveOAuthRefreshToken(ctx, credential.ID, credential.RefreshTokenSecretID)
+	if err != nil {
+		return err
+	}
+	now := s.now()
+	result, err := s.OAuthRefresher.RefreshOAuthToken(ctx, provider.OAuthRefreshRequest{
+		ProviderType: instance.Type,
+		AuthIssuer:   instance.AuthIssuer,
+		RefreshToken: refreshToken,
+		Now:          now,
+	})
+	if err != nil {
+		return s.recordOAuthRefreshFailure(ctx, credentialID, refreshFailureClass(err, "refresh_unavailable"))
+	}
+	accessToken := strings.TrimSpace(result.AccessToken)
+	if err := validateOAuthSecret(accessToken); err != nil {
+		return s.recordOAuthRefreshFailure(ctx, credentialID, "refresh_invalid_response")
+	}
+	newRefreshToken := strings.TrimSpace(result.RefreshToken)
+	if newRefreshToken != "" {
+		if err := validateOAuthSecret(newRefreshToken); err != nil {
+			return s.recordOAuthRefreshFailure(ctx, credentialID, "refresh_invalid_response")
+		}
+	}
+	if err := s.Repo.UpdateOAuthTokens(ctx, credentialID, OAuthTokenUpdate{
+		AccessToken:  accessToken,
+		RefreshToken: newRefreshToken,
+		ExpiresAt:    result.ExpiresAt,
+		RefreshedAt:  now,
+	}); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s UpstreamService) recordOAuthRefreshFailure(ctx context.Context, credentialID int64, failureClass string) error {
+	if err := s.Repo.MarkOAuthRefreshFailure(ctx, credentialID, normalizeRefreshFailureClass(failureClass), s.now()); err != nil {
+		return err
+	}
+	return fmt.Errorf("%w: %s", ErrOAuthRefreshFailed, normalizeRefreshFailureClass(failureClass))
+}
+
+func refreshFailureClass(err error, fallback string) string {
+	type classified interface {
+		RefreshFailureClass() string
+	}
+	var c classified
+	if errors.As(err, &c) {
+		return normalizeRefreshFailureClass(c.RefreshFailureClass())
+	}
+	return normalizeRefreshFailureClass(fallback)
+}
+
 func LooksLikeLocalToken(value string) bool {
 	return len(value) > 4 && value[:4] == "iln_"
 }
@@ -430,7 +522,8 @@ func normalizeRefreshFailureClass(value string) string {
 	switch value {
 	case "refresh_token_expired", "refresh_token_invalidated", "refresh_token_reused",
 		"refresh_unauthorized", "refresh_network_error", "refresh_timeout",
-		"refresh_unavailable", "refresh_invalid_response":
+		"refresh_http_error", "refresh_body_too_large", "refresh_unavailable",
+		"refresh_invalid_response":
 		return value
 	default:
 		return "refresh_unavailable"

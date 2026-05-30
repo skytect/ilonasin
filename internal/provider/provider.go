@@ -13,10 +13,12 @@ import (
 type Defaults struct {
 	Type           string
 	BaseURL        string
+	AuthIssuer     string
 	AuthStyle      string
 	Placeholder    bool
 	APIKey         bool
 	OAuth          bool
+	OAuthRefresh   bool
 	Chat           bool
 	ModelDiscovery bool
 }
@@ -41,9 +43,11 @@ var builtIns = map[string]Defaults{
 	"codex": {
 		Type:           "codex",
 		BaseURL:        "https://chatgpt.com/backend-api/codex",
+		AuthIssuer:     "https://auth.openai.com",
 		AuthStyle:      "deferred",
 		Placeholder:    true,
 		OAuth:          true,
+		OAuthRefresh:   true,
 		ModelDiscovery: true,
 	},
 }
@@ -65,10 +69,12 @@ type Instance struct {
 	ID             string
 	Type           string
 	BaseURL        string
+	AuthIssuer     string
 	AuthStyle      string
 	Placeholder    bool
 	APIKey         bool
 	OAuth          bool
+	OAuthRefresh   bool
 	Chat           bool
 	ModelDiscovery bool
 }
@@ -96,14 +102,26 @@ func NewRegistry(cfg config.Config) (Registry, error) {
 				return Registry{}, fmt.Errorf("provider %q base_url: %w", id, err)
 			}
 		}
+		authIssuer := def.AuthIssuer
+		if providerCfg.AuthIssuer != "" {
+			if !def.OAuthRefresh {
+				return Registry{}, fmt.Errorf("provider %q auth_issuer: provider type does not support oauth refresh", id)
+			}
+			authIssuer = providerCfg.AuthIssuer
+			if err := validateHTTPSAuthIssuer(authIssuer); err != nil {
+				return Registry{}, fmt.Errorf("provider %q auth_issuer: %w", id, err)
+			}
+		}
 		instance := Instance{
 			ID:             id,
 			Type:           providerCfg.Type,
 			BaseURL:        baseURL,
+			AuthIssuer:     authIssuer,
 			AuthStyle:      def.AuthStyle,
 			Placeholder:    def.Placeholder,
 			APIKey:         def.APIKey,
 			OAuth:          def.OAuth,
+			OAuthRefresh:   def.OAuthRefresh,
 			Chat:           def.Chat,
 			ModelDiscovery: def.ModelDiscovery,
 		}
@@ -153,6 +171,26 @@ func validateHTTPSBaseURL(raw string) error {
 	}
 	if u.Scheme != "https" || u.Host == "" {
 		return fmt.Errorf("must be an https URL")
+	}
+	return nil
+}
+
+func validateHTTPSAuthIssuer(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return err
+	}
+	if u.Scheme != "https" || u.Host == "" {
+		return fmt.Errorf("must be an https URL")
+	}
+	if u.User != nil {
+		return fmt.Errorf("must not include userinfo")
+	}
+	if u.RawQuery != "" {
+		return fmt.Errorf("must not include query")
+	}
+	if u.Fragment != "" {
+		return fmt.Errorf("must not include fragment")
 	}
 	return nil
 }

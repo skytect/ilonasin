@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -273,7 +274,7 @@ func Manage(opts Options) error {
 		return err
 	}
 	defer rt.Store.Close()
-	upstreams := credentials.UpstreamService{Registry: rt.Registry, Repo: rt.Store}
+	upstreams := credentials.UpstreamService{Registry: rt.Registry, Repo: rt.Store, OAuthRefresher: provider.NewHTTPOAuthRefresher(nil)}
 	return tui.Run(rt.Config, rt.Registry, credentials.Service{Repo: rt.Store}, upstreams, upstreams, rt.Store, rt.Store, rt.Store)
 }
 
@@ -306,12 +307,15 @@ func ManageCheck(opts Options) error {
 	if err := exerciseOAuthCheck(context.Background(), rt.Registry, rt.Config); err != nil {
 		return err
 	}
+	if err := exerciseOAuthRefreshCheck(context.Background(), rt.Config); err != nil {
+		return err
+	}
 	if err := exerciseTelemetryPruneCheck(context.Background(), rt.Registry, rt.Config); err != nil {
 		return err
 	}
 	var buf bytes.Buffer
 	tokenService := credentials.Service{Repo: rt.Store}
-	upstreams := credentials.UpstreamService{Registry: rt.Registry, Repo: rt.Store}
+	upstreams := credentials.UpstreamService{Registry: rt.Registry, Repo: rt.Store, OAuthRefresher: provider.NewHTTPOAuthRefresher(nil)}
 	if err := tui.Check(rt.Config, rt.Registry, tokenService, upstreams, upstreams, rt.Store, rt.Store, rt.Store, &buf); err != nil {
 		return err
 	}
@@ -723,6 +727,499 @@ func exerciseOAuthCheck(ctx context.Context, registry provider.Registry, cfg con
 		return err
 	}
 	return tui.ExerciseOAuthSummary(ctx, cfg, registry, service)
+}
+
+func exerciseOAuthRefreshCheck(ctx context.Context, cfg config.Config) error {
+	fakeAuth := newOAuthRefreshAuthServer()
+	defer fakeAuth.server.Close()
+	refreshCfg := cfg
+	refreshCfg.Providers = map[string]config.ProviderConfig{
+		"codex":    {Type: "codex", AuthIssuer: fakeAuth.server.URL},
+		"deepseek": {Type: "deepseek"},
+	}
+	registry, err := provider.NewRegistry(refreshCfg)
+	if err != nil {
+		return err
+	}
+	for _, invalid := range []string{
+		"http://auth.openai.com",
+		"https://",
+		"https://user:pass@auth.openai.com",
+		"https://auth.openai.com?token_endpoint_body=secret",
+		"https://auth.openai.com#fragment",
+	} {
+		badCfg := cfg
+		badCfg.Providers = map[string]config.ProviderConfig{"codex": {Type: "codex", AuthIssuer: invalid}}
+		if _, err := provider.NewRegistry(badCfg); err == nil {
+			return fmt.Errorf("invalid auth_issuer accepted")
+		}
+	}
+	badCfg := cfg
+	badCfg.Providers = map[string]config.ProviderConfig{"deepseek": {Type: "deepseek", AuthIssuer: fakeAuth.server.URL}}
+	if _, err := provider.NewRegistry(badCfg); err == nil {
+		return fmt.Errorf("non-oauth auth_issuer accepted")
+	}
+
+	checkDBDir, err := os.MkdirTemp("", "ilonasin-manage-check-oauth-refresh-db-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(checkDBDir)
+	store, err := sqlite.Open(ctx, filepath.Join(checkDBDir, "ilonasin.sqlite"))
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	now := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
+	refresher := provider.NewHTTPOAuthRefresher(fakeAuth.server.Client())
+	refresher.Timeout = 20 * time.Millisecond
+	service := credentials.UpstreamService{
+		Registry:       registry,
+		Repo:           store,
+		OAuthRefresher: refresher,
+		Now:            func() time.Time { return now },
+	}
+	expiresAt := now.Add(-time.Hour)
+	first, err := service.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID:  "codex",
+		Label:               "refresh first",
+		AccessToken:         "oauth-refresh-old-access-first",
+		RefreshToken:        "oauth-refresh-old-refresh-first",
+		AccountID:           "refresh-account-first",
+		AccountDisplayLabel: "First Refresh",
+		PlanLabel:           "team",
+		ExpiresAt:           &expiresAt,
+	})
+	if err != nil {
+		return err
+	}
+	second, err := service.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID:  "codex",
+		Label:               "refresh second",
+		AccessToken:         "oauth-refresh-old-access-second",
+		RefreshToken:        "oauth-refresh-old-refresh-second",
+		AccountID:           "refresh-account-second",
+		AccountDisplayLabel: "Second Refresh",
+		PlanLabel:           "team",
+		ExpiresAt:           &expiresAt,
+	})
+	if err != nil {
+		return err
+	}
+	disabled, err := service.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID:  "codex",
+		Label:               "refresh disabled",
+		AccessToken:         "oauth-refresh-disabled-access",
+		RefreshToken:        "oauth-refresh-disabled-refresh",
+		AccountID:           "refresh-account-disabled",
+		AccountDisplayLabel: "Disabled Refresh",
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := store.DB.ExecContext(ctx, `
+		UPDATE provider_credentials
+		SET disabled_at = ?, updated_at = ?
+		WHERE id = ?
+	`, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), disabled.ID); err != nil {
+		return err
+	}
+	crossLinked, err := service.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID:  "codex",
+		Label:               "refresh cross linked",
+		AccessToken:         "oauth-refresh-cross-access",
+		RefreshToken:        "oauth-refresh-cross-refresh",
+		AccountID:           "refresh-account-cross",
+		AccountDisplayLabel: "Cross Refresh",
+	})
+	if err != nil {
+		return err
+	}
+	var firstRefreshSecretID int64
+	if err := store.DB.QueryRowContext(ctx, `
+		SELECT refresh_token_secret_id
+		FROM oauth_tokens
+		WHERE credential_id = ?
+	`, first.ID).Scan(&firstRefreshSecretID); err != nil {
+		return err
+	}
+	if _, err := store.DB.ExecContext(ctx, `
+		UPDATE oauth_tokens
+		SET refresh_token_secret_id = ?
+		WHERE credential_id = ?
+	`, firstRefreshSecretID, crossLinked.ID); err != nil {
+		return err
+	}
+	crossLinkedAccess, err := service.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID:  "codex",
+		Label:               "refresh cross linked access",
+		AccessToken:         "oauth-refresh-cross-access-two",
+		RefreshToken:        "oauth-refresh-cross-refresh-two",
+		AccountID:           "refresh-account-cross-access",
+		AccountDisplayLabel: "Cross Access Refresh",
+	})
+	if err != nil {
+		return err
+	}
+	var firstAccessSecretID int64
+	if err := store.DB.QueryRowContext(ctx, `
+		SELECT access_token_secret_id
+		FROM oauth_tokens
+		WHERE credential_id = ?
+	`, first.ID).Scan(&firstAccessSecretID); err != nil {
+		return err
+	}
+	if _, err := store.DB.ExecContext(ctx, `
+		UPDATE oauth_tokens
+		SET access_token_secret_id = ?
+		WHERE credential_id = ?
+	`, firstAccessSecretID, crossLinkedAccess.ID); err != nil {
+		return err
+	}
+	if _, err := service.AddAPIKey(ctx, "deepseek", "refresh api key", "sk-refresh-api-key-secret"); err != nil {
+		return err
+	}
+	staleID, err := seedRawOAuthCredential(ctx, store, "stale-provider", "refresh stale", "oauth-refresh-stale-access", "oauth-refresh-stale-refresh", now)
+	if err != nil {
+		return err
+	}
+	nonOAuthID, err := seedRawOAuthCredential(ctx, store, "deepseek", "refresh non oauth", "oauth-refresh-nonoauth-access", "oauth-refresh-nonoauth-refresh", now)
+	if err != nil {
+		return err
+	}
+
+	fakeAuth.setMode("success_replace")
+	if err := tui.ExerciseOAuthRefresh(ctx, cfg, registry, service, service); err != nil {
+		return err
+	}
+	if fakeAuth.refreshToken() != "oauth-refresh-old-refresh-second" {
+		return fmt.Errorf("oauth refresh did not use selected credential refresh token")
+	}
+	if err := assertOAuthRefreshSuccess(ctx, store, first.ID, second.ID); err != nil {
+		return err
+	}
+	keep, err := service.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID:  "codex",
+		Label:               "refresh keep old refresh",
+		AccessToken:         "oauth-refresh-keep-old-access",
+		RefreshToken:        "oauth-refresh-keep-old-refresh",
+		AccountID:           "refresh-keep",
+		AccountDisplayLabel: "Keep Refresh",
+	})
+	if err != nil {
+		return err
+	}
+	fakeAuth.setMode("success_keep")
+	if err := service.RefreshOAuthCredential(ctx, keep.ID); err != nil {
+		return err
+	}
+	if err := assertOAuthRefreshKeepSuccess(ctx, store, keep.ID); err != nil {
+		return err
+	}
+	beforeRequests := fakeAuth.requestCount()
+	if err := service.RefreshOAuthCredential(ctx, disabled.ID); !errors.Is(err, credentials.ErrNoEligibleCredential) {
+		return fmt.Errorf("disabled oauth refresh err=%v", err)
+	}
+	if err := service.RefreshOAuthCredential(ctx, crossLinked.ID); !errors.Is(err, credentials.ErrNoEligibleCredential) {
+		return fmt.Errorf("cross-linked oauth refresh err=%v", err)
+	}
+	if err := service.RefreshOAuthCredential(ctx, crossLinkedAccess.ID); !errors.Is(err, credentials.ErrNoEligibleCredential) {
+		return fmt.Errorf("cross-linked oauth access refresh err=%v", err)
+	}
+	if err := service.RefreshOAuthCredential(ctx, staleID); !errors.Is(err, credentials.ErrCredentialNotFound) {
+		return fmt.Errorf("stale oauth refresh err=%v", err)
+	}
+	if err := service.RefreshOAuthCredential(ctx, nonOAuthID); !errors.Is(err, credentials.ErrUnsupportedCredential) {
+		return fmt.Errorf("non-oauth provider refresh err=%v", err)
+	}
+	if fakeAuth.requestCount() != beforeRequests {
+		return fmt.Errorf("ineligible oauth refresh called auth server")
+	}
+	rows, err := service.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if err := service.RefreshOAuthCredential(ctx, row.ID); !errors.Is(err, credentials.ErrNoEligibleCredential) && !errors.Is(err, credentials.ErrUnsupportedCredential) {
+			return fmt.Errorf("api key credential refresh err=%v", err)
+		}
+	}
+
+	if err := exerciseOAuthRefreshFailureModes(ctx, store, service, fakeAuth); err != nil {
+		return err
+	}
+	return nil
+}
+
+func seedRawOAuthCredential(ctx context.Context, store *sqlite.Store, providerID, label, accessToken, refreshToken string, now time.Time) (int64, error) {
+	ts := now.UTC().Format(time.RFC3339Nano)
+	res, err := store.DB.ExecContext(ctx, `
+		INSERT INTO provider_credentials(
+			provider_instance_id, kind, label, secret_prefix, secret_last4, fallback_group, created_at, updated_at
+		) VALUES(?, 'oauth', ?, '', '', ?, ?, ?)
+	`, providerID, label, credentials.DefaultFallbackGroup, ts, ts)
+	if err != nil {
+		return 0, err
+	}
+	credentialID, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	accessRes, err := store.DB.ExecContext(ctx, `
+		INSERT INTO credential_secrets(credential_id, secret_kind, secret_material, created_at, updated_at)
+		VALUES(?, 'oauth_access', ?, ?, ?)
+	`, credentialID, accessToken, ts, ts)
+	if err != nil {
+		return 0, err
+	}
+	accessID, err := accessRes.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	refreshRes, err := store.DB.ExecContext(ctx, `
+		INSERT INTO credential_secrets(credential_id, secret_kind, secret_material, created_at, updated_at)
+		VALUES(?, 'oauth_refresh', ?, ?, ?)
+	`, credentialID, refreshToken, ts, ts)
+	if err != nil {
+		return 0, err
+	}
+	refreshID, err := refreshRes.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	if _, err := store.DB.ExecContext(ctx, `
+		INSERT INTO oauth_tokens(credential_id, access_token_secret_id, refresh_token_secret_id, expires_at, scopes)
+		VALUES(?, ?, ?, NULL, '')
+	`, credentialID, accessID, refreshID); err != nil {
+		return 0, err
+	}
+	return credentialID, nil
+}
+
+type oauthRefreshAuthServer struct {
+	server *httptest.Server
+	mu     sync.Mutex
+	mode   string
+	seen   []map[string]string
+}
+
+func newOAuthRefreshAuthServer() *oauthRefreshAuthServer {
+	f := &oauthRefreshAuthServer{mode: "success_replace"}
+	f.server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/oauth/token" {
+			http.NotFound(w, r)
+			return
+		}
+		if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+			http.Error(w, "bad content type", http.StatusBadRequest)
+			return
+		}
+		var body map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		f.mu.Lock()
+		mode := f.mode
+		f.seen = append(f.seen, body)
+		f.mu.Unlock()
+		if len(body) != 3 ||
+			body["client_id"] != provider.CodexOAuthClientID ||
+			body["grant_type"] != "refresh_token" ||
+			body["refresh_token"] == "" ||
+			body["access_token"] != "" {
+			http.Error(w, "bad body", http.StatusBadRequest)
+			return
+		}
+		switch mode {
+		case "success_replace":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"access_token":"oauth-refresh-new-access-second","refresh_token":"oauth-refresh-new-refresh-second","expires_in":3600,"id_token":"id-token-drop-marker"}`))
+		case "success_keep":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"access_token":"oauth-refresh-new-access-keep","expires_in":3600}`))
+		case "expired":
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"refresh_token_expired"}`))
+		case "reused":
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"refresh_token_reused"}`))
+		case "invalidated":
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"refresh_token_invalidated"}`))
+		case "unknown401":
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"raw-provider-payload"}`))
+		case "http":
+			http.Error(w, "raw provider failure body", http.StatusServiceUnavailable)
+		case "malformed":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"access_token":`))
+		case "trailing":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"access_token":"oauth-refresh-trailing-access"} raw trailing`))
+		case "unsafe":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"access_token":"eyJ.bad.jwt","expires_in":3600}`))
+		case "too_large":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(strings.Repeat("x", int(provider.MaxOAuthRefreshBodyBytes)+1)))
+		case "timeout":
+			time.Sleep(100 * time.Millisecond)
+		}
+	}))
+	return f
+}
+
+func (f *oauthRefreshAuthServer) setMode(mode string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.mode = mode
+}
+
+func (f *oauthRefreshAuthServer) refreshToken() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.seen) == 0 {
+		return ""
+	}
+	return f.seen[len(f.seen)-1]["refresh_token"]
+}
+
+func (f *oauthRefreshAuthServer) requestCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.seen)
+}
+
+func exerciseOAuthRefreshFailureModes(ctx context.Context, store *sqlite.Store, service credentials.UpstreamService, fakeAuth *oauthRefreshAuthServer) error {
+	for _, tc := range []struct {
+		mode string
+		want string
+	}{
+		{"expired", "refresh_token_expired"},
+		{"reused", "refresh_token_reused"},
+		{"invalidated", "refresh_token_invalidated"},
+		{"unknown401", "refresh_unauthorized"},
+		{"http", "refresh_http_error"},
+		{"malformed", "refresh_invalid_response"},
+		{"trailing", "refresh_invalid_response"},
+		{"unsafe", "refresh_invalid_response"},
+		{"too_large", "refresh_body_too_large"},
+		{"timeout", "refresh_timeout"},
+	} {
+		created, err := service.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+			ProviderInstanceID:  "codex",
+			Label:               "refresh failure " + tc.mode,
+			AccessToken:         "oauth-refresh-failure-access-" + tc.mode,
+			RefreshToken:        "oauth-refresh-failure-refresh-" + tc.mode,
+			AccountID:           "refresh-failure-" + tc.mode,
+			AccountDisplayLabel: "Failure " + tc.mode,
+		})
+		if err != nil {
+			return err
+		}
+		fakeAuth.setMode(tc.mode)
+		if err := service.RefreshOAuthCredential(ctx, created.ID); !errors.Is(err, credentials.ErrOAuthRefreshFailed) {
+			return fmt.Errorf("refresh failure %s err=%v", tc.mode, err)
+		}
+		var got string
+		if err := store.DB.QueryRowContext(ctx, `
+			SELECT COALESCE(refresh_failure_class, '')
+			FROM oauth_tokens
+			WHERE credential_id = ?
+		`, created.ID).Scan(&got); err != nil {
+			return err
+		}
+		if got != tc.want {
+			return fmt.Errorf("refresh failure %s class=%s want=%s", tc.mode, got, tc.want)
+		}
+	}
+	return nil
+}
+
+func assertOAuthRefreshSuccess(ctx context.Context, store *sqlite.Store, firstID, secondID int64) error {
+	for _, check := range []struct {
+		name  string
+		query string
+		args  []any
+		want  int
+	}{
+		{"first access kept", `SELECT COUNT(*) FROM credential_secrets WHERE credential_id = ? AND secret_kind = 'oauth_access' AND secret_material = 'oauth-refresh-old-access-first'`, []any{firstID}, 1},
+		{"first refresh kept", `SELECT COUNT(*) FROM credential_secrets WHERE credential_id = ? AND secret_kind = 'oauth_refresh' AND secret_material = 'oauth-refresh-old-refresh-first'`, []any{firstID}, 1},
+		{"second old access removed", `SELECT COUNT(*) FROM credential_secrets WHERE credential_id = ? AND secret_material = 'oauth-refresh-old-access-second'`, []any{secondID}, 0},
+		{"second old refresh removed", `SELECT COUNT(*) FROM credential_secrets WHERE credential_id = ? AND secret_material = 'oauth-refresh-old-refresh-second'`, []any{secondID}, 0},
+		{"second new access stored", `SELECT COUNT(*) FROM credential_secrets WHERE credential_id = ? AND secret_kind = 'oauth_access' AND secret_material = 'oauth-refresh-new-access-second'`, []any{secondID}, 1},
+		{"second new refresh stored", `SELECT COUNT(*) FROM credential_secrets WHERE credential_id = ? AND secret_kind = 'oauth_refresh' AND secret_material = 'oauth-refresh-new-refresh-second'`, []any{secondID}, 1},
+		{"id token dropped", `SELECT COUNT(*) FROM credential_secrets WHERE secret_material = 'id-token-drop-marker'`, nil, 0},
+	} {
+		var got int
+		if err := store.DB.QueryRowContext(ctx, check.query, check.args...).Scan(&got); err != nil {
+			return err
+		}
+		if got != check.want {
+			return fmt.Errorf("oauth refresh %s count=%d want=%d", check.name, got, check.want)
+		}
+	}
+	var lastRefresh, failure string
+	var expires sql.NullString
+	if err := store.DB.QueryRowContext(ctx, `
+		SELECT COALESCE(last_refresh_at, ''), COALESCE(refresh_failure_class, ''), expires_at
+		FROM oauth_tokens
+		WHERE credential_id = ?
+	`, secondID).Scan(&lastRefresh, &failure, &expires); err != nil {
+		return err
+	}
+	if lastRefresh == "" || failure != "" || !expires.Valid {
+		return fmt.Errorf("oauth refresh metadata missing")
+	}
+	for _, marker := range []string{
+		"oauth-refresh-new-access-second",
+		"oauth-refresh-new-refresh-second",
+		"oauth-refresh-old-access-second",
+		"oauth-refresh-old-refresh-second",
+		"id-token-drop-marker",
+		"raw-provider-payload",
+		"token_endpoint_body",
+		"balance",
+		"credit",
+	} {
+		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func assertOAuthRefreshKeepSuccess(ctx context.Context, store *sqlite.Store, credentialID int64) error {
+	for _, check := range []struct {
+		name  string
+		query string
+		args  []any
+		want  int
+	}{
+		{"old access removed", `SELECT COUNT(*) FROM credential_secrets WHERE credential_id = ? AND secret_material = 'oauth-refresh-keep-old-access'`, []any{credentialID}, 0},
+		{"new access stored", `SELECT COUNT(*) FROM credential_secrets WHERE credential_id = ? AND secret_kind = 'oauth_access' AND secret_material = 'oauth-refresh-new-access-keep'`, []any{credentialID}, 1},
+		{"old refresh kept", `SELECT COUNT(*) FROM credential_secrets WHERE credential_id = ? AND secret_kind = 'oauth_refresh' AND secret_material = 'oauth-refresh-keep-old-refresh'`, []any{credentialID}, 1},
+	} {
+		var got int
+		if err := store.DB.QueryRowContext(ctx, check.query, check.args...).Scan(&got); err != nil {
+			return err
+		}
+		if got != check.want {
+			return fmt.Errorf("oauth refresh keep %s count=%d want=%d", check.name, got, check.want)
+		}
+	}
+	for _, marker := range []string{
+		"oauth-refresh-new-access-keep",
+		"oauth-refresh-keep-old-access",
+		"oauth-refresh-keep-old-refresh",
+	} {
+		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func exerciseTelemetryPruneCheck(ctx context.Context, registry provider.Registry, cfg config.Config) error {

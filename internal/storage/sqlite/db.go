@@ -537,6 +537,40 @@ func (s *Store) ResolveAPIKeyCredentials(ctx context.Context, providerInstanceID
 	return out, nil
 }
 
+func (s *Store) ListFallbackPolicies(ctx context.Context) ([]credentials.FallbackPolicyMetadata, error) {
+	rows, err := s.DB.QueryContext(ctx, `
+		SELECT groups.provider_instance_id, groups.group_label,
+			COALESCE(p.enabled, 0), groups.credential_count, p.id IS NOT NULL
+		FROM (
+			SELECT provider_instance_id, fallback_group AS group_label, COUNT(*) AS credential_count
+			FROM provider_credentials
+			WHERE kind = 'api_key'
+				AND disabled_at IS NULL
+			GROUP BY provider_instance_id, fallback_group
+		) groups
+		LEFT JOIN credential_fallback_policies p
+			ON p.provider_instance_id = groups.provider_instance_id
+			AND p.group_label = groups.group_label
+		ORDER BY groups.provider_instance_id ASC, groups.group_label ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []credentials.FallbackPolicyMetadata
+	for rows.Next() {
+		var row credentials.FallbackPolicyMetadata
+		var enabled, explicit int
+		if err := rows.Scan(&row.ProviderInstanceID, &row.GroupLabel, &enabled, &row.CredentialCount, &explicit); err != nil {
+			return nil, err
+		}
+		row.Enabled = enabled == 1
+		row.Explicit = explicit == 1
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) SetFallbackGroupEnabled(ctx context.Context, providerInstanceID, groupLabel string, enabled bool, now time.Time) error {
 	enabledInt := 0
 	if enabled {

@@ -227,6 +227,9 @@ func ManageCheck(opts Options) error {
 	if err := exerciseUpstreamCredentialCheck(context.Background(), rt.Registry, rt.Config, opts); err != nil {
 		return err
 	}
+	if err := exerciseFallbackPolicyCheck(context.Background(), rt.Registry, rt.Config); err != nil {
+		return err
+	}
 	if err := exerciseModelCacheCheck(context.Background(), rt.Registry, rt.Config); err != nil {
 		return err
 	}
@@ -325,6 +328,115 @@ func exerciseUpstreamCredentialCheck(ctx context.Context, registry provider.Regi
 	service := credentials.UpstreamService{Registry: registry, Repo: store}
 	if err := tui.ExerciseUpstreamCredentialLifecycle(ctx, cfg, registry, service); err != nil {
 		return err
+	}
+	return nil
+}
+
+func exerciseFallbackPolicyCheck(ctx context.Context, registry provider.Registry, cfg config.Config) error {
+	instance, ok := firstAPIKeyProvider(registry)
+	if !ok {
+		return nil
+	}
+	checkDBDir, err := os.MkdirTemp("", "ilonasin-manage-check-fallback-policy-db-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(checkDBDir)
+	configPath := filepath.Join(checkDBDir, "config.toml")
+	if err := os.WriteFile(configPath, []byte("server_bind = \"127.0.0.1:0\"\n"), 0o600); err != nil {
+		return err
+	}
+	store, err := sqlite.Open(ctx, filepath.Join(checkDBDir, "ilonasin.sqlite"))
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	service := credentials.UpstreamService{Registry: registry, Repo: store}
+	if _, err := service.AddAPIKey(ctx, instance.ID, "fallback raw-provider-payload prompt marker secret", "sk-fallback-policy-primary"); err != nil {
+		return fmt.Errorf("seed fallback policy primary: %w", err)
+	}
+	if _, err := service.AddAPIKey(ctx, instance.ID, "fallback acct_secret body marker", "sk-fallback-policy-secondary"); err != nil {
+		return fmt.Errorf("seed fallback policy secondary: %w", err)
+	}
+	for i := 1; i <= 2; i++ {
+		created, err := service.AddAPIKey(ctx, instance.ID, fmt.Sprintf("fallback unsafe group %d raw-provider-payload", i), fmt.Sprintf("sk-fallback-policy-unsafe-%d", i))
+		if err != nil {
+			return fmt.Errorf("seed unsafe fallback policy group credential: %w", err)
+		}
+		if _, err := store.DB.ExecContext(ctx, `
+			UPDATE provider_credentials
+			SET fallback_group = 'raw-provider-payload prompt marker'
+			WHERE id = ?
+		`, created.ID); err != nil {
+			return fmt.Errorf("seed unsafe fallback policy group: %w", err)
+		}
+	}
+	for _, providerID := range []string{"stale-provider", "codex"} {
+		for i := 1; i <= 2; i++ {
+			if _, err := store.DB.ExecContext(ctx, `
+		INSERT INTO provider_credentials(
+			provider_instance_id, kind, label, secret_prefix, secret_last4, fallback_group, created_at, updated_at
+		) VALUES(?, 'api_key', ?, 'sk-stale', 'tale', ?, ?, ?)
+	`, providerID, fmt.Sprintf("%s raw-provider-payload %d", providerID, i),
+				"raw-provider-payload prompt marker", time.Now().UTC().Format(time.RFC3339Nano),
+				time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+				return fmt.Errorf("seed ignored fallback policy credential: %w", err)
+			}
+		}
+	}
+	if err := store.SetFallbackGroupEnabled(ctx, "stale-provider", "raw-provider-payload prompt marker", true, time.Now()); err != nil {
+		return fmt.Errorf("seed stale fallback policy: %w", err)
+	}
+	if err := store.SetFallbackGroupEnabled(ctx, "codex", "raw-provider-payload prompt marker", true, time.Now()); err != nil {
+		return fmt.Errorf("seed placeholder fallback policy: %w", err)
+	}
+	beforeProtected, err := fallbackPolicyProtectedSnapshot(ctx, store, configPath)
+	if err != nil {
+		return err
+	}
+	beforePolicy, err := fallbackPolicySnapshot(ctx, store)
+	if err != nil {
+		return err
+	}
+	if err := tui.ExerciseFallbackPolicyLifecycle(ctx, cfg, registry, service, service); err != nil {
+		return err
+	}
+	afterProtected, err := fallbackPolicyProtectedSnapshot(ctx, store, configPath)
+	if err != nil {
+		return err
+	}
+	afterPolicy, err := fallbackPolicySnapshot(ctx, store)
+	if err != nil {
+		return err
+	}
+	if afterProtected != beforeProtected {
+		return fmt.Errorf("fallback policy toggle mutated protected state")
+	}
+	if afterPolicy == beforePolicy {
+		return fmt.Errorf("fallback policy toggle did not persist policy metadata")
+	}
+	var enabled int
+	if err := store.DB.QueryRowContext(ctx, `
+		SELECT enabled
+		FROM credential_fallback_policies
+		WHERE provider_instance_id = ? AND group_label = ?
+	`, instance.ID, credentials.DefaultFallbackGroup).Scan(&enabled); err != nil {
+		return err
+	}
+	if enabled != 0 {
+		return fmt.Errorf("fallback policy final enabled=%d", enabled)
+	}
+	for _, providerID := range []string{"stale-provider", "codex"} {
+		if err := store.DB.QueryRowContext(ctx, `
+			SELECT enabled
+			FROM credential_fallback_policies
+			WHERE provider_instance_id = ? AND group_label = ?
+		`, providerID, "raw-provider-payload prompt marker").Scan(&enabled); err != nil {
+			return err
+		}
+		if enabled != 1 {
+			return fmt.Errorf("ignored fallback policy toggled")
+		}
 	}
 	return nil
 }
@@ -896,6 +1008,59 @@ func protectedStateSnapshot(ctx context.Context, store *sqlite.Store, configPath
 		b.WriteString(fmt.Sprintf("config:%d:%s:%x\n", info.Size(), info.ModTime().UTC().Format(time.RFC3339Nano), body))
 	}
 	return b.String(), nil
+}
+
+func fallbackPolicyProtectedSnapshot(ctx context.Context, store *sqlite.Store, configPath string) (string, error) {
+	queries := []string{
+		`SELECT 'client_tokens:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || label || ':' || token_prefix || ':' || token_last4 || ':' || COALESCE(disabled_at, '') AS part FROM client_tokens ORDER BY id)), '')`,
+		`SELECT 'provider_credentials:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || provider_instance_id || ':' || kind || ':' || label || ':' || fallback_group || ':' || COALESCE(disabled_at, '') AS part FROM provider_credentials ORDER BY id)), '')`,
+		`SELECT 'oauth_tokens:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || credential_id || ':' || COALESCE(access_token_secret_id, 0) || ':' || COALESCE(refresh_token_secret_id, 0) || ':' || COALESCE(expires_at, '') || ':' || scopes || ':' || COALESCE(last_refresh_at, '') || ':' || COALESCE(refresh_failure_class, '') AS part FROM oauth_tokens ORDER BY id)), '')`,
+		`SELECT 'provider_accounts:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || provider_instance_id || ':' || COALESCE(credential_id, 0) || ':' || account_hash || ':' || display_label || ':' || plan_label AS part FROM provider_accounts ORDER BY id)), '')`,
+		`SELECT 'model_cache:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || provider_instance_id || ':' || model_id || ':' || display_name || ':' || capability_flags || ':' || COALESCE(context_length, 0) AS part FROM model_cache ORDER BY id)), '')`,
+		`SELECT 'request_metadata:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || requested_provider_instance || ':' || requested_model || ':' || http_status || ':' || error_class || ':' || retry_count || ':' || fallback_count AS part FROM request_metadata ORDER BY id)), '')`,
+		`SELECT 'stream_metrics:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || request_metadata_id || ':' || completion_status || ':' || chunk_count AS part FROM stream_metrics ORDER BY id)), '')`,
+		`SELECT 'health_events:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || provider_instance_id || ':' || COALESCE(credential_id, 0) || ':' || model_id || ':' || event_class || ':' || COALESCE(http_status, 0) || ':' || normalized_error_class AS part FROM health_events ORDER BY id)), '')`,
+		`SELECT 'fallback_events:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || COALESCE(request_metadata_id, 0) || ':' || provider_instance_id || ':' || model_id || ':' || COALESCE(from_credential_id, 0) || ':' || COALESCE(to_credential_id, 0) || ':' || reason || ':' || allowed_by_policy AS part FROM fallback_events ORDER BY id)), '')`,
+		`SELECT 'migrations:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT version || ':' || name AS part FROM migrations ORDER BY version)), '')`,
+	}
+	var b strings.Builder
+	for _, query := range queries {
+		var part string
+		if err := store.DB.QueryRowContext(ctx, query).Scan(&part); err != nil {
+			return "", err
+		}
+		b.WriteString(part)
+		b.WriteByte('\n')
+	}
+	secretSnapshot, err := credentialSecretSnapshot(ctx, store)
+	if err != nil {
+		return "", err
+	}
+	b.WriteString(secretSnapshot)
+	if configPath != "" {
+		info, err := os.Stat(configPath)
+		if err != nil {
+			return "", err
+		}
+		body, err := os.ReadFile(configPath)
+		if err != nil {
+			return "", err
+		}
+		b.WriteString(fmt.Sprintf("config:%d:%s:%x\n", info.Size(), info.ModTime().UTC().Format(time.RFC3339Nano), body))
+	}
+	return b.String(), nil
+}
+
+func fallbackPolicySnapshot(ctx context.Context, store *sqlite.Store) (string, error) {
+	var part string
+	err := store.DB.QueryRowContext(ctx, `
+		SELECT 'credential_fallback_policies:' || COALESCE((SELECT group_concat(part, '|') FROM (
+			SELECT id || ':' || provider_instance_id || ':' || group_label || ':' || enabled AS part
+			FROM credential_fallback_policies
+			ORDER BY id
+		)), '')
+	`).Scan(&part)
+	return part, err
 }
 
 func credentialSecretSnapshot(ctx context.Context, store *sqlite.Store) (string, error) {

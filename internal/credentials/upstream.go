@@ -27,6 +27,7 @@ const DefaultFallbackGroup = "default"
 type UpstreamCredentialManager interface {
 	AddAPIKey(ctx context.Context, providerInstanceID, label, apiKey string) (UpstreamCredentialMetadata, error)
 	List(ctx context.Context) ([]UpstreamCredentialMetadata, error)
+	ListFallbackPolicies(ctx context.Context) ([]FallbackPolicyMetadata, error)
 	Disable(ctx context.Context, id int64) error
 	EnableFallbackGroup(ctx context.Context, providerInstanceID, groupLabel string) error
 	DisableFallbackGroup(ctx context.Context, providerInstanceID, groupLabel string) error
@@ -43,6 +44,7 @@ type UpstreamCredentialRepository interface {
 	DisableUpstreamCredential(ctx context.Context, id int64, disabledAt time.Time) error
 	ResolveAPIKeyCredential(ctx context.Context, providerInstanceID string) (ResolvedAPIKeyCredential, error)
 	ResolveAPIKeyCredentials(ctx context.Context, providerInstanceID string) ([]ResolvedAPIKeyCredential, error)
+	ListFallbackPolicies(ctx context.Context) ([]FallbackPolicyMetadata, error)
 	SetFallbackGroupEnabled(ctx context.Context, providerInstanceID, groupLabel string, enabled bool, now time.Time) error
 	InsertOAuthCredential(ctx context.Context, meta NewOAuthCredential, accessToken, refreshToken string) (OAuthCredentialMetadata, error)
 	ListOAuthCredentials(ctx context.Context) ([]OAuthCredentialMetadata, error)
@@ -136,6 +138,14 @@ type ProviderAccountMetadata struct {
 	CreatedAt          time.Time
 }
 
+type FallbackPolicyMetadata struct {
+	ProviderInstanceID string
+	GroupLabel         string
+	Enabled            bool
+	CredentialCount    int
+	Explicit           bool
+}
+
 type ResolvedAPIKeyCredential struct {
 	ID                 int64
 	ProviderInstanceID string
@@ -218,6 +228,10 @@ func (s UpstreamService) AddOAuthCredential(ctx context.Context, input NewOAuthC
 
 func (s UpstreamService) List(ctx context.Context) ([]UpstreamCredentialMetadata, error) {
 	return s.Repo.ListUpstreamCredentials(ctx)
+}
+
+func (s UpstreamService) ListFallbackPolicies(ctx context.Context) ([]FallbackPolicyMetadata, error) {
+	return s.Repo.ListFallbackPolicies(ctx)
 }
 
 func (s UpstreamService) ListOAuthCredentials(ctx context.Context) ([]OAuthCredentialMetadata, error) {

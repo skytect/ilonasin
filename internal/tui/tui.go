@@ -22,37 +22,38 @@ import (
 )
 
 type Model struct {
-	cfg            config.Config
-	registry       provider.Registry
-	tokens         credentials.LocalTokenManager
-	upstreams      credentials.UpstreamCredentialManager
-	oauth          credentials.OAuthMetadataReader
-	modelCache     ModelCacheReader
-	observability  ObservabilityReader
-	pruner         TelemetryPruner
-	now            func() time.Time
-	tokenRows      []credentials.LocalTokenMetadata
-	providers      []provider.Instance
-	credentials    []credentials.UpstreamCredentialMetadata
-	oauthRows      []credentials.OAuthCredentialMetadata
-	accountRows    []credentials.ProviderAccountMetadata
-	modelRows      []provider.ModelMetadata
-	requestRows    []metadata.RequestSummary
-	usageRows      []metadata.UsageSummary
-	latencyRows    []metadata.LatencySummary
-	streamRows     []metadata.StreamSummary
-	healthRows     []metadata.HealthSummary
-	fallbackRows   []metadata.FallbackSummary
-	pruneResult    *metadata.PruneResult
-	selected       int
-	reveal         string
-	revealTokenID  int64
-	apiKeyMode     bool
-	apiKeyProvider string
-	apiKeyInput    string
-	err            string
-	quitOnInit     bool
-	checkMode      bool
+	cfg              config.Config
+	registry         provider.Registry
+	tokens           credentials.LocalTokenManager
+	upstreams        credentials.UpstreamCredentialManager
+	oauth            credentials.OAuthMetadataReader
+	modelCache       ModelCacheReader
+	observability    ObservabilityReader
+	pruner           TelemetryPruner
+	now              func() time.Time
+	tokenRows        []credentials.LocalTokenMetadata
+	providers        []provider.Instance
+	credentials      []credentials.UpstreamCredentialMetadata
+	fallbackPolicies []credentials.FallbackPolicyMetadata
+	oauthRows        []credentials.OAuthCredentialMetadata
+	accountRows      []credentials.ProviderAccountMetadata
+	modelRows        []provider.ModelMetadata
+	requestRows      []metadata.RequestSummary
+	usageRows        []metadata.UsageSummary
+	latencyRows      []metadata.LatencySummary
+	streamRows       []metadata.StreamSummary
+	healthRows       []metadata.HealthSummary
+	fallbackRows     []metadata.FallbackSummary
+	pruneResult      *metadata.PruneResult
+	selected         int
+	reveal           string
+	revealTokenID    int64
+	apiKeyMode       bool
+	apiKeyProvider   string
+	apiKeyInput      string
+	err              string
+	quitOnInit       bool
+	checkMode        bool
 }
 
 type ModelCacheReader interface {
@@ -148,6 +149,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			_ = m.reload()
+		case "f":
+			m.clearReveal()
+			if err := m.enableFirstFallbackPolicy(); err != nil {
+				m.err = "fallback policy update failed"
+				return m, nil
+			}
+			_ = m.reload()
+		case "F":
+			m.clearReveal()
+			if err := m.disableFirstFallbackPolicy(); err != nil {
+				m.err = "fallback policy update failed"
+				return m, nil
+			}
+			_ = m.reload()
 		case "esc", "enter":
 			m.clearReveal()
 		case "down", "j":
@@ -213,8 +228,11 @@ func (m Model) View() string {
 		if cred.Disabled {
 			state = "disabled"
 		}
-		fmt.Fprintf(&b, "- %d %s %s %s...%s %s\n", cred.ID, cred.ProviderInstanceID, cred.Label, cred.SecretPrefix, cred.SecretLast4, state)
+		fmt.Fprintf(&b, "- %d %s %s %s...%s group %s %s\n", cred.ID, safeDisplay(cred.ProviderInstanceID),
+			safeDisplay(cred.Label), safeDisplay(cred.SecretPrefix), safeDisplay(cred.SecretLast4),
+			safeDisplay(cred.FallbackGroup), state)
 	}
+	m.writeFallbackPolicies(&b)
 	m.writeOAuth(&b)
 	b.WriteString("\nModel cache\n")
 	summaries := modelCacheSummaries(m.modelRows)
@@ -226,7 +244,7 @@ func (m Model) View() string {
 	}
 	m.writeObservability(&b)
 	m.writePruning(&b)
-	b.WriteString("\nPress n to create local token, a to add API key, d to disable local token, x to disable API key, p to prune telemetry, q to quit.\n")
+	b.WriteString("\nPress n to create local token, a to add API key, d to disable local token, x to disable API key, f/F to toggle fallback, p to prune telemetry, q to quit.\n")
 	return b.String()
 }
 
@@ -313,6 +331,106 @@ func ExerciseUpstreamCredentialLifecycle(ctx context.Context, cfg config.Config,
 		}
 	}
 	return fmt.Errorf("check upstream credential missing")
+}
+
+func ExerciseFallbackPolicyLifecycle(ctx context.Context, cfg config.Config, registry provider.Registry, upstreams credentials.UpstreamCredentialManager, resolver credentials.UpstreamCredentialResolver) error {
+	instance, ok := firstAPIKeyProvider(registry)
+	if !ok {
+		return nil
+	}
+	model := newCheckModel(cfg, registry, nil, upstreams, nil, nil, nil, nil, nil)
+	_ = model.reload()
+	view := model.View()
+	if !strings.Contains(view, "Fallback policies") ||
+		!strings.Contains(view, instance.ID+" default disabled credentials 2") {
+		return fmt.Errorf("fallback policy summary missing")
+	}
+	for _, forbidden := range []string{
+		"sk-fallback-policy",
+		"raw-provider-payload",
+		"prompt marker",
+		"secret",
+		"acct_",
+		"stale-provider",
+		"codex default",
+	} {
+		if strings.Contains(view, forbidden) {
+			return fmt.Errorf("fallback policy summary leaked forbidden marker")
+		}
+	}
+	resolved, err := resolver.ResolveAPIKeys(ctx, instance.ID)
+	if err != nil {
+		return err
+	}
+	if len(resolved) != 1 {
+		return fmt.Errorf("fallback policy default resolved %d credentials", len(resolved))
+	}
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	m := updated.(Model)
+	if !fallbackPolicyEnabled(m.fallbackPolicies, instance.ID, credentials.DefaultFallbackGroup) {
+		return fmt.Errorf("fallback policy enable did not update view")
+	}
+	resolved, err = resolver.ResolveAPIKeys(ctx, instance.ID)
+	if err != nil {
+		return err
+	}
+	if len(resolved) != 2 {
+		return fmt.Errorf("fallback policy enable resolved %d credentials", len(resolved))
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'F'}})
+	m = updated.(Model)
+	if fallbackPolicyEnabled(m.fallbackPolicies, instance.ID, credentials.DefaultFallbackGroup) {
+		return fmt.Errorf("fallback policy disable did not update view")
+	}
+	resolved, err = resolver.ResolveAPIKeys(ctx, instance.ID)
+	if err != nil {
+		return err
+	}
+	if len(resolved) != 1 {
+		return fmt.Errorf("fallback policy disable resolved %d credentials", len(resolved))
+	}
+	failing := newCheckModel(cfg, registry, nil, failingFallbackPolicyManager{}, nil, nil, nil, nil, nil)
+	_ = failing.reload()
+	updated, _ = failing.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	failed := updated.(Model)
+	failedView := failed.View()
+	if !strings.Contains(failedView, "Error: fallback policy update failed") {
+		return fmt.Errorf("fallback policy failure message missing")
+	}
+	if strings.Contains(failedView, "sk-fallback-policy") || strings.Contains(failedView, "raw-provider-payload") {
+		return fmt.Errorf("fallback policy failure leaked forbidden marker")
+	}
+	return nil
+}
+
+type failingFallbackPolicyManager struct{}
+
+func (failingFallbackPolicyManager) AddAPIKey(context.Context, string, string, string) (credentials.UpstreamCredentialMetadata, error) {
+	return credentials.UpstreamCredentialMetadata{}, fmt.Errorf("sk-fallback-policy raw-provider-payload")
+}
+
+func (failingFallbackPolicyManager) List(context.Context) ([]credentials.UpstreamCredentialMetadata, error) {
+	return nil, nil
+}
+
+func (failingFallbackPolicyManager) ListFallbackPolicies(context.Context) ([]credentials.FallbackPolicyMetadata, error) {
+	return []credentials.FallbackPolicyMetadata{{
+		ProviderInstanceID: "deepseek",
+		GroupLabel:         credentials.DefaultFallbackGroup,
+		CredentialCount:    2,
+	}}, nil
+}
+
+func (failingFallbackPolicyManager) Disable(context.Context, int64) error {
+	return fmt.Errorf("sk-fallback-policy raw-provider-payload")
+}
+
+func (failingFallbackPolicyManager) EnableFallbackGroup(context.Context, string, string) error {
+	return fmt.Errorf("sk-fallback-policy raw-provider-payload")
+}
+
+func (failingFallbackPolicyManager) DisableFallbackGroup(context.Context, string, string) error {
+	return fmt.Errorf("sk-fallback-policy raw-provider-payload")
 }
 
 func ExerciseModelCacheSummary(ctx context.Context, cfg config.Config, registry provider.Registry, cache ModelCacheReader) error {
@@ -482,7 +600,13 @@ func (m *Model) reload() error {
 			m.err = err.Error()
 			return err
 		}
-		m.credentials = rows
+		m.credentials = m.visibleUpstreamCredentials(rows)
+		policies, err := m.upstreams.ListFallbackPolicies(context.Background())
+		if err != nil {
+			m.err = err.Error()
+			return err
+		}
+		m.fallbackPolicies = m.visibleFallbackPolicies(policies)
 	}
 	if m.oauth != nil {
 		oauthRows, err := m.oauth.ListOAuthCredentials(context.Background())
@@ -586,6 +710,24 @@ func (m Model) writeOAuth(b *strings.Builder) {
 		fmt.Fprintf(b, "- %s credential %d %s plan %s\n",
 			safeDisplay(row.ProviderInstanceID), row.CredentialID,
 			safeDisplay(row.DisplayLabel), safeDisplay(row.PlanLabel))
+	}
+}
+
+func (m Model) writeFallbackPolicies(b *strings.Builder) {
+	if m.upstreams == nil {
+		return
+	}
+	b.WriteString("\nFallback policies\n")
+	if len(m.fallbackPolicies) == 0 {
+		b.WriteString("No eligible fallback groups.\n")
+	}
+	for _, row := range m.fallbackPolicies {
+		state := "disabled"
+		if row.Enabled {
+			state = "enabled"
+		}
+		fmt.Fprintf(b, "- %s %s %s credentials %d\n",
+			safeDisplay(row.ProviderInstanceID), safeDisplay(row.GroupLabel), state, row.CredentialCount)
 	}
 }
 
@@ -843,6 +985,71 @@ func (m *Model) disableFirstUpstreamCredential() error {
 		}
 	}
 	return nil
+}
+
+func (m *Model) enableFirstFallbackPolicy() error {
+	if m.upstreams == nil {
+		return nil
+	}
+	for _, row := range m.fallbackPolicies {
+		if !row.Enabled {
+			return m.upstreams.EnableFallbackGroup(context.Background(), row.ProviderInstanceID, row.GroupLabel)
+		}
+	}
+	return nil
+}
+
+func (m *Model) disableFirstFallbackPolicy() error {
+	if m.upstreams == nil {
+		return nil
+	}
+	for _, row := range m.fallbackPolicies {
+		if row.Enabled {
+			return m.upstreams.DisableFallbackGroup(context.Background(), row.ProviderInstanceID, row.GroupLabel)
+		}
+	}
+	return nil
+}
+
+func (m Model) visibleFallbackPolicies(rows []credentials.FallbackPolicyMetadata) []credentials.FallbackPolicyMetadata {
+	allowed := map[string]bool{}
+	for _, instance := range m.registry.List() {
+		if instance.APIKey && !instance.Placeholder {
+			allowed[instance.ID] = true
+		}
+	}
+	out := rows[:0]
+	for _, row := range rows {
+		if allowed[row.ProviderInstanceID] && row.CredentialCount >= 2 {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+func (m Model) visibleUpstreamCredentials(rows []credentials.UpstreamCredentialMetadata) []credentials.UpstreamCredentialMetadata {
+	allowed := map[string]bool{}
+	for _, instance := range m.registry.List() {
+		if instance.APIKey && !instance.Placeholder {
+			allowed[instance.ID] = true
+		}
+	}
+	out := rows[:0]
+	for _, row := range rows {
+		if allowed[row.ProviderInstanceID] {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+func fallbackPolicyEnabled(rows []credentials.FallbackPolicyMetadata, providerInstanceID, groupLabel string) bool {
+	for _, row := range rows {
+		if row.ProviderInstanceID == providerInstanceID && row.GroupLabel == groupLabel {
+			return row.Enabled
+		}
+	}
+	return false
 }
 
 func firstAPIKeyProvider(registry provider.Registry) (provider.Instance, bool) {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -273,7 +274,12 @@ func Manage(opts Options) error {
 		return err
 	}
 	defer rt.Store.Close()
-	upstreams := credentials.UpstreamService{Registry: rt.Registry, Repo: rt.Store, OAuthRefresher: provider.NewHTTPOAuthRefresher(nil)}
+	upstreams := &credentials.UpstreamService{
+		Registry:       rt.Registry,
+		Repo:           rt.Store,
+		OAuthRefresher: provider.NewHTTPOAuthRefresher(nil),
+		OAuthLogin:     provider.NewHTTPOAuthDeviceLogin(nil),
+	}
 	return tui.Run(rt.Config, rt.Registry, credentials.Service{Repo: rt.Store}, upstreams, upstreams, rt.Store, rt.Store, rt.Store)
 }
 
@@ -306,6 +312,9 @@ func ManageCheck(opts Options) error {
 	if err := exerciseOAuthCheck(context.Background(), rt.Registry, rt.Config); err != nil {
 		return err
 	}
+	if err := exerciseOAuthDeviceLoginCheck(context.Background(), rt.Config); err != nil {
+		return err
+	}
 	if err := exerciseOAuthRefreshCheck(context.Background(), rt.Config); err != nil {
 		return err
 	}
@@ -314,7 +323,12 @@ func ManageCheck(opts Options) error {
 	}
 	var buf bytes.Buffer
 	tokenService := credentials.Service{Repo: rt.Store}
-	upstreams := credentials.UpstreamService{Registry: rt.Registry, Repo: rt.Store, OAuthRefresher: provider.NewHTTPOAuthRefresher(nil)}
+	upstreams := &credentials.UpstreamService{
+		Registry:       rt.Registry,
+		Repo:           rt.Store,
+		OAuthRefresher: provider.NewHTTPOAuthRefresher(nil),
+		OAuthLogin:     provider.NewHTTPOAuthDeviceLogin(nil),
+	}
 	if err := tui.Check(rt.Config, rt.Registry, tokenService, upstreams, upstreams, rt.Store, rt.Store, rt.Store, &buf); err != nil {
 		return err
 	}
@@ -728,6 +742,305 @@ func exerciseOAuthCheck(ctx context.Context, registry provider.Registry, cfg con
 	return tui.ExerciseOAuthSummary(ctx, cfg, registry, service)
 }
 
+func exerciseOAuthDeviceLoginCheck(ctx context.Context, cfg config.Config) error {
+	fakeAuth := newOAuthDeviceAuthServer()
+	defer fakeAuth.server.Close()
+	loginCfg := cfg
+	loginCfg.Providers = map[string]config.ProviderConfig{
+		"codex":    {Type: "codex", AuthIssuer: fakeAuth.server.URL},
+		"deepseek": {Type: "deepseek"},
+	}
+	registry, err := provider.NewRegistry(loginCfg)
+	if err != nil {
+		return err
+	}
+	checkDBDir, err := os.MkdirTemp("", "ilonasin-manage-check-oauth-device-db-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(checkDBDir)
+	store, err := sqlite.Open(ctx, filepath.Join(checkDBDir, "ilonasin.sqlite"))
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	now := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
+	login := provider.NewHTTPOAuthDeviceLogin(fakeAuth.server.Client())
+	login.Timeout = 20 * time.Millisecond
+	login.PollTimeout = 120 * time.Millisecond
+	login.MinPollInterval = time.Millisecond
+	login.MaxPollInterval = 5 * time.Millisecond
+	login.MaxPolls = 4
+	login.MaxBodyBytes = 4096
+	service := &credentials.UpstreamService{
+		Registry:     registry,
+		Repo:         store,
+		OAuthLogin:   login,
+		Now:          func() time.Time { return now },
+		DeviceLogins: credentials.NewOAuthDeviceLoginSessions(2, 40*time.Millisecond),
+	}
+	if err := tui.ExerciseOAuthDeviceLogin(ctx, loginCfg, registry, service, service); err != nil {
+		return err
+	}
+	if err := fakeAuth.assertSuccessSeen(); err != nil {
+		return err
+	}
+	if err := assertOAuthDeviceLoginStorage(ctx, store); err != nil {
+		return err
+	}
+	if err := exerciseOAuthDeviceLoginFailures(ctx, store, service, fakeAuth); err != nil {
+		return err
+	}
+	return nil
+}
+
+func assertOAuthDeviceLoginStorage(ctx context.Context, store *sqlite.Store) error {
+	rows, err := store.ListOAuthCredentials(ctx)
+	if err != nil {
+		return err
+	}
+	if len(rows) != 1 {
+		return fmt.Errorf("oauth device login credential count=%d", len(rows))
+	}
+	row := rows[0]
+	if row.ProviderInstanceID != "codex" || !strings.HasPrefix(row.Label, "codex device login ") ||
+		row.AccountDisplayLabel != "Codex Login" || row.PlanLabel != "pro" {
+		return fmt.Errorf("oauth device login metadata mismatch")
+	}
+	wantExpiry := time.Date(2026, 5, 30, 13, 0, 0, 0, time.UTC)
+	if row.ExpiresAt == nil || !row.ExpiresAt.Equal(wantExpiry) {
+		return fmt.Errorf("oauth device login expiry mismatch")
+	}
+	for marker, kind := range map[string]string{
+		"oauth-login-access-marker":  "oauth_access",
+		"oauth-login-refresh-marker": "oauth_refresh",
+	} {
+		var count int
+		if err := store.DB.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM credential_secrets WHERE secret_kind = ? AND secret_material = ?
+		`, kind, marker).Scan(&count); err != nil {
+			return err
+		}
+		if count != 1 {
+			return fmt.Errorf("oauth device secret marker count mismatch")
+		}
+		if err := assertMarkerAbsentOutsideOAuthSecrets(ctx, store, marker); err != nil {
+			return err
+		}
+	}
+	for _, marker := range oauthDeviceForbiddenMarkers() {
+		if err := assertMarkerAbsentInOAuthTables(ctx, store, marker); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func exerciseOAuthDeviceLoginFailures(ctx context.Context, store *sqlite.Store, service *credentials.UpstreamService, fakeAuth *oauthDeviceAuthServer) error {
+	baseline, err := oauthCredentialCount(ctx, store)
+	if err != nil {
+		return err
+	}
+	for _, providerID := range []string{"deepseek", "stale"} {
+		fakeAuth.setMode("success")
+		if _, err := service.StartOAuthDeviceLogin(ctx, providerID); err == nil {
+			return fmt.Errorf("ineligible oauth device provider accepted")
+		}
+		if fakeAuth.requestCount() != 0 {
+			return fmt.Errorf("ineligible oauth device provider made auth request")
+		}
+	}
+	for _, mode := range []string{
+		"user_http",
+		"user_redirect",
+		"user_hang",
+		"wrong_content",
+		"trailing",
+		"too_large",
+		"empty_device",
+		"empty_user",
+	} {
+		fakeAuth.setMode(mode)
+		if _, err := service.StartOAuthDeviceLogin(ctx, "codex"); err == nil {
+			return fmt.Errorf("oauth device start mode %s succeeded", mode)
+		} else if err := assertOAuthDeviceErrorSafe(err); err != nil {
+			return err
+		}
+		if err := assertOAuthDeviceFailureState(ctx, store, baseline); err != nil {
+			return err
+		}
+	}
+	for _, mode := range []string{
+		"empty_code",
+		"empty_challenge",
+		"empty_verifier",
+		"token_wrong_content",
+		"token_trailing",
+		"token_too_large",
+		"token_http",
+		"exchange_http",
+		"exchange_redirect",
+		"exchange_wrong_content",
+		"exchange_trailing",
+		"exchange_too_large",
+		"unsafe_token",
+		"missing_account",
+		"timeout",
+	} {
+		fakeAuth.setMode(mode)
+		challenge, err := service.StartOAuthDeviceLogin(ctx, "codex")
+		if err != nil {
+			return fmt.Errorf("oauth device failure mode %s did not start: %w", mode, err)
+		}
+		if err := assertOAuthDeviceHandleSafe(challenge.Handle); err != nil {
+			return err
+		}
+		if _, err := service.CompleteOAuthDeviceLogin(ctx, challenge.Handle); err == nil {
+			return fmt.Errorf("oauth device complete mode %s succeeded", mode)
+		} else if err := assertOAuthDeviceErrorSafe(err); err != nil {
+			return err
+		}
+		if err := assertOAuthDeviceFailureState(ctx, store, baseline); err != nil {
+			return err
+		}
+	}
+	fakeAuth.setMode("missing_account")
+	challenge, err := service.StartOAuthDeviceLogin(ctx, "codex")
+	if err != nil {
+		return err
+	}
+	if _, err := service.CompleteOAuthDeviceLogin(ctx, challenge.Handle); err == nil {
+		return fmt.Errorf("oauth device missing-account flow succeeded")
+	} else if err := assertOAuthDeviceErrorSafe(err); err != nil {
+		return err
+	}
+	if _, err := service.CompleteOAuthDeviceLogin(ctx, challenge.Handle); !errors.Is(err, credentials.ErrNoEligibleCredential) {
+		return fmt.Errorf("oauth device failed handle was reusable err=%v", err)
+	}
+	fakeAuth.setMode("success")
+	challenge, err = service.StartOAuthDeviceLogin(ctx, "codex")
+	if err != nil {
+		return err
+	}
+	originalNow := service.Now
+	startedAt := service.Now()
+	service.Now = func() time.Time { return startedAt.Add(time.Minute) }
+	if _, err := service.CompleteOAuthDeviceLogin(ctx, challenge.Handle); !errors.Is(err, credentials.ErrNoEligibleCredential) {
+		service.Now = originalNow
+		return fmt.Errorf("oauth device expired handle completed err=%v", err)
+	}
+	service.Now = originalNow
+	service.DeviceLogins = credentials.NewOAuthDeviceLoginSessions(2, 40*time.Millisecond)
+	if _, err := service.StartOAuthDeviceLogin(ctx, "codex"); err != nil {
+		return err
+	}
+	if _, err := service.StartOAuthDeviceLogin(ctx, "codex"); err != nil {
+		return err
+	}
+	if _, err := service.StartOAuthDeviceLogin(ctx, "codex"); !errors.Is(err, credentials.ErrNoEligibleCredential) {
+		return fmt.Errorf("oauth device session bound not enforced err=%v", err)
+	}
+	service.DeviceLogins = credentials.NewOAuthDeviceLoginSessions(2, 40*time.Millisecond)
+	for _, mode := range []string{"pending_404", "pending_plain_403", "pending_empty_404"} {
+		fakeAuth.setMode(mode)
+		challenge, err = service.StartOAuthDeviceLogin(ctx, "codex")
+		if err != nil {
+			return err
+		}
+		if _, err := service.CompleteOAuthDeviceLogin(ctx, challenge.Handle); err != nil {
+			return fmt.Errorf("oauth device %s pending did not complete: %w", mode, err)
+		}
+		if fakeAuth.pollCount() < 2 {
+			return fmt.Errorf("oauth device %s pending did not poll", mode)
+		}
+	}
+	fakeAuth.setMode("unsafe_metadata")
+	challenge, err = service.StartOAuthDeviceLogin(ctx, "codex")
+	if err != nil {
+		return err
+	}
+	if _, err := service.CompleteOAuthDeviceLogin(ctx, challenge.Handle); err != nil {
+		return fmt.Errorf("oauth device unsafe metadata did not complete: %w", err)
+	}
+	for _, marker := range []string{"device-auth-marker", "code-verifier-marker"} {
+		if err := assertMarkerAbsentInOAuthTables(ctx, store, marker); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func assertOAuthDeviceFailureState(ctx context.Context, store *sqlite.Store, baseline int) error {
+	count, err := oauthCredentialCount(ctx, store)
+	if err != nil {
+		return err
+	}
+	if count != baseline {
+		return fmt.Errorf("oauth device failure persisted credential")
+	}
+	for _, marker := range oauthDeviceForbiddenMarkers() {
+		if err := assertMarkerAbsentInOAuthTables(ctx, store, marker); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func oauthCredentialCount(ctx context.Context, store *sqlite.Store) (int, error) {
+	var count int
+	if err := store.DB.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM provider_credentials WHERE kind = 'oauth'
+	`).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func assertOAuthDeviceHandleSafe(handle string) error {
+	if handle == "" {
+		return fmt.Errorf("oauth device empty handle")
+	}
+	for _, marker := range append(oauthDeviceForbiddenMarkers(), "oauth-login-access-marker", "oauth-login-refresh-marker") {
+		if strings.Contains(handle, marker) {
+			return fmt.Errorf("oauth device handle leaked marker")
+		}
+	}
+	return nil
+}
+
+func assertOAuthDeviceErrorSafe(err error) error {
+	if err == nil {
+		return nil
+	}
+	value := err.Error()
+	for _, marker := range append(oauthDeviceForbiddenMarkers(), "oauth-login-access-marker", "oauth-login-refresh-marker", "raw-provider-payload") {
+		if strings.Contains(value, marker) {
+			return fmt.Errorf("oauth device error leaked marker")
+		}
+	}
+	return nil
+}
+
+func oauthDeviceForbiddenMarkers() []string {
+	return []string{
+		"device-auth-marker",
+		"authorization-code-marker",
+		"code-challenge-marker",
+		"code-verifier-marker",
+		"id-token-marker",
+		"acct_device_raw",
+		"token_endpoint_body",
+		"raw usercode body",
+		"Bearer ",
+		"cookie",
+		"req_",
+		"request_id",
+		"balance",
+		"credit",
+		"eyJ",
+	}
+}
+
 func exerciseOAuthRefreshCheck(ctx context.Context, cfg config.Config) error {
 	fakeAuth := newOAuthRefreshAuthServer()
 	defer fakeAuth.server.Close()
@@ -1000,6 +1313,285 @@ type oauthRefreshAuthServer struct {
 	mu     sync.Mutex
 	mode   string
 	seen   []map[string]string
+}
+
+type oauthDeviceAuthServer struct {
+	server *httptest.Server
+	mu     sync.Mutex
+	mode   string
+	seen   []string
+	polls  int
+}
+
+func newOAuthDeviceAuthServer() *oauthDeviceAuthServer {
+	f := &oauthDeviceAuthServer{mode: "success"}
+	f.server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		mode := f.mode
+		f.seen = append(f.seen, r.Method+" "+r.URL.Path)
+		f.mu.Unlock()
+		switch r.URL.Path {
+		case "/api/accounts/deviceauth/usercode":
+			f.handleDeviceUserCode(w, r, mode)
+		case "/api/accounts/deviceauth/token":
+			f.handleDeviceToken(w, r, mode)
+		case "/oauth/token":
+			f.handleDeviceExchange(w, r, mode)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	return f
+}
+
+func (f *oauthDeviceAuthServer) handleDeviceUserCode(w http.ResponseWriter, r *http.Request, mode string) {
+	if r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/json" {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	var body map[string]string
+	if err := decodeStrictSmokeJSON(r.Body, &body); err != nil || len(body) != 1 || body["client_id"] != provider.CodexOAuthClientID {
+		http.Error(w, "bad body", http.StatusBadRequest)
+		return
+	}
+	if mode == "user_http" {
+		http.Error(w, "raw usercode body", http.StatusServiceUnavailable)
+		return
+	}
+	if mode == "user_redirect" {
+		http.Redirect(w, r, f.server.URL+"/redirected", http.StatusFound)
+		return
+	}
+	if mode == "user_hang" {
+		time.Sleep(100 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"device_auth_id":"device-auth-marker","user_code":"USER-CODE","interval":"1"}`))
+		return
+	}
+	if mode == "wrong_content" {
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte(`{"device_auth_id":"device-auth-marker","user_code":"USER-CODE","interval":"1"}`))
+		return
+	}
+	if mode == "trailing" {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"device_auth_id":"device-auth-marker","user_code":"USER-CODE","interval":"1"} trailing`))
+		return
+	}
+	if mode == "too_large" {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(strings.Repeat("x", 8192)))
+		return
+	}
+	if mode == "empty_device" {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"device_auth_id":"","user_code":"USER-CODE","interval":"1"}`))
+		return
+	}
+	if mode == "empty_user" {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"device_auth_id":"device-auth-marker","user_code":"","interval":"1"}`))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"device_auth_id":"device-auth-marker","user_code":"USER-CODE","interval":"1"}`))
+}
+
+func (f *oauthDeviceAuthServer) handleDeviceToken(w http.ResponseWriter, r *http.Request, mode string) {
+	if r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/json" {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	var body map[string]string
+	if err := decodeStrictSmokeJSON(r.Body, &body); err != nil || len(body) != 2 || body["device_auth_id"] != "device-auth-marker" || body["user_code"] != "USER-CODE" {
+		http.Error(w, "bad body", http.StatusBadRequest)
+		return
+	}
+	f.mu.Lock()
+	f.polls++
+	polls := f.polls
+	f.mu.Unlock()
+	if mode == "timeout" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":"authorization_pending"}`))
+		return
+	}
+	if mode == "pending_404" && polls == 1 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"authorization_pending"}`))
+		return
+	}
+	if mode == "pending_plain_403" && polls == 1 {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`pending raw body`))
+		return
+	}
+	if mode == "pending_empty_404" && polls == 1 {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	if mode == "empty_code" {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"authorization_code":"","code_challenge":"code-challenge-marker","code_verifier":"code-verifier-marker"}`))
+		return
+	}
+	if mode == "empty_challenge" {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"authorization_code":"authorization-code-marker","code_challenge":"","code_verifier":"code-verifier-marker"}`))
+		return
+	}
+	if mode == "empty_verifier" {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"authorization_code":"authorization-code-marker","code_challenge":"code-challenge-marker","code_verifier":""}`))
+		return
+	}
+	if mode == "token_wrong_content" {
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte(`{"authorization_code":"authorization-code-marker","code_challenge":"code-challenge-marker","code_verifier":"code-verifier-marker"}`))
+		return
+	}
+	if mode == "token_trailing" {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"authorization_code":"authorization-code-marker","code_challenge":"code-challenge-marker","code_verifier":"code-verifier-marker"} trailing`))
+		return
+	}
+	if mode == "token_too_large" {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(strings.Repeat("x", 8192)))
+		return
+	}
+	if mode == "token_http" {
+		w.Header().Set("Content-Type", "application/json")
+		http.Error(w, "token endpoint raw body", http.StatusServiceUnavailable)
+		return
+	}
+	if mode == "success" && polls == 1 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":"authorization_pending"}`))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"authorization_code":"authorization-code-marker","code_challenge":"code-challenge-marker","code_verifier":"code-verifier-marker"}`))
+}
+
+func (f *oauthDeviceAuthServer) handleDeviceExchange(w http.ResponseWriter, r *http.Request, mode string) {
+	if r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/x-www-form-urlencoded" {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	if len(r.Form) != 5 ||
+		r.Form.Get("grant_type") != "authorization_code" ||
+		r.Form.Get("code") != "authorization-code-marker" ||
+		r.Form.Get("client_id") != provider.CodexOAuthClientID ||
+		r.Form.Get("code_verifier") != "code-verifier-marker" ||
+		r.Form.Get("redirect_uri") != f.server.URL+"/deviceauth/callback" {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	switch mode {
+	case "exchange_http":
+		http.Error(w, "token endpoint body marker", http.StatusServiceUnavailable)
+	case "exchange_redirect":
+		http.Redirect(w, r, f.server.URL+"/redirected", http.StatusFound)
+	case "exchange_wrong_content":
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte(`{"id_token":"` + fakeIDToken("acct_device_raw", "Codex Login", "pro") + `","access_token":"oauth-login-access-marker","refresh_token":"oauth-login-refresh-marker","expires_in":3600}`))
+	case "exchange_trailing":
+		_, _ = w.Write([]byte(`{"id_token":"` + fakeIDToken("acct_device_raw", "Codex Login", "pro") + `","access_token":"oauth-login-access-marker","refresh_token":"oauth-login-refresh-marker","expires_in":3600} trailing`))
+	case "exchange_too_large":
+		_, _ = w.Write([]byte(strings.Repeat("x", 8192)))
+	case "unsafe_token":
+		_, _ = w.Write([]byte(`{"id_token":"` + fakeIDToken("acct_device_raw", "Codex Login", "pro") + `","access_token":"eyJ.bad.jwt","refresh_token":"oauth-login-refresh-marker","expires_in":3600}`))
+	case "missing_account":
+		_, _ = w.Write([]byte(`{"id_token":"` + fakeIDToken("", "Codex Login", "pro") + `","access_token":"oauth-login-access-marker","refresh_token":"oauth-login-refresh-marker","expires_in":3600}`))
+	case "pending_404":
+		_, _ = w.Write([]byte(`{"id_token":"` + fakeIDToken("acct_device_404", "Codex Login", "pro") + `","access_token":"oauth-login-access-marker","refresh_token":"oauth-login-refresh-marker","expires_in":3600}`))
+	case "pending_plain_403":
+		_, _ = w.Write([]byte(`{"id_token":"` + fakeIDToken("acct_device_plain_403", "Codex Login", "pro") + `","access_token":"oauth-login-access-marker","refresh_token":"oauth-login-refresh-marker","expires_in":3600}`))
+	case "pending_empty_404":
+		_, _ = w.Write([]byte(`{"id_token":"` + fakeIDToken("acct_device_empty_404", "Codex Login", "pro") + `","access_token":"oauth-login-access-marker","refresh_token":"oauth-login-refresh-marker","expires_in":3600}`))
+	case "unsafe_metadata":
+		_, _ = w.Write([]byte(`{"id_token":"` + fakeIDToken("acct_device_unsafe_meta", "device-auth-marker", "code-verifier-marker") + `","access_token":"oauth-login-access-marker","refresh_token":"oauth-login-refresh-marker","expires_in":3600}`))
+	default:
+		_, _ = w.Write([]byte(`{"id_token":"` + fakeIDToken("acct_device_raw", "Codex Login", "pro") + `","access_token":"oauth-login-access-marker","refresh_token":"oauth-login-refresh-marker","expires_in":3600}`))
+	}
+}
+
+func decodeStrictSmokeJSON(r io.Reader, out any) error {
+	dec := json.NewDecoder(r)
+	if err := dec.Decode(out); err != nil {
+		return err
+	}
+	if dec.Decode(&struct{}{}) != io.EOF {
+		return fmt.Errorf("trailing json")
+	}
+	return nil
+}
+
+func (f *oauthDeviceAuthServer) setMode(mode string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.mode = mode
+	f.polls = 0
+	f.seen = nil
+}
+
+func (f *oauthDeviceAuthServer) assertSuccessSeen() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	joined := strings.Join(f.seen, "|")
+	for _, want := range []string{
+		"POST /api/accounts/deviceauth/usercode",
+		"POST /api/accounts/deviceauth/token",
+		"POST /oauth/token",
+	} {
+		if !strings.Contains(joined, want) {
+			return fmt.Errorf("oauth device auth missing request %s", want)
+		}
+	}
+	if f.polls < 2 {
+		return fmt.Errorf("oauth device auth did not exercise pending poll")
+	}
+	return nil
+}
+
+func (f *oauthDeviceAuthServer) requestCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.seen)
+}
+
+func (f *oauthDeviceAuthServer) pollCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.polls
+}
+
+func fakeIDToken(accountID, email, plan string) string {
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none"}`))
+	payload := map[string]any{
+		"email":                                email,
+		"https://api.openai.com/profile.email": email,
+		"https://api.openai.com/auth.chatgpt_account_id":   accountID,
+		"https://api.openai.com/auth.chatgpt_plan_type":    plan,
+		"https://api.openai.com/auth.chatgpt_account_note": "id-token-marker token_endpoint_body",
+		"https://api.openai.com/auth": map[string]any{
+			"chatgpt_account_id":   accountID,
+			"chatgpt_plan_type":    plan,
+			"chatgpt_account_note": "id-token-marker token_endpoint_body",
+		},
+	}
+	body, _ := json.Marshal(payload)
+	return header + "." + base64.RawURLEncoding.EncodeToString(body) + ".signature"
 }
 
 func newOAuthRefreshAuthServer() *oauthRefreshAuthServer {
@@ -1483,9 +2075,17 @@ func assertMarkerAbsentInOAuthTables(ctx context.Context, store *sqlite.Store, m
 
 func oauthMarkerQueries(includeSecrets bool) []string {
 	queries := []string{
+		`SELECT COUNT(*) FROM client_tokens WHERE label || token_hash || token_prefix || token_last4 || COALESCE(disabled_at, '') LIKE ?`,
 		`SELECT COUNT(*) FROM provider_credentials WHERE provider_instance_id || kind || label || secret_prefix || secret_last4 || fallback_group LIKE ?`,
 		`SELECT COUNT(*) FROM oauth_tokens WHERE scopes || COALESCE(expires_at, '') || COALESCE(last_refresh_at, '') || COALESCE(refresh_failure_class, '') LIKE ?`,
 		`SELECT COUNT(*) FROM provider_accounts WHERE provider_instance_id || account_hash || display_label || plan_label LIKE ?`,
+		`SELECT COUNT(*) FROM credential_fallback_policies WHERE provider_instance_id || group_label LIKE ?`,
+		`SELECT COUNT(*) FROM request_metadata WHERE started_at || requested_provider_instance || requested_model || resolved_provider_instance || resolved_model || error_class || fallback_reason LIKE ?`,
+		`SELECT COUNT(*) FROM stream_metrics WHERE completion_status LIKE ?`,
+		`SELECT COUNT(*) FROM health_events WHERE occurred_at || provider_instance_id || model_id || event_class || COALESCE(normalized_error_class, '') || COALESCE(retry_after, '') || COALESCE(token_expires_at, '') || refresh_failure_class LIKE ?`,
+		`SELECT COUNT(*) FROM fallback_events WHERE occurred_at || provider_instance_id || model_id || reason LIKE ?`,
+		`SELECT COUNT(*) FROM model_cache WHERE provider_instance_id || model_id || display_name || capability_flags || updated_at LIKE ?`,
+		`SELECT COUNT(*) FROM migrations WHERE name || applied_at LIKE ?`,
 	}
 	if includeSecrets {
 		queries = append(queries, `SELECT COUNT(*) FROM credential_secrets WHERE secret_kind || secret_material LIKE ?`)

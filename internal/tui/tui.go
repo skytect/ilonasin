@@ -28,6 +28,7 @@ type Model struct {
 	upstreams        credentials.UpstreamCredentialManager
 	oauth            credentials.OAuthMetadataReader
 	oauthRefresh     credentials.OAuthRefreshController
+	oauthLogin       credentials.OAuthDeviceLoginController
 	modelCache       ModelCacheReader
 	observability    ObservabilityReader
 	pruner           TelemetryPruner
@@ -53,6 +54,9 @@ type Model struct {
 	apiKeyMode       bool
 	apiKeyProvider   string
 	apiKeyInput      string
+	oauthChallenge   *credentials.OAuthDeviceLoginChallenge
+	oauthCtx         context.Context
+	oauthCancel      context.CancelFunc
 	err              string
 	quitOnInit       bool
 	checkMode        bool
@@ -75,12 +79,12 @@ type TelemetryPruner interface {
 	PruneTelemetryBefore(ctx context.Context, cutoff time.Time) (metadata.PruneResult, error)
 }
 
-func NewModel(cfg config.Config, registry provider.Registry, tokens credentials.LocalTokenManager, upstreams credentials.UpstreamCredentialManager, oauth credentials.OAuthMetadataReader, oauthRefresh credentials.OAuthRefreshController, modelCache ModelCacheReader, observability ObservabilityReader, pruner TelemetryPruner, now func() time.Time) Model {
-	return Model{cfg: cfg, registry: registry, tokens: tokens, upstreams: upstreams, oauth: oauth, oauthRefresh: oauthRefresh, modelCache: modelCache, observability: observability, pruner: pruner, now: now}
+func NewModel(cfg config.Config, registry provider.Registry, tokens credentials.LocalTokenManager, upstreams credentials.UpstreamCredentialManager, oauth credentials.OAuthMetadataReader, oauthRefresh credentials.OAuthRefreshController, oauthLogin credentials.OAuthDeviceLoginController, modelCache ModelCacheReader, observability ObservabilityReader, pruner TelemetryPruner, now func() time.Time) Model {
+	return Model{cfg: cfg, registry: registry, tokens: tokens, upstreams: upstreams, oauth: oauth, oauthRefresh: oauthRefresh, oauthLogin: oauthLogin, modelCache: modelCache, observability: observability, pruner: pruner, now: now}
 }
 
-func newCheckModel(cfg config.Config, registry provider.Registry, tokens credentials.LocalTokenManager, upstreams credentials.UpstreamCredentialManager, oauth credentials.OAuthMetadataReader, oauthRefresh credentials.OAuthRefreshController, modelCache ModelCacheReader, observability ObservabilityReader, pruner TelemetryPruner, now func() time.Time) Model {
-	return Model{cfg: cfg, registry: registry, tokens: tokens, upstreams: upstreams, oauth: oauth, oauthRefresh: oauthRefresh, modelCache: modelCache, observability: observability, pruner: pruner, now: now, quitOnInit: true, checkMode: true}
+func newCheckModel(cfg config.Config, registry provider.Registry, tokens credentials.LocalTokenManager, upstreams credentials.UpstreamCredentialManager, oauth credentials.OAuthMetadataReader, oauthRefresh credentials.OAuthRefreshController, oauthLogin credentials.OAuthDeviceLoginController, modelCache ModelCacheReader, observability ObservabilityReader, pruner TelemetryPruner, now func() time.Time) Model {
+	return Model{cfg: cfg, registry: registry, tokens: tokens, upstreams: upstreams, oauth: oauth, oauthRefresh: oauthRefresh, oauthLogin: oauthLogin, modelCache: modelCache, observability: observability, pruner: pruner, now: now, quitOnInit: true, checkMode: true}
 }
 
 func (m Model) Init() tea.Cmd {
@@ -90,7 +94,38 @@ func (m Model) Init() tea.Cmd {
 	return nil
 }
 
+type oauthLoginStartedMsg struct {
+	challenge credentials.OAuthDeviceLoginChallenge
+	err       error
+}
+
+type oauthLoginCompletedMsg struct {
+	err error
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case oauthLoginStartedMsg:
+		if msg.err != nil {
+			m.err = "OAuth login failed"
+			m.oauthChallenge = nil
+			m.cancelOAuthLogin()
+			return m, nil
+		}
+		m.err = ""
+		challenge := msg.challenge
+		m.oauthChallenge = &challenge
+		return m, m.completeOAuthLoginCmd(challenge.Handle)
+	case oauthLoginCompletedMsg:
+		m.oauthChallenge = nil
+		m.cancelOAuthLogin()
+		if msg.err != nil {
+			m.err = "OAuth login failed"
+			return m, nil
+		}
+		_ = m.reload()
+		return m, nil
+	}
 	if key, ok := msg.(tea.KeyMsg); ok {
 		if m.apiKeyMode {
 			return m.updateAPIKeyInput(key)
@@ -98,6 +133,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch key.String() {
 		case "q", "ctrl+c":
 			m.clearReveal()
+			m.cancelOAuthLogin()
 			return m, tea.Quit
 		case "n":
 			m.clearReveal()
@@ -151,6 +187,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			_ = m.reload()
+		case "l":
+			m.clearReveal()
+			m.cancelOAuthLogin()
+			providerID, ok := firstOAuthLoginProvider(m.registry)
+			if !ok || m.oauthLogin == nil {
+				m.err = "OAuth login failed"
+				return m, nil
+			}
+			loginCtx, cancel := context.WithCancel(context.Background())
+			m.oauthCtx = loginCtx
+			m.oauthCancel = cancel
+			return m, m.startOAuthLoginCmd(loginCtx, providerID)
 		case "r":
 			m.clearReveal()
 			if err := m.refreshSelectedOAuthCredential(); err != nil {
@@ -177,7 +225,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			_ = m.reload()
-		case "esc", "enter":
+		case "esc":
+			m.clearReveal()
+			m.oauthChallenge = nil
+			m.cancelOAuthLogin()
+		case "enter":
 			m.clearReveal()
 		case "down", "j":
 			m.clearReveal()
@@ -258,12 +310,12 @@ func (m Model) View() string {
 	}
 	m.writeObservability(&b)
 	m.writePruning(&b)
-	b.WriteString("\nPress n to create local token, a to add API key, d to disable local token, x to disable API key, o/r to select/refresh OAuth, f/F to toggle fallback, p to prune telemetry, q to quit.\n")
+	b.WriteString("\nPress n to create local token, a to add API key, d to disable local token, x to disable API key, l to login OAuth, o/r to select/refresh OAuth, f/F to toggle fallback, p to prune telemetry, q to quit.\n")
 	return b.String()
 }
 
 func Run(cfg config.Config, registry provider.Registry, tokens credentials.LocalTokenManager, upstreams credentials.UpstreamCredentialManager, oauth credentials.OAuthMetadataReader, modelCache ModelCacheReader, observability ObservabilityReader, pruner TelemetryPruner) error {
-	model := NewModel(cfg, registry, tokens, upstreams, oauth, oauthRefreshController(oauth), modelCache, observability, pruner, nil)
+	model := NewModel(cfg, registry, tokens, upstreams, oauth, oauthRefreshController(oauth), oauthLoginController(oauth), modelCache, observability, pruner, nil)
 	_ = model.reload()
 	_, err := tea.NewProgram(model).Run()
 	return err
@@ -274,8 +326,13 @@ func oauthRefreshController(oauth credentials.OAuthMetadataReader) credentials.O
 	return controller
 }
 
+func oauthLoginController(oauth credentials.OAuthMetadataReader) credentials.OAuthDeviceLoginController {
+	controller, _ := oauth.(credentials.OAuthDeviceLoginController)
+	return controller
+}
+
 func Check(cfg config.Config, registry provider.Registry, tokens credentials.LocalTokenManager, upstreams credentials.UpstreamCredentialManager, oauth credentials.OAuthMetadataReader, modelCache ModelCacheReader, observability ObservabilityReader, pruner TelemetryPruner, out io.Writer) error {
-	model := newCheckModel(cfg, registry, tokens, upstreams, oauth, oauthRefreshController(oauth), modelCache, observability, pruner, nil)
+	model := newCheckModel(cfg, registry, tokens, upstreams, oauth, oauthRefreshController(oauth), oauthLoginController(oauth), modelCache, observability, pruner, nil)
 	_ = model.reload()
 	program := tea.NewProgram(model, tea.WithoutRenderer(), tea.WithInput(nil), tea.WithOutput(io.Discard))
 	if _, err := program.Run(); err != nil {
@@ -286,7 +343,7 @@ func Check(cfg config.Config, registry provider.Registry, tokens credentials.Loc
 }
 
 func ExerciseTokenLifecycle(ctx context.Context, tokens credentials.LocalTokenManager) error {
-	model := NewModel(config.Config{}, provider.Registry{}, tokens, nil, nil, nil, nil, nil, nil, nil)
+	model := NewModel(config.Config{}, provider.Registry{}, tokens, nil, nil, nil, nil, nil, nil, nil, nil)
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
 	m := updated.(Model)
 	if m.reveal == "" || m.revealTokenID == 0 {
@@ -326,7 +383,7 @@ func ExerciseUpstreamCredentialLifecycle(ctx context.Context, cfg config.Config,
 	if !ok {
 		return nil
 	}
-	model := newCheckModel(cfg, registry, nil, upstreams, nil, nil, nil, nil, nil, nil)
+	model := newCheckModel(cfg, registry, nil, upstreams, nil, nil, nil, nil, nil, nil, nil)
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
 	m := updated.(Model)
 	_ = m.reload()
@@ -357,7 +414,7 @@ func ExerciseFallbackPolicyLifecycle(ctx context.Context, cfg config.Config, reg
 	if !ok {
 		return nil
 	}
-	model := newCheckModel(cfg, registry, nil, upstreams, nil, nil, nil, nil, nil, nil)
+	model := newCheckModel(cfg, registry, nil, upstreams, nil, nil, nil, nil, nil, nil, nil)
 	_ = model.reload()
 	view := model.View()
 	if !strings.Contains(view, "Fallback policies") ||
@@ -408,7 +465,7 @@ func ExerciseFallbackPolicyLifecycle(ctx context.Context, cfg config.Config, reg
 	if len(resolved) != 1 {
 		return fmt.Errorf("fallback policy disable resolved %d credentials", len(resolved))
 	}
-	failing := newCheckModel(cfg, registry, nil, failingFallbackPolicyManager{}, nil, nil, nil, nil, nil, nil)
+	failing := newCheckModel(cfg, registry, nil, failingFallbackPolicyManager{}, nil, nil, nil, nil, nil, nil, nil)
 	_ = failing.reload()
 	updated, _ = failing.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
 	failed := updated.(Model)
@@ -453,7 +510,7 @@ func (failingFallbackPolicyManager) DisableFallbackGroup(context.Context, string
 }
 
 func ExerciseModelCacheSummary(ctx context.Context, cfg config.Config, registry provider.Registry, cache ModelCacheReader) error {
-	model := newCheckModel(cfg, registry, nil, nil, nil, nil, cache, nil, nil, nil)
+	model := newCheckModel(cfg, registry, nil, nil, nil, nil, nil, cache, nil, nil, nil)
 	_ = model.reload()
 	view := model.View()
 	if !strings.Contains(view, "Model cache") || !strings.Contains(view, "deepseek 1 models") || !strings.Contains(view, "2026-05-30T12:00:00Z") {
@@ -468,7 +525,7 @@ func ExerciseModelCacheSummary(ctx context.Context, cfg config.Config, registry 
 }
 
 func ExerciseObservabilitySummary(ctx context.Context, cfg config.Config, registry provider.Registry, observability ObservabilityReader) error {
-	model := newCheckModel(cfg, registry, nil, nil, nil, nil, nil, observability, nil, nil)
+	model := newCheckModel(cfg, registry, nil, nil, nil, nil, nil, nil, observability, nil, nil)
 	_ = model.reload()
 	view := model.View()
 	required := []string{
@@ -507,7 +564,7 @@ func ExerciseObservabilitySummary(ctx context.Context, cfg config.Config, regist
 }
 
 func ExerciseTelemetryPrune(ctx context.Context, cfg config.Config, registry provider.Registry, observability ObservabilityReader, pruner TelemetryPruner, now func() time.Time, expected metadata.PruneResult) error {
-	model := newCheckModel(cfg, registry, nil, nil, nil, nil, nil, observability, pruner, now)
+	model := newCheckModel(cfg, registry, nil, nil, nil, nil, nil, nil, observability, pruner, now)
 	_ = model.reload()
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
 	m := updated.(Model)
@@ -548,7 +605,7 @@ func ExerciseTelemetryPrune(ctx context.Context, cfg config.Config, registry pro
 			return fmt.Errorf("telemetry prune summary leaked forbidden marker")
 		}
 	}
-	failing := newCheckModel(cfg, registry, nil, nil, nil, nil, nil, observability, failingTelemetryPruner{}, now)
+	failing := newCheckModel(cfg, registry, nil, nil, nil, nil, nil, nil, observability, failingTelemetryPruner{}, now)
 	updated, _ = failing.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
 	failed := updated.(Model)
 	failedView := failed.View()
@@ -568,7 +625,7 @@ func (failingTelemetryPruner) PruneTelemetryBefore(context.Context, time.Time) (
 }
 
 func ExerciseOAuthSummary(ctx context.Context, cfg config.Config, registry provider.Registry, oauth credentials.OAuthMetadataReader) error {
-	model := newCheckModel(cfg, registry, nil, nil, oauth, nil, nil, nil, nil, nil)
+	model := newCheckModel(cfg, registry, nil, nil, oauth, nil, nil, nil, nil, nil, nil)
 	_ = model.reload()
 	view := model.View()
 	for _, text := range []string{
@@ -602,7 +659,7 @@ func ExerciseOAuthSummary(ctx context.Context, cfg config.Config, registry provi
 }
 
 func ExerciseOAuthRefresh(ctx context.Context, cfg config.Config, registry provider.Registry, oauth credentials.OAuthMetadataReader, refresher credentials.OAuthRefreshController) error {
-	model := newCheckModel(cfg, registry, nil, nil, oauth, refresher, nil, nil, nil, nil)
+	model := newCheckModel(cfg, registry, nil, nil, oauth, refresher, nil, nil, nil, nil, nil)
 	_ = model.reload()
 	if len(model.oauthRows) < 2 {
 		return fmt.Errorf("oauth refresh check needs at least two oauth credentials")
@@ -632,7 +689,7 @@ func ExerciseOAuthRefresh(ctx context.Context, cfg config.Config, registry provi
 			return fmt.Errorf("oauth refresh view leaked forbidden marker")
 		}
 	}
-	failing := newCheckModel(cfg, registry, nil, nil, oauth, failingOAuthRefreshController{}, nil, nil, nil, nil)
+	failing := newCheckModel(cfg, registry, nil, nil, oauth, failingOAuthRefreshController{}, nil, nil, nil, nil, nil)
 	_ = failing.reload()
 	failing.oauthSelected = 1
 	updated, _ = failing.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
@@ -651,6 +708,125 @@ type failingOAuthRefreshController struct{}
 
 func (failingOAuthRefreshController) RefreshOAuthCredential(context.Context, int64) error {
 	return fmt.Errorf("oauth-refresh raw-provider-payload token_endpoint_body")
+}
+
+func ExerciseOAuthDeviceLogin(ctx context.Context, cfg config.Config, registry provider.Registry, oauth credentials.OAuthMetadataReader, login credentials.OAuthDeviceLoginController) error {
+	model := newCheckModel(cfg, registry, nil, nil, oauth, nil, login, nil, nil, nil, nil)
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	if cmd == nil {
+		return fmt.Errorf("oauth login did not start")
+	}
+	msg := cmd()
+	updated, cmd = updated.(Model).Update(msg)
+	m := updated.(Model)
+	if m.err != "" || m.oauthChallenge == nil || cmd == nil {
+		return fmt.Errorf("oauth login challenge missing")
+	}
+	view := m.View()
+	if !strings.Contains(view, "/codex/device") || !strings.Contains(view, "USER-CODE") {
+		return fmt.Errorf("oauth login challenge view missing")
+	}
+	for _, forbidden := range []string{
+		"device-auth-marker",
+		"authorization-code-marker",
+		"code-verifier-marker",
+		"oauth-login-access-marker",
+		"oauth-login-refresh-marker",
+		"id-token-marker",
+		"acct_device_raw",
+		"Bearer ",
+		"cookie",
+	} {
+		if strings.Contains(view, forbidden) {
+			return fmt.Errorf("oauth login challenge leaked %q", forbidden)
+		}
+	}
+	msg = cmd()
+	updated, _ = m.Update(msg)
+	m = updated.(Model)
+	if m.err != "" || m.oauthChallenge != nil {
+		return fmt.Errorf("oauth login did not complete")
+	}
+	_ = m.reload()
+	view = m.View()
+	if !strings.Contains(view, "Codex Login") || !strings.Contains(view, "plan pro") {
+		return fmt.Errorf("oauth login row missing")
+	}
+	for _, forbidden := range []string{
+		"device-auth-marker",
+		"authorization-code-marker",
+		"code-verifier-marker",
+		"oauth-login-access-marker",
+		"oauth-login-refresh-marker",
+		"id-token-marker",
+		"acct_device_raw",
+		"token_endpoint_body",
+	} {
+		if strings.Contains(view, forbidden) {
+			return fmt.Errorf("oauth login view leaked %q", forbidden)
+		}
+	}
+	failing := newCheckModel(cfg, registry, nil, nil, oauth, nil, failingOAuthLoginController{}, nil, nil, nil, nil)
+	updated, cmd = failing.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	if cmd != nil {
+		updated, _ = updated.(Model).Update(cmd())
+	}
+	if !strings.Contains(updated.(Model).View(), "Error: OAuth login failed") {
+		return fmt.Errorf("oauth login failure message missing")
+	}
+	cancelAware := &cancelAwareOAuthLoginController{}
+	cancelModel := newCheckModel(cfg, registry, nil, nil, nil, nil, cancelAware, nil, nil, nil, nil)
+	updated, cmd = cancelModel.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	if cmd == nil {
+		return fmt.Errorf("oauth login cancel check did not start")
+	}
+	updated, cmd = updated.(Model).Update(cmd())
+	if cmd == nil {
+		return fmt.Errorf("oauth login cancel check did not begin completion")
+	}
+	updated, quitCmd := updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if quitCmd == nil {
+		return fmt.Errorf("oauth login cancel check did not quit")
+	}
+	_ = updated
+	_ = cmd()
+	if !cancelAware.canceled {
+		return fmt.Errorf("oauth login completion was not canceled")
+	}
+	return nil
+}
+
+type failingOAuthLoginController struct{}
+
+func (failingOAuthLoginController) StartOAuthDeviceLogin(context.Context, string) (credentials.OAuthDeviceLoginChallenge, error) {
+	return credentials.OAuthDeviceLoginChallenge{}, fmt.Errorf("oauth-login-access-marker raw-provider-payload")
+}
+
+func (failingOAuthLoginController) CompleteOAuthDeviceLogin(context.Context, string) (credentials.OAuthCredentialMetadata, error) {
+	return credentials.OAuthCredentialMetadata{}, fmt.Errorf("oauth-login-refresh-marker raw-provider-payload")
+}
+
+type cancelAwareOAuthLoginController struct {
+	canceled bool
+}
+
+func (c *cancelAwareOAuthLoginController) StartOAuthDeviceLogin(context.Context, string) (credentials.OAuthDeviceLoginChallenge, error) {
+	return credentials.OAuthDeviceLoginChallenge{
+		ProviderInstanceID: "codex",
+		VerificationURL:    "https://auth.example/codex/device",
+		UserCode:           "USER-CODE",
+		Handle:             "safe-handle",
+	}, nil
+}
+
+func (c *cancelAwareOAuthLoginController) CompleteOAuthDeviceLogin(ctx context.Context, _ string) (credentials.OAuthCredentialMetadata, error) {
+	select {
+	case <-ctx.Done():
+		c.canceled = true
+		return credentials.OAuthCredentialMetadata{}, ctx.Err()
+	case <-time.After(50 * time.Millisecond):
+		return credentials.OAuthCredentialMetadata{}, nil
+	}
 }
 
 func (m *Model) reload() error {
@@ -759,6 +935,10 @@ func (m Model) writeOAuth(b *strings.Builder) {
 		return
 	}
 	b.WriteString("\nOAuth accounts\n")
+	if m.oauthChallenge != nil {
+		fmt.Fprintf(b, "Login %s at %s code %s\n", safeDisplay(m.oauthChallenge.ProviderInstanceID),
+			safeDisplay(m.oauthChallenge.VerificationURL), safeDisplay(m.oauthChallenge.UserCode))
+	}
 	if len(m.oauthRows) == 0 {
 		b.WriteString("No OAuth accounts.\n")
 	}
@@ -901,6 +1081,32 @@ func (m *Model) pruneTelemetry() error {
 	return nil
 }
 
+func (m Model) startOAuthLoginCmd(ctx context.Context, providerInstanceID string) tea.Cmd {
+	return func() tea.Msg {
+		challenge, err := m.oauthLogin.StartOAuthDeviceLogin(ctx, providerInstanceID)
+		return oauthLoginStartedMsg{challenge: challenge, err: err}
+	}
+}
+
+func (m Model) completeOAuthLoginCmd(handle string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := m.oauthCtx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		_, err := m.oauthLogin.CompleteOAuthDeviceLogin(ctx, handle)
+		return oauthLoginCompletedMsg{err: err}
+	}
+}
+
+func (m *Model) cancelOAuthLogin() {
+	if m.oauthCancel != nil {
+		m.oauthCancel()
+		m.oauthCancel = nil
+	}
+	m.oauthCtx = nil
+}
+
 func (m *Model) refreshSelectedOAuthCredential() error {
 	if m.oauthRefresh == nil || len(m.oauthRows) == 0 {
 		return nil
@@ -913,6 +1119,15 @@ func (m *Model) refreshSelectedOAuthCredential() error {
 		return nil
 	}
 	return m.oauthRefresh.RefreshOAuthCredential(context.Background(), row.ID)
+}
+
+func firstOAuthLoginProvider(registry provider.Registry) (string, bool) {
+	for _, instance := range registry.List() {
+		if instance.Type == "codex" && instance.OAuth {
+			return instance.ID, true
+		}
+	}
+	return "", false
 }
 
 func (m Model) nowTime() time.Time {

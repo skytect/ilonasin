@@ -2,11 +2,15 @@ package credentials
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -76,11 +80,39 @@ type OAuthRefreshController interface {
 	RefreshOAuthCredential(ctx context.Context, credentialID int64) error
 }
 
+type OAuthDeviceLoginController interface {
+	StartOAuthDeviceLogin(ctx context.Context, providerInstanceID string) (OAuthDeviceLoginChallenge, error)
+	CompleteOAuthDeviceLogin(ctx context.Context, handle string) (OAuthCredentialMetadata, error)
+}
+
 type UpstreamService struct {
 	Registry       provider.Registry
 	Repo           UpstreamCredentialRepository
 	OAuthRefresher provider.OAuthTokenRefresher
+	OAuthLogin     provider.OAuthDeviceLoginProvider
 	Now            func() time.Time
+	DeviceLogins   *OAuthDeviceLoginSessions
+}
+
+type OAuthDeviceLoginSessions struct {
+	mu       sync.Mutex
+	sessions map[string]oauthDeviceLoginSession
+	max      int
+	ttl      time.Duration
+}
+
+func NewOAuthDeviceLoginSessions(max int, ttl time.Duration) *OAuthDeviceLoginSessions {
+	return &OAuthDeviceLoginSessions{max: max, ttl: ttl}
+}
+
+type oauthDeviceLoginSession struct {
+	ProviderInstanceID string
+	ProviderType       string
+	AuthIssuer         string
+	DeviceAuthID       string
+	UserCode           string
+	IntervalSeconds    int
+	ExpiresAt          time.Time
 }
 
 type NewUpstreamCredential struct {
@@ -188,6 +220,13 @@ type OAuthTokenUpdate struct {
 	RefreshToken string
 	ExpiresAt    *time.Time
 	RefreshedAt  time.Time
+}
+
+type OAuthDeviceLoginChallenge struct {
+	ProviderInstanceID string
+	VerificationURL    string
+	UserCode           string
+	Handle             string
 }
 
 func (c ResolvedOAuthBearerCredential) String() string {
@@ -338,6 +377,100 @@ func (s UpstreamService) ResolveOAuthBearer(ctx context.Context, providerInstanc
 	return s.Repo.ResolveOAuthBearerCredential(ctx, providerInstanceID, now.UTC())
 }
 
+func (s *UpstreamService) StartOAuthDeviceLogin(ctx context.Context, providerInstanceID string) (OAuthDeviceLoginChallenge, error) {
+	if s.OAuthLogin == nil {
+		return OAuthDeviceLoginChallenge{}, fmt.Errorf("%w: oauth login adapter is unavailable", ErrUnsupportedCredential)
+	}
+	instance, ok := s.Registry.Get(providerInstanceID)
+	if !ok {
+		return OAuthDeviceLoginChallenge{}, ErrCredentialNotFound
+	}
+	if !instance.OAuth || instance.Type != "codex" {
+		return OAuthDeviceLoginChallenge{}, fmt.Errorf("%w: provider %q does not support oauth device login", ErrUnsupportedCredential, providerInstanceID)
+	}
+	sessions := s.loginSessions()
+	now := s.now()
+	if err := sessions.checkCapacity(now); err != nil {
+		return OAuthDeviceLoginChallenge{}, err
+	}
+	challenge, err := s.OAuthLogin.RequestOAuthDeviceCode(ctx, provider.OAuthDeviceCodeRequest{
+		ProviderType: instance.Type,
+		AuthIssuer:   instance.AuthIssuer,
+	})
+	if err != nil {
+		return OAuthDeviceLoginChallenge{}, err
+	}
+	handle, err := randomHandle()
+	if err != nil {
+		return OAuthDeviceLoginChallenge{}, err
+	}
+	if err := sessions.put(handle, oauthDeviceLoginSession{
+		ProviderInstanceID: providerInstanceID,
+		ProviderType:       instance.Type,
+		AuthIssuer:         instance.AuthIssuer,
+		DeviceAuthID:       challenge.DeviceAuthID,
+		UserCode:           challenge.UserCode,
+		IntervalSeconds:    challenge.IntervalSeconds,
+		ExpiresAt:          now.Add(sessions.ttlDuration()),
+	}, now); err != nil {
+		return OAuthDeviceLoginChallenge{}, err
+	}
+	return OAuthDeviceLoginChallenge{
+		ProviderInstanceID: providerInstanceID,
+		VerificationURL:    challenge.VerificationURL,
+		UserCode:           challenge.UserCode,
+		Handle:             handle,
+	}, nil
+}
+
+func (s *UpstreamService) CompleteOAuthDeviceLogin(ctx context.Context, handle string) (OAuthCredentialMetadata, error) {
+	if s.OAuthLogin == nil {
+		return OAuthCredentialMetadata{}, fmt.Errorf("%w: oauth login adapter is unavailable", ErrUnsupportedCredential)
+	}
+	session, ok := s.loginSessions().take(handle, s.now())
+	if !ok {
+		return OAuthCredentialMetadata{}, ErrNoEligibleCredential
+	}
+	now := s.now()
+	result, err := s.OAuthLogin.CompleteOAuthDeviceLogin(ctx, provider.OAuthDeviceLoginRequest{
+		ProviderType:    session.ProviderType,
+		AuthIssuer:      session.AuthIssuer,
+		DeviceAuthID:    session.DeviceAuthID,
+		UserCode:        session.UserCode,
+		IntervalSeconds: session.IntervalSeconds,
+		Now:             now,
+	})
+	if err != nil {
+		return OAuthCredentialMetadata{}, err
+	}
+	accessToken := strings.TrimSpace(result.AccessToken)
+	refreshToken := strings.TrimSpace(result.RefreshToken)
+	if err := validateOAuthSecret(accessToken); err != nil {
+		return OAuthCredentialMetadata{}, ErrInvalidOAuthInput
+	}
+	if err := validateOAuthSecret(refreshToken); err != nil {
+		return OAuthCredentialMetadata{}, ErrInvalidOAuthInput
+	}
+	claims, err := parseChatGPTIDTokenClaims(result.IDToken)
+	if err != nil {
+		return OAuthCredentialMetadata{}, ErrInvalidOAuthInput
+	}
+	if claims.AccountID == "" {
+		return OAuthCredentialMetadata{}, ErrInvalidOAuthInput
+	}
+	labelHash := AccountHash(session.ProviderType, session.ProviderInstanceID, claims.AccountID)
+	return s.AddOAuthCredential(ctx, NewOAuthCredentialInput{
+		ProviderInstanceID:  session.ProviderInstanceID,
+		Label:               "codex device login " + labelHash[:8],
+		AccessToken:         accessToken,
+		RefreshToken:        refreshToken,
+		AccountID:           claims.AccountID,
+		AccountDisplayLabel: safeOAuthLoginDisplay(claims.Email, "Codex account", accessToken, refreshToken, result.IDToken, claims.AccountID),
+		PlanLabel:           safeOAuthLoginDisplay(claims.PlanLabel, "", accessToken, refreshToken, result.IDToken, claims.AccountID),
+		ExpiresAt:           result.ExpiresAt,
+	})
+}
+
 func (s UpstreamService) RefreshOAuthCredential(ctx context.Context, credentialID int64) error {
 	credential, err := s.Repo.ResolveOAuthRefreshCredential(ctx, credentialID)
 	if err != nil {
@@ -393,6 +526,149 @@ func (s UpstreamService) recordOAuthRefreshFailure(ctx context.Context, credenti
 		return err
 	}
 	return fmt.Errorf("%w: %s", ErrOAuthRefreshFailed, normalizeRefreshFailureClass(failureClass))
+}
+
+func (s *OAuthDeviceLoginSessions) checkCapacity(now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sessions == nil {
+		s.sessions = map[string]oauthDeviceLoginSession{}
+	}
+	s.pruneLocked(now)
+	max := s.max
+	if max <= 0 {
+		max = 16
+	}
+	if len(s.sessions) >= max {
+		return ErrNoEligibleCredential
+	}
+	return nil
+}
+
+func (s *UpstreamService) loginSessions() *OAuthDeviceLoginSessions {
+	if s.DeviceLogins == nil {
+		s.DeviceLogins = &OAuthDeviceLoginSessions{}
+	}
+	return s.DeviceLogins
+}
+
+func (s *OAuthDeviceLoginSessions) put(handle string, session oauthDeviceLoginSession, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sessions == nil {
+		s.sessions = map[string]oauthDeviceLoginSession{}
+	}
+	s.pruneLocked(now)
+	max := s.max
+	if max <= 0 {
+		max = 16
+	}
+	if len(s.sessions) >= max {
+		return ErrNoEligibleCredential
+	}
+	s.sessions[handle] = session
+	return nil
+}
+
+func (s *OAuthDeviceLoginSessions) take(handle string, now time.Time) (oauthDeviceLoginSession, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneLocked(now)
+	session, ok := s.sessions[handle]
+	if ok {
+		delete(s.sessions, handle)
+	}
+	return session, ok
+}
+
+func (s *OAuthDeviceLoginSessions) pruneLocked(now time.Time) {
+	for handle, session := range s.sessions {
+		if !session.ExpiresAt.After(now) {
+			delete(s.sessions, handle)
+		}
+	}
+}
+
+func (s *OAuthDeviceLoginSessions) ttlDuration() time.Duration {
+	if s.ttl > 0 {
+		return s.ttl
+	}
+	return 15 * time.Minute
+}
+
+func randomHandle() (string, error) {
+	var b [24]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return "oauth_login_" + hex.EncodeToString(b[:]), nil
+}
+
+type chatGPTIDTokenClaims struct {
+	AccountID string
+	Email     string
+	PlanLabel string
+}
+
+func parseChatGPTIDTokenClaims(jwt string) (chatGPTIDTokenClaims, error) {
+	parts := strings.Split(jwt, ".")
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return chatGPTIDTokenClaims{}, ErrInvalidOAuthInput
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return chatGPTIDTokenClaims{}, ErrInvalidOAuthInput
+	}
+	var claims struct {
+		Email       string `json:"email"`
+		ProfileMail string `json:"https://api.openai.com/profile.email"`
+		AccountID   string `json:"https://api.openai.com/auth.chatgpt_account_id"`
+		Plan        any    `json:"https://api.openai.com/auth.chatgpt_plan_type"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return chatGPTIDTokenClaims{}, ErrInvalidOAuthInput
+	}
+	email := strings.TrimSpace(claims.Email)
+	if email == "" {
+		email = strings.TrimSpace(claims.ProfileMail)
+	}
+	return chatGPTIDTokenClaims{
+		AccountID: strings.TrimSpace(claims.AccountID),
+		Email:     email,
+		PlanLabel: planLabelString(claims.Plan),
+	}, nil
+}
+
+func planLabelString(value any) string {
+	switch v := value.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case map[string]any:
+		if known, _ := v["known"].(string); known != "" {
+			return strings.TrimSpace(known)
+		}
+		if unknown, _ := v["unknown"].(string); unknown != "" {
+			return strings.TrimSpace(unknown)
+		}
+	}
+	return ""
+}
+
+func safeOAuthLoginDisplay(value, fallback, accessToken, refreshToken, idToken, accountID string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		value = fallback
+	}
+	value = sanitizeOAuthDisplay(value, accessToken, refreshToken)
+	if value == "" && fallback != "" {
+		value = fallback
+	}
+	for _, marker := range []string{idToken, accountID, "access_token", "refresh_token", "device_auth", "authorization_code", "code_verifier", "cookie", "Bearer "} {
+		if marker != "" && strings.Contains(value, marker) {
+			return fallback
+		}
+	}
+	return value
 }
 
 func refreshFailureClass(err error, fallback string) string {
@@ -469,6 +745,8 @@ func containsForbiddenOAuthMarker(value string) bool {
 		"authorization:", "bearer ", "http://", "https://", "callback",
 		"id_token", "agent_identity", "private_key", "cookie", "stdout",
 		"token_endpoint_body", "raw-provider-payload", "req_", "request_id",
+		"device-auth", "device_auth", "authorization-code", "authorization_code",
+		"code-verifier", "code_verifier",
 	} {
 		if strings.Contains(lower, marker) {
 			return true

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"sort"
 )
 
@@ -60,6 +61,9 @@ func DecodeChatCompletion(r io.Reader) (ChatCompletionRequest, error) {
 	if err := validateRawMessages(raw["messages"]); err != nil {
 		return ChatCompletionRequest{}, err
 	}
+	if err := validateRawStreamOptions(raw); err != nil {
+		return ChatCompletionRequest{}, err
+	}
 	var req ChatCompletionRequest
 	body, err := json.Marshal(raw)
 	if err != nil {
@@ -88,8 +92,8 @@ func (r ChatCompletionRequest) Validate() error {
 			return fmt.Errorf("messages[%d].content must be a JSON string", i)
 		}
 	}
-	if r.Stream {
-		return errors.New("streaming chat completions are not implemented in this slice")
+	if !r.Stream && r.StreamOptions != nil {
+		return errors.New("stream_options requires stream: true")
 	}
 	if err := validateStop(r.Stop); err != nil {
 		return err
@@ -139,6 +143,12 @@ func MarshalUpstreamChatRequest(req ChatCompletionRequest, upstreamModel string)
 	if req.ResponseFormat != nil {
 		out["response_format"] = req.ResponseFormat
 	}
+	if req.Stream {
+		out["stream"] = true
+		if req.StreamOptions != nil {
+			out["stream_options"] = req.StreamOptions
+		}
+	}
 	return json.Marshal(out)
 }
 
@@ -183,11 +193,98 @@ func ExtractUsage(body []byte) (Usage, error) {
 	}, nil
 }
 
+func IsStreamError(body []byte) bool {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return false
+	}
+	errBody, ok := raw["error"]
+	return ok && !isJSONNull(errBody)
+}
+
+type NormalizedStreamChunk struct {
+	Body        []byte
+	Usage       Usage
+	HasUsage    bool
+	OutputToken bool
+}
+
+func NormalizeStreamChunk(body []byte) (NormalizedStreamChunk, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return NormalizedStreamChunk{}, err
+	}
+	object, err := requiredString(raw, "object")
+	if err != nil {
+		return NormalizedStreamChunk{}, err
+	}
+	if object != "chat.completion.chunk" {
+		return NormalizedStreamChunk{}, fmt.Errorf("upstream stream object %q is unsupported", object)
+	}
+	rawChoices, ok := raw["choices"]
+	if !ok || isJSONNull(rawChoices) {
+		return NormalizedStreamChunk{}, errors.New("upstream stream choices are missing")
+	}
+	var choices []json.RawMessage
+	if err := json.Unmarshal(rawChoices, &choices); err != nil {
+		return NormalizedStreamChunk{}, fmt.Errorf("upstream stream choices are invalid: %w", err)
+	}
+	usage, hasUsage, err := streamUsageFromMap(raw)
+	if err != nil {
+		return NormalizedStreamChunk{}, err
+	}
+	if len(choices) == 0 && !hasUsage {
+		return NormalizedStreamChunk{}, errors.New("upstream stream choices are empty without usage")
+	}
+
+	normalized := map[string]any{"object": object}
+	copyOptionalString(normalized, raw, "id")
+	copyOptionalString(normalized, raw, "model")
+	copyOptionalInt(normalized, raw, "created")
+	normalizedChoices := make([]any, 0, len(choices))
+	outputToken := false
+	for i, rawChoice := range choices {
+		if len(bytes.TrimSpace(rawChoice)) == 0 || isJSONNull(rawChoice) {
+			return NormalizedStreamChunk{}, fmt.Errorf("upstream stream choices[%d] is empty", i)
+		}
+		choice, choiceOutput, err := normalizeStreamChoice(rawChoice, i)
+		if err != nil {
+			return NormalizedStreamChunk{}, err
+		}
+		outputToken = outputToken || choiceOutput
+		normalizedChoices = append(normalizedChoices, choice)
+	}
+	normalized["choices"] = normalizedChoices
+	if hasUsage {
+		normalized["usage"] = map[string]any{
+			"prompt_tokens":     usage.PromptTokens,
+			"completion_tokens": usage.CompletionTokens,
+			"total_tokens":      usage.TotalTokens,
+		}
+		if usage.ReasoningTokens != 0 {
+			normalized["usage"].(map[string]any)["completion_tokens_details"] = map[string]any{
+				"reasoning_tokens": usage.ReasoningTokens,
+			}
+		}
+	}
+	out, err := json.Marshal(normalized)
+	if err != nil {
+		return NormalizedStreamChunk{}, err
+	}
+	return NormalizedStreamChunk{
+		Body:        out,
+		Usage:       usage,
+		HasUsage:    hasUsage,
+		OutputToken: outputToken,
+	}, nil
+}
+
 func validateTopLevelKeys(raw map[string]json.RawMessage) error {
 	allowed := map[string]bool{
 		"model":           true,
 		"messages":        true,
 		"stream":          true,
+		"stream_options":  true,
 		"max_tokens":      true,
 		"temperature":     true,
 		"top_p":           true,
@@ -195,7 +292,6 @@ func validateTopLevelKeys(raw map[string]json.RawMessage) error {
 		"response_format": true,
 	}
 	unsupported := map[string]bool{
-		"stream_options":   true,
 		"tools":            true,
 		"tool_choice":      true,
 		"logprobs":         true,
@@ -214,6 +310,41 @@ func validateTopLevelKeys(raw map[string]json.RawMessage) error {
 		if !allowed[key] {
 			return fmt.Errorf("unknown field %q", key)
 		}
+	}
+	return nil
+}
+
+func validateRawStreamOptions(raw map[string]json.RawMessage) error {
+	options, hasOptions := raw["stream_options"]
+	if !hasOptions {
+		return nil
+	}
+	stream := false
+	if rawStream, ok := raw["stream"]; ok {
+		if err := json.Unmarshal(rawStream, &stream); err != nil {
+			return errors.New("stream must be a boolean")
+		}
+	}
+	if !stream {
+		return errors.New("stream_options requires stream: true")
+	}
+	if isJSONNull(options) {
+		return errors.New("stream_options must be an object")
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(options, &obj); err != nil {
+		return errors.New("stream_options must be an object")
+	}
+	if len(obj) != 1 {
+		return errors.New("stream_options only supports include_usage")
+	}
+	rawInclude, ok := obj["include_usage"]
+	if !ok {
+		return errors.New("stream_options.include_usage is required")
+	}
+	var include bool
+	if err := json.Unmarshal(rawInclude, &include); err != nil {
+		return errors.New("stream_options.include_usage must be a boolean")
 	}
 	return nil
 }
@@ -244,6 +375,10 @@ func isJSONString(raw json.RawMessage) bool {
 	return len(raw) >= 2 && raw[0] == '"' && raw[len(raw)-1] == '"'
 }
 
+func isJSONNull(raw json.RawMessage) bool {
+	return bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
+}
+
 func validateStop(stop any) error {
 	if stop == nil {
 		return nil
@@ -260,5 +395,127 @@ func validateStop(stop any) error {
 		return nil
 	default:
 		return errors.New("stop must be a string or array of strings")
+	}
+}
+
+func streamUsageFromMap(raw map[string]json.RawMessage) (Usage, bool, error) {
+	rawUsage, ok := raw["usage"]
+	if !ok || isJSONNull(rawUsage) {
+		return Usage{}, false, nil
+	}
+	var usage struct {
+		PromptTokens            *int `json:"prompt_tokens"`
+		CompletionTokens        *int `json:"completion_tokens"`
+		TotalTokens             *int `json:"total_tokens"`
+		CompletionTokensDetails struct {
+			ReasoningTokens int `json:"reasoning_tokens"`
+		} `json:"completion_tokens_details"`
+	}
+	if err := json.Unmarshal(rawUsage, &usage); err != nil {
+		return Usage{}, false, fmt.Errorf("upstream stream usage is invalid: %w", err)
+	}
+	if usage.PromptTokens == nil || usage.CompletionTokens == nil || usage.TotalTokens == nil {
+		return Usage{}, false, errors.New("upstream stream usage token fields are missing")
+	}
+	return Usage{
+		PromptTokens:     *usage.PromptTokens,
+		CompletionTokens: *usage.CompletionTokens,
+		TotalTokens:      *usage.TotalTokens,
+		ReasoningTokens:  usage.CompletionTokensDetails.ReasoningTokens,
+	}, true, nil
+}
+
+func normalizeStreamChoice(rawChoice json.RawMessage, index int) (map[string]any, bool, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(rawChoice, &raw); err != nil {
+		return nil, false, fmt.Errorf("upstream stream choices[%d] is invalid: %w", index, err)
+	}
+	out := map[string]any{}
+	copyOptionalInt(out, raw, "index")
+	if rawDelta, ok := raw["delta"]; ok && !isJSONNull(rawDelta) {
+		var deltaRaw map[string]json.RawMessage
+		if err := json.Unmarshal(rawDelta, &deltaRaw); err != nil {
+			return nil, false, fmt.Errorf("upstream stream choices[%d].delta is invalid: %w", index, err)
+		}
+		delta := map[string]any{}
+		copyOptionalString(delta, deltaRaw, "role")
+		content := optionalString(deltaRaw, "content")
+		reasoning := optionalString(deltaRaw, "reasoning_content")
+		if content != nil {
+			delta["content"] = *content
+		}
+		if reasoning != nil {
+			delta["reasoning_content"] = *reasoning
+		}
+		if len(delta) > 0 {
+			out["delta"] = delta
+		}
+	}
+	if rawFinish, ok := raw["finish_reason"]; ok {
+		if isJSONNull(rawFinish) {
+			out["finish_reason"] = nil
+		} else {
+			var finish string
+			if err := json.Unmarshal(rawFinish, &finish); err == nil {
+				out["finish_reason"] = finish
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil, false, fmt.Errorf("upstream stream choices[%d] has no supported fields", index)
+	}
+	outputToken := false
+	if delta, ok := out["delta"].(map[string]any); ok {
+		if content, ok := delta["content"].(string); ok && content != "" {
+			outputToken = true
+		}
+		if reasoning, ok := delta["reasoning_content"].(string); ok && reasoning != "" {
+			outputToken = true
+		}
+	}
+	return out, outputToken, nil
+}
+
+func requiredString(raw map[string]json.RawMessage, key string) (string, error) {
+	rawValue, ok := raw[key]
+	if !ok || isJSONNull(rawValue) {
+		return "", fmt.Errorf("%s is required", key)
+	}
+	var value string
+	if err := json.Unmarshal(rawValue, &value); err != nil {
+		return "", fmt.Errorf("%s must be a string", key)
+	}
+	return value, nil
+}
+
+func optionalString(raw map[string]json.RawMessage, key string) *string {
+	rawValue, ok := raw[key]
+	if !ok || isJSONNull(rawValue) {
+		return nil
+	}
+	var value string
+	if err := json.Unmarshal(rawValue, &value); err != nil {
+		return nil
+	}
+	return &value
+}
+
+func copyOptionalString(out map[string]any, raw map[string]json.RawMessage, key string) {
+	if value := optionalString(raw, key); value != nil {
+		out[key] = *value
+	}
+}
+
+func copyOptionalInt(out map[string]any, raw map[string]json.RawMessage, key string) {
+	rawValue, ok := raw[key]
+	if !ok || isJSONNull(rawValue) {
+		return
+	}
+	var value float64
+	if err := json.Unmarshal(rawValue, &value); err != nil {
+		return
+	}
+	if math.Trunc(value) == value {
+		out[key] = int64(value)
 	}
 }

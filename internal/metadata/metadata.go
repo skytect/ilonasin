@@ -19,4 +19,14 @@ type Request struct {
 	TotalTokens               int
 	ReasoningTokens           int
 	TotalLatencyMS            int64
+	TimeToFirstTokenMS        int64
+	OutputTokensPerSecond     float64
+}
+
+type Stream struct {
+	RequestMetadataID     int64
+	TimeToFirstTokenMS    int64
+	OutputTokensPerSecond float64
+	CompletionStatus      string
+	ChunkCount            int
 }

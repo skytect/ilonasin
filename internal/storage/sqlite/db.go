@@ -338,18 +338,37 @@ func isUniqueConstraint(err error) bool {
 	return strings.Contains(err.Error(), "UNIQUE constraint failed")
 }
 
-func (s *Store) RecordRequestMetadata(ctx context.Context, m metadata.Request) error {
-	_, err := s.DB.ExecContext(ctx, `
+func (s *Store) RecordRequestMetadata(ctx context.Context, m metadata.Request) (int64, error) {
+	res, err := s.DB.ExecContext(ctx, `
 		INSERT INTO request_metadata(
 			started_at, client_token_id, credential_id, requested_provider_instance, requested_model,
 			resolved_provider_instance, resolved_model, http_status, error_class,
 			retry_count, fallback_count, prompt_tokens, completion_tokens,
-			total_tokens, reasoning_tokens, total_latency_ms
-		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			total_tokens, reasoning_tokens, total_latency_ms, time_to_first_token_ms,
+			output_tokens_per_second
+		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, m.StartedAt.UTC().Format(time.RFC3339Nano), m.ClientTokenID, nullableInt64(m.CredentialID), m.RequestedProviderInstance,
 		m.RequestedModel, m.ResolvedProviderInstance, m.ResolvedModel, m.HTTPStatus,
 		m.ErrorClass, m.RetryCount, m.FallbackCount, m.PromptTokens, m.CompletionTokens,
-		m.TotalTokens, m.ReasoningTokens, m.TotalLatencyMS)
+		m.TotalTokens, m.ReasoningTokens, m.TotalLatencyMS, m.TimeToFirstTokenMS,
+		m.OutputTokensPerSecond)
+	if err != nil {
+		return 0, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+func (s *Store) RecordStreamMetrics(ctx context.Context, m metadata.Stream) error {
+	_, err := s.DB.ExecContext(ctx, `
+		INSERT INTO stream_metrics(
+			request_metadata_id, time_to_first_token_ms, output_tokens_per_second,
+			completion_status, chunk_count
+		) VALUES(?, ?, ?, ?, ?)
+	`, m.RequestMetadataID, m.TimeToFirstTokenMS, m.OutputTokensPerSecond, m.CompletionStatus, m.ChunkCount)
 	return err
 }
 

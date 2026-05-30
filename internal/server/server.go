@@ -25,7 +25,8 @@ type Server struct {
 }
 
 type MetadataRecorder interface {
-	RecordRequestMetadata(context.Context, metadata.Request) error
+	RecordRequestMetadata(context.Context, metadata.Request) (int64, error)
+	RecordStreamMetrics(context.Context, metadata.Stream) error
 }
 
 type ProviderRegistry interface {
@@ -151,6 +152,18 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 		writeError(w, http.StatusUnauthorized, "no eligible upstream credential is available", "invalid_request_error", "credential_unavailable")
 		return
 	}
+	if req.Stream {
+		s.handleStreamingChat(w, r, streamContext{
+			start:      start,
+			token:      token,
+			address:    addr,
+			instance:   instance,
+			credential: credential,
+			adapter:    adapter,
+			request:    req,
+		})
+		return
+	}
 	result, err := adapter.CompleteChat(r.Context(), provider.ChatRequest{
 		Instance:      instance,
 		UpstreamModel: addr.ProviderModelID,
@@ -201,11 +214,161 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 	writeRaw(w, status, result.ContentType, result.Body)
 }
 
+type streamContext struct {
+	start      time.Time
+	token      credentials.VerifiedLocalToken
+	address    routing.ModelAddress
+	instance   provider.Instance
+	credential credentials.ResolvedAPIKeyCredential
+	adapter    provider.ChatAdapter
+	request    openai.ChatCompletionRequest
+}
+
+func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc streamContext) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		_ = s.record(r.Context(), metadata.Request{
+			StartedAt:                 sc.start,
+			ClientTokenID:             sc.token.ID,
+			CredentialID:              sc.credential.ID,
+			RequestedProviderInstance: sc.address.ProviderInstanceID,
+			RequestedModel:            sc.address.ProviderModelID,
+			ResolvedProviderInstance:  sc.address.ProviderInstanceID,
+			ResolvedModel:             sc.address.ProviderModelID,
+			HTTPStatus:                http.StatusInternalServerError,
+			ErrorClass:                "client_stream_unavailable",
+			TotalLatencyMS:            time.Since(sc.start).Milliseconds(),
+		})
+		writeError(w, http.StatusInternalServerError, "streaming is not available for this response writer", "api_error", "client_stream_unavailable")
+		return
+	}
+	sink := &streamSink{w: w, flusher: flusher}
+	summary, err := sc.adapter.StreamChat(r.Context(), provider.ChatRequest{
+		Instance:      sc.instance,
+		UpstreamModel: sc.address.ProviderModelID,
+		Request:       sc.request,
+		Credential: provider.APIKeyCredential{
+			ID:                 sc.credential.ID,
+			ProviderInstanceID: sc.credential.ProviderInstanceID,
+			Label:              sc.credential.Label,
+			APIKey:             sc.credential.APIKey,
+		},
+	}, sink)
+	if err != nil && !sink.started {
+		localStatus := summary.StatusCode
+		if localStatus < 400 || localStatus >= 500 {
+			localStatus = http.StatusBadGateway
+		}
+		summary.StatusCode = localStatus
+		writeError(w, localStatus, "upstream stream failed", "api_error", "upstream_stream_error")
+	}
+	recordCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
+	defer cancel()
+	status := summary.StatusCode
+	if status == 0 {
+		if sink.started {
+			status = http.StatusOK
+		} else {
+			status = http.StatusBadGateway
+		}
+	}
+	errorClass := summary.ErrorClass
+	if errorClass == "" && status >= 400 {
+		errorClass = "upstream_http_error"
+	}
+	requestID, _ := s.recordWithID(recordCtx, metadata.Request{
+		StartedAt:                 sc.start,
+		ClientTokenID:             sc.token.ID,
+		CredentialID:              sc.credential.ID,
+		RequestedProviderInstance: sc.address.ProviderInstanceID,
+		RequestedModel:            sc.address.ProviderModelID,
+		ResolvedProviderInstance:  sc.address.ProviderInstanceID,
+		ResolvedModel:             sc.address.ProviderModelID,
+		HTTPStatus:                status,
+		ErrorClass:                errorClass,
+		PromptTokens:              summary.Usage.PromptTokens,
+		CompletionTokens:          summary.Usage.CompletionTokens,
+		TotalTokens:               summary.Usage.TotalTokens,
+		ReasoningTokens:           summary.Usage.ReasoningTokens,
+		TotalLatencyMS:            time.Since(sc.start).Milliseconds(),
+		TimeToFirstTokenMS:        summary.TimeToFirstTokenMS,
+		OutputTokensPerSecond:     summary.OutputTokensPerSecond,
+	})
+	completionStatus := summary.CompletionStatus
+	if completionStatus == "" {
+		completionStatus = "upstream_invalid"
+	}
+	_ = s.recordStream(recordCtx, metadata.Stream{
+		RequestMetadataID:     requestID,
+		TimeToFirstTokenMS:    summary.TimeToFirstTokenMS,
+		OutputTokensPerSecond: summary.OutputTokensPerSecond,
+		CompletionStatus:      completionStatus,
+		ChunkCount:            summary.ChunkCount,
+	})
+}
+
+type streamSink struct {
+	w       http.ResponseWriter
+	flusher http.Flusher
+	started bool
+}
+
+func (s *streamSink) WriteEvent(_ context.Context, event provider.ChatStreamEvent) error {
+	s.start()
+	if _, err := s.w.Write([]byte("data: ")); err != nil {
+		return err
+	}
+	if _, err := s.w.Write(event.Data); err != nil {
+		return err
+	}
+	if _, err := s.w.Write([]byte("\n\n")); err != nil {
+		return err
+	}
+	s.flusher.Flush()
+	return nil
+}
+
+func (s *streamSink) WriteDone(_ context.Context) error {
+	s.start()
+	if _, err := s.w.Write([]byte("data: [DONE]\n\n")); err != nil {
+		return err
+	}
+	s.flusher.Flush()
+	return nil
+}
+
+func (s *streamSink) start() {
+	if s.started {
+		return
+	}
+	header := s.w.Header()
+	header.Set("Content-Type", "text/event-stream")
+	header.Set("Cache-Control", "no-cache")
+	header.Set("Connection", "keep-alive")
+	s.w.WriteHeader(http.StatusOK)
+	s.started = true
+}
+
 func (s *Server) record(ctx context.Context, m metadata.Request) error {
 	if s.meta == nil {
 		return nil
 	}
+	_, err := s.meta.RecordRequestMetadata(ctx, m)
+	return err
+}
+
+func (s *Server) recordWithID(ctx context.Context, m metadata.Request) (int64, error) {
+	if s.meta == nil {
+		return 0, nil
+	}
 	return s.meta.RecordRequestMetadata(ctx, m)
+}
+
+func (s *Server) recordStream(ctx context.Context, m metadata.Stream) error {
+	if s.meta == nil || m.RequestMetadataID == 0 {
+		return nil
+	}
+	return s.meta.RecordStreamMetrics(ctx, m)
 }
 
 func writeRaw(w http.ResponseWriter, status int, contentType string, body []byte) {

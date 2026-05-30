@@ -9,6 +9,7 @@ import (
 
 type ChatAdapter interface {
 	CompleteChat(ctx context.Context, req ChatRequest) (ChatResult, error)
+	StreamChat(ctx context.Context, req ChatRequest, sink ChatStreamSink) (ChatStreamSummary, error)
 }
 
 type ChatAdapters interface {
@@ -38,6 +39,29 @@ type ChatResult struct {
 	Latency       time.Duration
 	InvalidBody   bool
 	BodyTruncated bool
+}
+
+type ChatStreamSink interface {
+	WriteEvent(ctx context.Context, event ChatStreamEvent) error
+	WriteDone(ctx context.Context) error
+}
+
+type ChatStreamEvent struct {
+	Data []byte
+}
+
+type ChatStreamSummary struct {
+	StatusCode            int
+	Usage                 openai.Usage
+	ErrorClass            string
+	CompletionStatus      string
+	ChunkCount            int
+	TimeToFirstTokenMS    int64
+	OutputTokensPerSecond float64
+	Started               bool
+	Done                  bool
+	PreStreamError        bool
+	NormalizedErrorSent   bool
 }
 
 type StaticChatAdapters map[string]ChatAdapter

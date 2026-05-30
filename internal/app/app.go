@@ -305,6 +305,13 @@ func apiKeyProviders(registry provider.Registry) []provider.Instance {
 
 func chatAdapters(client *http.Client) provider.StaticChatAdapters {
 	adapter := provider.NewHTTPChatAdapter(client)
+	if client != nil {
+		adapter.StreamIdleTimeout = 20 * time.Millisecond
+		adapter.StreamHeaderTimeout = time.Second
+		adapter.MaxStreamLineBytes = 512
+		adapter.MaxStreamEventBytes = 512
+		adapter.MaxStreamEvents = 4
+	}
 	return provider.StaticChatAdapters{
 		"deepseek":   adapter,
 		"openrouter": adapter,
@@ -354,6 +361,10 @@ func newServeCheckUpstream() *serveCheckUpstream {
 			return
 		}
 		model, _ := body["model"].(string)
+		if body["stream"] == true {
+			up.handleServeCheckStream(w, r, body, model)
+			return
+		}
 		if model == "invalid-json" {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"object":"not-chat"}`))
@@ -380,10 +391,96 @@ func newServeCheckUpstream() *serveCheckUpstream {
 	return up
 }
 
+func (u *serveCheckUpstream) handleServeCheckStream(w http.ResponseWriter, r *http.Request, body map[string]any, model string) {
+	if r.Header.Get("Accept") != "text/event-stream" {
+		http.Error(w, "bad accept", http.StatusBadRequest)
+		return
+	}
+	if model == "stream-http-error" {
+		http.Error(w, "upstream unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	flusher, _ := w.(http.Flusher)
+	write := func(s string) {
+		_, _ = w.Write([]byte(s))
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+	if model == "stream-too-large-line" {
+		write("data: " + strings.Repeat("x", 1024) + "\n\n")
+		return
+	}
+	if model == "stream-too-large-event" {
+		write("data: " + strings.Repeat("x", 300) + "\n")
+		write("data: " + strings.Repeat("y", 300) + "\n\n")
+		return
+	}
+	if model == "stream-too-many-events" {
+		for i := 0; i < 5; i++ {
+			write(`data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"x"}}],"usage":null}` + "\n\n")
+		}
+		return
+	}
+	if model == "stream-idle" {
+		write(": keep-alive\n")
+		time.Sleep(50 * time.Millisecond)
+		return
+	}
+	if model == "stream-error-before" {
+		write(`data: {"error":{"message":"raw-provider-secret","metadata":{"id":"raw-id"}}}` + "\n\n")
+		return
+	}
+	if model == "stream-error" {
+		write(`data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"ok"}}],"usage":null}` + "\n\n")
+		write(`data: {"error":{"message":"raw-provider-secret","metadata":{"id":"raw-id"}}}` + "\n\n")
+		return
+	}
+	if model == "stream-malformed" {
+		write(`data: {"object":"not-chat","choices":[]}` + "\n\n")
+		return
+	}
+	if model == "stream-after-done" {
+		write(`data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"ok"}}],"usage":null}` + "\n\n")
+		write("data: [DONE]\n\n")
+		write(`data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"late"}}],"usage":null}` + "\n\n")
+		write("data: [DONE]\n\n")
+		return
+	}
+	if model == "stream-disconnect" {
+		write(`data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"ok"}}],"usage":null}` + "\n\n")
+		time.Sleep(200 * time.Millisecond)
+		write(`data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"late"}}],"usage":null}` + "\n\n")
+		return
+	}
+	options, _ := body["stream_options"].(map[string]any)
+	if options["include_usage"] != true {
+		http.Error(w, "missing include_usage", http.StatusBadRequest)
+		return
+	}
+	if model == "deepseek-v4-pro" || model == "deepseek/deepseek-v4-pro" {
+		u.mu.Lock()
+		u.observed[r.URL.Path+" stream "+model] = true
+		u.mu.Unlock()
+	}
+	write(": keep-alive\n\n")
+	write(`data: {"id":"chunk_raw_id","object":"chat.completion.chunk","created":1,"model":"` + model + `","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}],"usage":null,"provider":"raw-provider-extra"}` + "\n\n")
+	write(`data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"ok","reasoning_content":"r"}}],"usage":null}` + "\n\n")
+	write(`data: {"object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"completion_tokens_details":{"reasoning_tokens":0}}}` + "\n\n")
+	write("data: [DONE]\n\n")
+}
+
 func (u *serveCheckUpstream) sawExpected(path, model string) bool {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	return u.observed[path+" "+model]
+}
+
+func (u *serveCheckUpstream) sawExpectedStream(path, model string) bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.observed[path+" stream "+model]
 }
 
 func looksLikeChatCompletion(body []byte) bool {
@@ -422,10 +519,6 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 	if err := assertRecordedCredentialID(ctx, store); err != nil {
 		return err
 	}
-	streamBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true}`, model))
-	if status, err := postStatus(base+"/v1/chat/completions", token, streamBody); err != nil || status != http.StatusBadRequest {
-		return fmt.Errorf("stream chat provider=%s status=%d err=%v", instance.ID, status, err)
-	}
 	toolsBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"tools":[]}`, model))
 	if status, err := postStatus(base+"/v1/chat/completions", token, toolsBody); err != nil || status != http.StatusBadRequest {
 		return fmt.Errorf("unsupported tools provider=%s status=%d err=%v", instance.ID, status, err)
@@ -445,6 +538,128 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 	tooLargeBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}]}`, instance.ID+"/too-large"))
 	if status, err := postStatus(base+"/v1/chat/completions", token, tooLargeBody); err != nil || status != http.StatusBadGateway {
 		return fmt.Errorf("too-large upstream provider=%s status=%d err=%v", instance.ID, status, err)
+	}
+	if err := exerciseStreamingChatAdapterCheck(ctx, base, token, instance, fakeUpstream, store); err != nil {
+		return err
+	}
+	return nil
+}
+
+func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, instance provider.Instance, fakeUpstream *serveCheckUpstream, store *sqlite.Store) error {
+	modelID := "deepseek-v4-pro"
+	if instance.Type == "openrouter" {
+		modelID = "deepseek/deepseek-v4-pro"
+	}
+	model := instance.ID + "/" + modelID
+	successBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true}}`, model))
+	status, contentType, events, respBody, err := postStream(base+"/v1/chat/completions", token, successBody)
+	if err != nil || status != http.StatusOK {
+		return fmt.Errorf("stream success provider=%s status=%d err=%v", instance.ID, status, err)
+	}
+	if !strings.HasPrefix(contentType, "text/event-stream") {
+		return fmt.Errorf("stream success content-type=%q", contentType)
+	}
+	if !bytes.Contains(respBody, []byte("data: [DONE]")) || bytes.Count(respBody, []byte("data: [DONE]")) != 1 {
+		return fmt.Errorf("stream success did not forward exactly one DONE")
+	}
+	if bytes.Contains(respBody, []byte("raw-provider-extra")) || bytes.Contains(respBody, []byte(`"usage":null`)) {
+		return fmt.Errorf("stream success leaked provider extras or usage null")
+	}
+	if len(events) < 4 {
+		return fmt.Errorf("stream success returned too few events")
+	}
+	expectedPath := "/chat/completions"
+	if instance.Type == "openrouter" {
+		expectedPath = "/api/v1/chat/completions"
+	}
+	if !fakeUpstream.sawExpectedStream(expectedPath, modelID) {
+		return fmt.Errorf("stream adapter did not send expected upstream request for provider=%s", instance.ID)
+	}
+	if err := assertRecordedStream(ctx, store, "completed"); err != nil {
+		return err
+	}
+	if err := assertRecordedStreamUsage(ctx, store); err != nil {
+		return err
+	}
+	if status, err := postStatus(base+"/v1/chat/completions", token, []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream_options":{"include_usage":true}}`, model))); err != nil || status != http.StatusBadRequest {
+		return fmt.Errorf("stream_options without stream provider=%s status=%d err=%v", instance.ID, status, err)
+	}
+	if status, err := postStatus(base+"/v1/chat/completions", token, []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":false,"stream_options":{"include_usage":true}}`, model))); err != nil || status != http.StatusBadRequest {
+		return fmt.Errorf("stream_options with stream false provider=%s status=%d err=%v", instance.ID, status, err)
+	}
+	invalidBodies := []string{
+		`"stream_options":null`,
+		`"stream_options":true`,
+		`"stream_options":{}`,
+		`"stream_options":{"include_usage":true,"extra":false}`,
+		`"stream_options":{"include_usage":"true"}`,
+		`"stream":true,"stream_options":{"include_usage":true},"tools":[]`,
+		`"stream":true,"stream_options":{"include_usage":true},"provider_options":null`,
+	}
+	for _, extra := range invalidBodies {
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, model, extra))
+		if status, err := postStatus(base+"/v1/chat/completions", token, body); err != nil || status != http.StatusBadRequest {
+			return fmt.Errorf("invalid stream validation %s provider=%s status=%d err=%v", extra, instance.ID, status, err)
+		}
+	}
+	preErrorBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true}}`, instance.ID+"/stream-error-before"))
+	status, _, _, raw, err := postStream(base+"/v1/chat/completions", token, preErrorBody)
+	if err != nil || status != http.StatusBadGateway || !hasStreamErrorEnvelope(raw) || bytes.Contains(raw, []byte("raw-provider-secret")) {
+		return fmt.Errorf("pre-stream provider error status=%d err=%v body_len=%d", status, err, len(raw))
+	}
+	midErrorBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true}}`, instance.ID+"/stream-error"))
+	status, _, _, raw, err = postStream(base+"/v1/chat/completions", token, midErrorBody)
+	if err != nil || status != http.StatusOK || !bytes.Contains(raw, []byte("upstream_stream_error")) || bytes.Contains(raw, []byte("raw-provider-secret")) || bytes.Contains(raw, []byte("[DONE]")) {
+		return fmt.Errorf("mid-stream provider error status=%d err=%v body_len=%d", status, err, len(raw))
+	}
+	httpErrorBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true}}`, instance.ID+"/stream-http-error"))
+	beforeHTTPError, err := streamStatusCount(ctx, store, "upstream_error")
+	if err != nil {
+		return err
+	}
+	status, contentType, _, raw, err = postStream(base+"/v1/chat/completions", token, httpErrorBody)
+	if err != nil || status != http.StatusBadGateway || !strings.HasPrefix(contentType, "application/json") || !hasStreamErrorEnvelope(raw) || bytes.Contains(raw, []byte("upstream unavailable")) {
+		return fmt.Errorf("pre-stream HTTP error status=%d content_type=%q err=%v body_len=%d", status, contentType, err, len(raw))
+	}
+	if err := assertRecordedStreamIncreased(ctx, store, "upstream_error", beforeHTTPError); err != nil {
+		return err
+	}
+	statusCases := []struct {
+		model  string
+		status string
+	}{
+		{"stream-too-large-line", "too_large"},
+		{"stream-too-large-event", "too_large"},
+		{"stream-too-many-events", "event_limit"},
+		{"stream-idle", "upstream_timeout"},
+		{"stream-malformed", "upstream_invalid"},
+	}
+	for _, tc := range statusCases {
+		before, err := streamStatusCount(ctx, store, tc.status)
+		if err != nil {
+			return err
+		}
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true}}`, instance.ID+"/"+tc.model))
+		_, _, _, _, _ = postStream(base+"/v1/chat/completions", token, body)
+		if err := assertRecordedStreamIncreased(ctx, store, tc.status, before); err != nil {
+			return fmt.Errorf("%s: %w", tc.model, err)
+		}
+	}
+	afterDoneBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true}}`, instance.ID+"/stream-after-done"))
+	status, _, _, raw, err = postStream(base+"/v1/chat/completions", token, afterDoneBody)
+	if err != nil || status != http.StatusOK || bytes.Count(raw, []byte("[DONE]")) != 1 || bytes.Contains(raw, []byte("late")) {
+		return fmt.Errorf("after-done forwarding status=%d err=%v body_len=%d", status, err, len(raw))
+	}
+	before, err := streamStatusCount(ctx, store, "client_disconnected")
+	if err != nil {
+		return err
+	}
+	disconnectBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true}}`, instance.ID+"/stream-disconnect"))
+	if err := postStreamAndClose(base+"/v1/chat/completions", token, disconnectBody); err != nil {
+		return err
+	}
+	if err := assertRecordedStreamIncreased(ctx, store, "client_disconnected", before); err != nil {
+		return err
 	}
 	return nil
 }
@@ -478,6 +693,77 @@ func assertRecordedCredentialID(ctx context.Context, store *sqlite.Store) error 
 	}
 	if count == 0 {
 		return fmt.Errorf("chat adapter metadata did not record credential and usage")
+	}
+	return nil
+}
+
+func hasStreamErrorEnvelope(body []byte) bool {
+	var envelope struct {
+		Error struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+			Code    string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return false
+	}
+	return envelope.Error.Message == "upstream stream failed" &&
+		envelope.Error.Type == "api_error" &&
+		envelope.Error.Code == "upstream_stream_error"
+}
+
+func assertRecordedStream(ctx context.Context, store *sqlite.Store, status string) error {
+	count, err := streamStatusCount(ctx, store, status)
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return fmt.Errorf("stream metrics did not record status %s", status)
+	}
+	return nil
+}
+
+func assertRecordedStreamUsage(ctx context.Context, store *sqlite.Store) error {
+	var count int
+	err := store.DB.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM stream_metrics sm
+		JOIN request_metadata rm ON rm.id = sm.request_metadata_id
+		WHERE sm.completion_status = 'completed'
+			AND rm.credential_id IS NOT NULL
+			AND rm.prompt_tokens = 1
+			AND rm.completion_tokens = 1
+			AND rm.total_tokens = 2
+	`).Scan(&count)
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return fmt.Errorf("stream metadata did not record usage")
+	}
+	return nil
+}
+
+func streamStatusCount(ctx context.Context, store *sqlite.Store, status string) (int, error) {
+	var count int
+	err := store.DB.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM stream_metrics sm
+		JOIN request_metadata rm ON rm.id = sm.request_metadata_id
+		WHERE sm.completion_status = ?
+			AND rm.credential_id IS NOT NULL
+	`, status).Scan(&count)
+	return count, err
+}
+
+func assertRecordedStreamIncreased(ctx context.Context, store *sqlite.Store, status string, before int) error {
+	after, err := streamStatusCount(ctx, store, status)
+	if err != nil {
+		return err
+	}
+	if after <= before {
+		return fmt.Errorf("stream metrics status %s count did not increase: before=%d after=%d", status, before, after)
 	}
 	return nil
 }
@@ -530,4 +816,50 @@ func postJSON(url, token string, body []byte) (int, []byte, error) {
 		return 0, nil, err
 	}
 	return resp.StatusCode, respBody, nil
+}
+
+func postStream(url, token string, body []byte) (int, string, []string, []byte, error) {
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return 0, "", nil, nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, "", nil, nil, err
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, "", nil, nil, err
+	}
+	parts := strings.Split(string(respBody), "\n\n")
+	events := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if strings.TrimSpace(part) != "" {
+			events = append(events, part)
+		}
+	}
+	return resp.StatusCode, resp.Header.Get("Content-Type"), events, respBody, nil
+}
+
+func postStreamAndClose(url, token string, body []byte) error {
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	buf := make([]byte, 64)
+	_, _ = resp.Body.Read(buf)
+	_ = resp.Body.Close()
+	time.Sleep(80 * time.Millisecond)
+	return nil
 }

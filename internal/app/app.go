@@ -674,7 +674,7 @@ func exerciseObservabilityCheck(ctx context.Context, registry provider.Registry,
 		OccurredAt:         started.Add(5 * time.Minute),
 		ProviderInstanceID: "deepseek",
 		CredentialID:       first.ID,
-		ModelID:            "retry-after-model",
+		ModelID:            "",
 		EventClass:         "upstream_failure",
 		HTTPStatus:         http.StatusTooManyRequests,
 		ErrorClass:         "upstream_http_error",
@@ -2776,6 +2776,7 @@ func (u *serveCheckUpstream) handleServeCheckModels(w http.ResponseWriter, r *ht
 		return
 	}
 	if rateLimit {
+		w.Header().Set("Retry-After", "2")
 		http.Error(w, "raw model rate limit body", http.StatusTooManyRequests)
 		return
 	}
@@ -3444,6 +3445,12 @@ func exerciseCodexServeOAuthRefreshCheck(ctx context.Context, cfg config.Config,
 	if !fakeUpstream.sawAuth("codex-models", "oauth-serve-refreshed-model-401") || fakeRefresh.requestCountFor("oauth-serve-refresh-model-401") != 1 {
 		return fmt.Errorf("codex 401 model refresh used wrong bearer or count")
 	}
+	if err := assertModelDiscoveryStatusHealth(ctx, store, "codex", "upstream_failure", http.StatusUnauthorized); err != nil {
+		return err
+	}
+	if err := assertModelDiscoveryHealth(ctx, store, "codex", "upstream_success", false); err != nil {
+		return err
+	}
 	if err := disableProviderCredential(ctx, store, model401.ID, now); err != nil {
 		return err
 	}
@@ -3861,6 +3868,9 @@ func exerciseServeOAuthRefreshFailureSemantics(ctx context.Context, base, token 
 	if fakeRefresh.requestCountFor("oauth-serve-no-refresh-429") != 0 {
 		return fmt.Errorf("model 429 triggered refresh")
 	}
+	if err := assertModelDiscoveryHealth(ctx, store, "codex", "upstream_failure", true); err != nil {
+		return err
+	}
 	if err := disableProviderCredential(ctx, store, noRefresh429.ID, now); err != nil {
 		return err
 	}
@@ -4145,6 +4155,11 @@ func exerciseModelDiscoveryCheck(ctx context.Context, base, token string, instan
 	if fakeUpstream.sawExpectedModels("/models") == false || fakeUpstream.sawExpectedModels("/api/v1/models") == false || fakeUpstream.sawCodexModels() == false {
 		return fmt.Errorf("model discovery did not call expected upstream model paths")
 	}
+	for _, providerID := range []string{"deepseek", "openrouter", "codex"} {
+		if err := assertModelDiscoveryHealth(ctx, store, providerID, "upstream_success", false); err != nil {
+			return err
+		}
+	}
 	if !fakeUpstream.sawAuth("codex-models", "oauth-access-secret-marker") {
 		return fmt.Errorf("codex model discovery did not use oauth access token")
 	}
@@ -4181,6 +4196,32 @@ func exerciseModelDiscoveryCheck(ctx context.Context, base, token string, instan
 	if !hasLocalModelFromBody(respBody, "deepseek/deepseek-v4-pro") || bytes.Contains(respBody, []byte("raw model failure body")) {
 		return fmt.Errorf("model cache fallback failed or leaked raw body")
 	}
+	if err := assertModelDiscoveryHealth(ctx, store, "deepseek", "upstream_failure", false); err != nil {
+		return err
+	}
+	beforeModelFallbacks, err := totalFallbackEventCount(ctx, store)
+	if err != nil {
+		return err
+	}
+	fakeUpstream.setModelsMode("models-429")
+	status, respBody, err = getJSON(base+"/v1/models", token)
+	if err != nil || status != http.StatusOK || bytes.Contains(respBody, []byte("raw model rate limit body")) {
+		return fmt.Errorf("model 429 cache fallback status=%d err=%v body_len=%d", status, err, len(respBody))
+	}
+	if err := assertModelDiscoveryHealth(ctx, store, "deepseek", "upstream_failure", true); err != nil {
+		return err
+	}
+	if err := assertModelDiscoveryHealth(ctx, store, "openrouter", "upstream_failure", true); err != nil {
+		return err
+	}
+	afterModelFallbacks, err := totalFallbackEventCount(ctx, store)
+	if err != nil {
+		return err
+	}
+	if afterModelFallbacks != beforeModelFallbacks {
+		return fmt.Errorf("model discovery 429 recorded fallback event")
+	}
+	fakeUpstream.setModelsMode("")
 	before, err := modelCacheSnapshot(ctx, store)
 	if err != nil {
 		return err
@@ -4198,6 +4239,11 @@ func exerciseModelDiscoveryCheck(ctx context.Context, base, token string, instan
 		}
 		if after != before {
 			return fmt.Errorf("%s refresh changed model cache", mode)
+		}
+		if mode == "models-too-large" {
+			if err := assertModelDiscoveryErrorHealth(ctx, store, "deepseek", http.StatusOK, "upstream_body_too_large"); err != nil {
+				return err
+			}
 		}
 	}
 	fakeUpstream.setModelsMode("")
@@ -4632,6 +4678,12 @@ func fallbackEventCount(ctx context.Context, store *sqlite.Store, providerInstan
 	return count, err
 }
 
+func totalFallbackEventCount(ctx context.Context, store *sqlite.Store) (int, error) {
+	var count int
+	err := store.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM fallback_events`).Scan(&count)
+	return count, err
+}
+
 func assertRequestFallbackMetadata(ctx context.Context, store *sqlite.Store, providerInstanceID, modelID string) error {
 	var retryCount, fallbackCount int
 	var fallbackReason string
@@ -4745,6 +4797,68 @@ func assertNoRetryAfterHealth(ctx context.Context, store *sqlite.Store, provider
 	}
 	if count != 0 {
 		return fmt.Errorf("unexpected retry-after health for %s/%s", providerInstanceID, modelID)
+	}
+	return nil
+}
+
+func assertModelDiscoveryHealth(ctx context.Context, store *sqlite.Store, providerInstanceID, eventClass string, wantRetryAfter bool) error {
+	query := `
+		SELECT COUNT(*)
+		FROM health_events
+		WHERE provider_instance_id = ?
+			AND model_id = ''
+			AND event_class = ?
+	`
+	if wantRetryAfter {
+		query += ` AND retry_after IS NOT NULL`
+	} else {
+		query += ` AND retry_after IS NULL`
+	}
+	var count int
+	if err := store.DB.QueryRowContext(ctx, query, providerInstanceID, eventClass).Scan(&count); err != nil {
+		return err
+	}
+	if count == 0 {
+		return fmt.Errorf("model discovery health missing provider=%s event=%s retry_after=%t", providerInstanceID, eventClass, wantRetryAfter)
+	}
+	return nil
+}
+
+func assertModelDiscoveryStatusHealth(ctx context.Context, store *sqlite.Store, providerInstanceID, eventClass string, status int) error {
+	var count int
+	err := store.DB.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM health_events
+		WHERE provider_instance_id = ?
+			AND model_id = ''
+			AND event_class = ?
+			AND http_status = ?
+	`, providerInstanceID, eventClass, status).Scan(&count)
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return fmt.Errorf("model discovery health missing provider=%s event=%s status=%d", providerInstanceID, eventClass, status)
+	}
+	return nil
+}
+
+func assertModelDiscoveryErrorHealth(ctx context.Context, store *sqlite.Store, providerInstanceID string, status int, errorClass string) error {
+	var count int
+	err := store.DB.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM health_events
+		WHERE provider_instance_id = ?
+			AND model_id = ''
+			AND event_class = 'upstream_failure'
+			AND http_status = ?
+			AND normalized_error_class = ?
+	`, providerInstanceID, status, errorClass).Scan(&count)
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return fmt.Errorf("model discovery health missing provider=%s status=%d error=%s", providerInstanceID, status, errorClass)
 	}
 	return nil
 }

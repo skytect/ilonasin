@@ -538,6 +538,7 @@ func ExerciseObservabilitySummary(ctx context.Context, cfg config.Config, regist
 		"deepseek 2 req prompt 11 completion 7 total 18 reasoning 3 cache_hit 5 cache_write 3 cost_microunits 126",
 		"avg latency 125ms ttft 50ms tps 9.00",
 		"completed 1 streams 3 chunks",
+		"deepseek/models upstream_failure",
 		"retry_after 2026-05-30T12:10:00Z",
 		"availability_retry",
 	}
@@ -1048,7 +1049,7 @@ func (m Model) writeObservability(b *strings.Builder) {
 			retryAfter = " retry_after " + formatTime(*row.RetryAfter)
 		}
 		fmt.Fprintf(b, "- %s/%s %s status %d %s %s at %s%s\n",
-			safeDisplay(row.ProviderInstanceID), safeDisplay(row.ModelID),
+			safeDisplay(row.ProviderInstanceID), healthModelDisplay(row.ModelID),
 			safeDisplay(row.EventClass), row.HTTPStatus, safeDisplay(row.ErrorClass),
 			credentialDisplay(row.CredentialID, row.CredentialLabel), formatTime(row.OccurredAt), retryAfter)
 	}
@@ -1156,6 +1157,13 @@ func credentialDisplay(id int64, label string) string {
 		return fmt.Sprintf("credential %d", id)
 	}
 	return fmt.Sprintf("credential %d %s", id, safe)
+}
+
+func healthModelDisplay(modelID string) string {
+	if modelID == "" {
+		return "models"
+	}
+	return safeDisplay(modelID)
 }
 
 func formatTime(t time.Time) string {

@@ -75,7 +75,7 @@ func (a HTTPChatAdapter) ListModels(ctx context.Context, req ModelRequest) (Mode
 		if errors.As(readErr, &maxBytesErr) {
 			errorClass = "upstream_body_too_large"
 		}
-		return ModelResult{ErrorClass: errorClass}, readErr
+		return ModelResult{ErrorClass: errorClass, StatusCode: resp.StatusCode}, readErr
 	}
 	models, err := normalizeModels(req.Instance, body)
 	if err != nil {

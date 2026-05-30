@@ -134,6 +134,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request, _ credenti
 			Instance:   instance,
 			Credential: credential,
 		})
+		s.recordHealth(r.Context(), healthFromModelDiscovery(instance, credential, result, err))
 		if s.shouldRefreshOAuthAfterModel401(instance, result) {
 			if refreshed, refreshErr := s.refreshOAuthCredentialForRetryIfBearer(r.Context(), credential); refreshErr == nil {
 				credential = refreshed
@@ -141,6 +142,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request, _ credenti
 					Instance:   instance,
 					Credential: credential,
 				})
+				s.recordHealth(r.Context(), healthFromModelDiscovery(instance, credential, result, err))
 			} else {
 				failedWithoutCache++
 				continue
@@ -794,6 +796,36 @@ func healthFromSingleChatAttempt(addr routing.ModelAddress, attempt singleChatAt
 		ProviderInstanceID: addr.ProviderInstanceID,
 		CredentialID:       attempt.credential.ID,
 		ModelID:            addr.ProviderModelID,
+		EventClass:         eventClass,
+		HTTPStatus:         status,
+		ErrorClass:         errorClass,
+		RetryAfter:         retryAfter,
+	}
+}
+
+func healthFromModelDiscovery(instance provider.Instance, credential provider.BearerCredential, result provider.ModelResult, err error) metadata.HealthEvent {
+	status := result.StatusCode
+	if status == 0 {
+		status = http.StatusBadGateway
+	}
+	errorClass := result.ErrorClass
+	if errorClass == "" && status >= 400 {
+		errorClass = "upstream_http_error"
+	}
+	eventClass := "upstream_failure"
+	if err == nil && len(result.Models) > 0 && status >= 200 && status < 300 {
+		eventClass = "upstream_success"
+		errorClass = ""
+	}
+	retryAfter := result.RetryAfter
+	if eventClass == "upstream_success" {
+		retryAfter = nil
+	}
+	return metadata.HealthEvent{
+		OccurredAt:         time.Now(),
+		ProviderInstanceID: instance.ID,
+		CredentialID:       credential.ID,
+		ModelID:            "",
 		EventClass:         eventClass,
 		HTTPStatus:         status,
 		ErrorClass:         errorClass,

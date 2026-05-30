@@ -2390,6 +2390,8 @@ func newServeRefreshAuthServer() *serveRefreshAuthServer {
 			_, _ = w.Write([]byte(`{"access_token":"oauth-serve-refreshed-model-401","expires_in":3600}`))
 		case "oauth-serve-refresh-chat-401":
 			_, _ = w.Write([]byte(`{"access_token":"oauth-serve-refreshed-chat-401","expires_in":3600}`))
+		case "oauth-serve-refresh-stream-401":
+			_, _ = w.Write([]byte(`{"access_token":"oauth-serve-refreshed-stream-401","expires_in":3600}`))
 		case "oauth-serve-refresh-model-large-401":
 			_, _ = w.Write([]byte(`{"access_token":"oauth-serve-refreshed-model-large-401","expires_in":3600}`))
 		case "oauth-serve-refresh-concurrent":
@@ -2496,6 +2498,10 @@ func (u *serveCheckUpstream) handleServeCheckCodexResponses(w http.ResponseWrite
 	}
 	if r.Header.Get("Content-Type") != "application/json" || r.Header.Get("Accept") != "text/event-stream" {
 		http.Error(w, "bad headers", http.StatusBadRequest)
+		return
+	}
+	if r.Header.Get("ChatGPT-Account-ID") != "" || r.Header.Get("X-OpenAI-Fedramp") != "" {
+		http.Error(w, "unexpected account headers", http.StatusBadRequest)
 		return
 	}
 	var raw map[string]json.RawMessage
@@ -2621,6 +2627,19 @@ func (u *serveCheckUpstream) handleServeCheckCodexResponses(w http.ResponseWrite
 		write(`data: {"type":"response.output_text.delta","delta":"duplicate "}` + "\n\n")
 		write(`data: {"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"codex done text"}]}}` + "\n\n")
 		write(`data: {"type":"response.completed","response":{"id":"raw-provider-response-id-marker","usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7,"output_tokens_details":{"reasoning_tokens":2}}}}` + "\n\n")
+	case "codex-stream-delta":
+		write(`data: {"type":"response.output_text.delta","delta":"codex stream"}` + "\n\n")
+		write(`data: {"type":"response.output_text.done","text":"duplicate stream leak"}` + "\n\n")
+		write(`data: {"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"duplicate item leak"}]}}` + "\n\n")
+		write(`data: {"type":"response.completed","response":{"id":"raw-provider-response-id-marker","usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7,"input_tokens_details":{"cached_tokens":1},"output_tokens_details":{"reasoning_tokens":2}}}}` + "\n\n")
+	case "codex-stream-output-text-done":
+		write(`data: {"type":"response.output_text.done","text":"codex done stream"}` + "\n\n")
+		write(`data: {"type":"response.completed","response":{"id":"raw-provider-response-id-marker","usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7}}}` + "\n\n")
+	case "codex-stream-tool-event":
+		write(`data: {"type":"response.web_search_call.in_progress","item_id":"leak_tool"}` + "\n\n")
+	case "codex-stream-failed-after-start":
+		write(`data: {"type":"response.output_text.delta","delta":"partial leak"}` + "\n\n")
+		write(`data: {"type":"response.failed","response":{"error":{"message":"raw failed marker"}}}` + "\n\n")
 	default:
 		write(`data: {"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"codex ok"}]}}` + "\n\n")
 		write(`data: {"type":"response.completed","response":{"id":"raw-provider-response-id-marker","usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7,"input_tokens_details":{"cached_tokens":1},"output_tokens_details":{"reasoning_tokens":2}}}}` + "\n\n")
@@ -2749,6 +2768,7 @@ func isServeCheckCodexAccess(auth string) bool {
 		"oauth-serve-refreshed-first-with-other",
 		"oauth-serve-refreshed-model-401",
 		"oauth-serve-refreshed-chat-401",
+		"oauth-serve-refreshed-stream-401",
 		"oauth-serve-refreshed-model-large-401",
 		"oauth-serve-other-valid-access",
 		"oauth-serve-refreshed-concurrent":
@@ -2984,16 +3004,66 @@ func exerciseCodexChatCheck(ctx context.Context, base, token string, fakeUpstrea
 			return fmt.Errorf("codex completed edge %s status=%d err=%v", tc.model, status, err)
 		}
 	}
-	streamBody := []byte(`{"model":"codex/gpt-5.5-codex","messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true}}`)
-	if status, err := postStatus(base+"/v1/chat/completions", token, streamBody); err != nil || status != http.StatusNotImplemented {
-		return fmt.Errorf("codex stream status=%d err=%v", status, err)
+	streamBody := []byte(`{"model":"codex/gpt-5.5-codex","messages":[{"role":"system","content":"codex system marker"},{"role":"user","content":"check"},{"role":"assistant","content":"prior"}],"stream":true,"stream_options":{"include_usage":true}}`)
+	status, contentType, events, respBody, err := postStream(base+"/v1/chat/completions", token, streamBody)
+	if err != nil || status != http.StatusOK || !strings.HasPrefix(contentType, "text/event-stream") {
+		return fmt.Errorf("codex stream status=%d content_type=%q err=%v", status, contentType, err)
+	}
+	if err := assertCodexStream(events, respBody, "codex/gpt-5.5-codex", "codex ok", true); err != nil {
+		return err
+	}
+	if !fakeUpstream.sawAuth("codex-chat", "oauth-access-secret-marker") {
+		return fmt.Errorf("codex stream did not use oauth access token")
+	}
+	if err := assertLatestCodexChatMetadata(ctx, store, "gpt-5.5-codex", http.StatusOK, ""); err != nil {
+		return err
+	}
+	if err := assertRecordedStream(ctx, store, "completed"); err != nil {
+		return err
+	}
+	streamDeltaBody := []byte(`{"model":"codex/codex-stream-delta","messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true}}`)
+	status, _, events, respBody, err = postStream(base+"/v1/chat/completions", token, streamDeltaBody)
+	if err != nil || status != http.StatusOK {
+		return fmt.Errorf("codex stream delta status=%d err=%v", status, err)
+	}
+	if err := assertCodexStream(events, respBody, "codex/codex-stream-delta", "codex stream", true); err != nil {
+		return err
+	}
+	if bytes.Contains(respBody, []byte("duplicate stream leak")) || bytes.Contains(respBody, []byte("duplicate item leak")) {
+		return fmt.Errorf("codex stream delta duplicated done text")
+	}
+	streamDoneBody := []byte(`{"model":"codex/codex-stream-output-text-done","messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true}}`)
+	status, _, events, respBody, err = postStream(base+"/v1/chat/completions", token, streamDoneBody)
+	if err != nil || status != http.StatusOK {
+		return fmt.Errorf("codex stream output_text.done status=%d err=%v", status, err)
+	}
+	if err := assertCodexStream(events, respBody, "codex/codex-stream-output-text-done", "codex done stream", true); err != nil {
+		return err
+	}
+	streamNoUsageBody := []byte(`{"model":"codex/codex-stream-delta","messages":[{"role":"user","content":"check"}],"stream":true}`)
+	status, _, events, respBody, err = postStream(base+"/v1/chat/completions", token, streamNoUsageBody)
+	if err != nil || status != http.StatusOK {
+		return fmt.Errorf("codex stream no-usage status=%d err=%v", status, err)
+	}
+	if err := assertCodexStream(events, respBody, "codex/codex-stream-delta", "codex stream", false); err != nil {
+		return err
+	}
+	streamToolBody := []byte(`{"model":"codex/codex-stream-tool-event","messages":[{"role":"user","content":"check"}],"stream":true}`)
+	status, _, _, respBody, err = postStream(base+"/v1/chat/completions", token, streamToolBody)
+	if err != nil || status != http.StatusBadGateway || !hasStreamErrorEnvelopeCode(respBody, "upstream_invalid_response") || bytes.Contains(respBody, []byte("leak_tool")) {
+		return fmt.Errorf("codex stream tool event status=%d err=%v body_len=%d", status, err, len(respBody))
+	}
+	streamAfterStartFailureBody := []byte(`{"model":"codex/codex-stream-failed-after-start","messages":[{"role":"user","content":"check"}],"stream":true}`)
+	status, _, _, respBody, err = postStream(base+"/v1/chat/completions", token, streamAfterStartFailureBody)
+	if err != nil || status != http.StatusOK || !bytes.Contains(respBody, []byte("upstream_stream_error")) || bytes.Contains(respBody, []byte("[DONE]")) || bytes.Contains(respBody, []byte("raw failed marker")) {
+		return fmt.Errorf("codex stream after-start failure status=%d err=%v body_len=%d", status, err, len(respBody))
 	}
 	failureModels := map[string]string{
 		"codex-http-error":        "upstream_http_error",
 		"codex-malformed":         "upstream_invalid_response",
 		"codex-missing-completed": "upstream_invalid_response",
 		"codex-failed":            "upstream_response_failed",
-		"codex-incomplete":        "upstream_response_failed",
+		"codex-incomplete":        "upstream_response_incomplete",
 		"codex-invalid-usage":     "upstream_invalid_response",
 		"codex-too-large-event":   "upstream_invalid_response",
 		"codex-too-large-output":  "upstream_invalid_response",
@@ -3031,6 +3101,99 @@ func chatCompletionHasContent(body []byte, want string) bool {
 		return false
 	}
 	return resp.Choices[0].Message.Content == want
+}
+
+func assertCodexStream(events []string, body []byte, model, wantContent string, wantUsage bool) error {
+	if bytes.Contains(body, []byte("raw-provider-response-id-marker")) ||
+		bytes.Contains(body, []byte("oauth-access-secret-marker")) ||
+		bytes.Contains(body, []byte("oauth-refresh-secret-marker")) ||
+		bytes.Contains(body, []byte("ChatGPT-Account-ID")) ||
+		bytes.Contains(body, []byte("duplicate item leak")) ||
+		bytes.Contains(body, []byte("duplicate stream leak")) {
+		return fmt.Errorf("codex stream leaked provider marker")
+	}
+	if bytes.Count(body, []byte("data: [DONE]")) != 1 {
+		return fmt.Errorf("codex stream DONE count=%d events=%d", bytes.Count(body, []byte("data: [DONE]")), len(events))
+	}
+	if len(events) < 4 {
+		return fmt.Errorf("codex stream returned too few events")
+	}
+	var gotContent strings.Builder
+	roleSeen := false
+	finishSeen := false
+	usageSeen := false
+	doneSeen := false
+	firstChunk := true
+	for _, event := range events {
+		event = strings.TrimSpace(event)
+		if event == "data: [DONE]" {
+			doneSeen = true
+			continue
+		}
+		if !strings.HasPrefix(event, "data: ") {
+			continue
+		}
+		data := strings.TrimPrefix(event, "data: ")
+		var chunk struct {
+			ID      string `json:"id"`
+			Object  string `json:"object"`
+			Model   string `json:"model"`
+			Choices []struct {
+				Delta        map[string]string `json:"delta"`
+				FinishReason *string           `json:"finish_reason"`
+			} `json:"choices"`
+			Usage *struct {
+				PromptTokens     int `json:"prompt_tokens"`
+				CompletionTokens int `json:"completion_tokens"`
+				TotalTokens      int `json:"total_tokens"`
+			} `json:"usage"`
+		}
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+			return fmt.Errorf("codex stream chunk invalid: %w", err)
+		}
+		if chunk.Object != "chat.completion.chunk" || !strings.HasPrefix(chunk.ID, "chatcmpl_") || chunk.Model != model {
+			return fmt.Errorf("codex stream chunk shape id=%q object=%q model=%q", chunk.ID, chunk.Object, chunk.Model)
+		}
+		if len(chunk.Choices) == 0 {
+			if chunk.Usage == nil {
+				return fmt.Errorf("codex stream empty choices without usage")
+			}
+			usageSeen = true
+			if chunk.Usage.PromptTokens != 3 || chunk.Usage.CompletionTokens != 4 || chunk.Usage.TotalTokens != 7 {
+				return fmt.Errorf("codex stream usage mismatch")
+			}
+			continue
+		}
+		if firstChunk {
+			firstChunk = false
+			if chunk.Choices[0].Delta["role"] != "assistant" {
+				return fmt.Errorf("codex stream first chunk missing assistant role")
+			}
+			roleSeen = true
+		}
+		if content := chunk.Choices[0].Delta["content"]; content != "" {
+			gotContent.WriteString(content)
+		}
+		if chunk.Choices[0].FinishReason != nil {
+			if *chunk.Choices[0].FinishReason != "stop" {
+				return fmt.Errorf("codex stream finish reason %q", *chunk.Choices[0].FinishReason)
+			}
+			if chunk.Usage != nil {
+				return fmt.Errorf("codex stream finish chunk carried usage")
+			}
+			finishSeen = true
+		}
+	}
+	if !roleSeen || !finishSeen || !doneSeen {
+		return fmt.Errorf("codex stream missing role=%t finish=%t done=%t", roleSeen, finishSeen, doneSeen)
+	}
+	if gotContent.String() != wantContent {
+		return fmt.Errorf("codex stream content=%q want=%q", gotContent.String(), wantContent)
+	}
+	if usageSeen != wantUsage {
+		return fmt.Errorf("codex stream usage seen=%t want=%t", usageSeen, wantUsage)
+	}
+	return nil
 }
 
 func exerciseCodexCancellationCheck(ctx context.Context, base, token string, store *sqlite.Store) error {
@@ -3235,6 +3398,28 @@ func exerciseCodexServeOAuthRefreshCheck(ctx context.Context, cfg config.Config,
 		return err
 	}
 	if err := disableProviderCredential(ctx, store, chat401.ID, now); err != nil {
+		return err
+	}
+
+	stream401, err := upstreams.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID: "codex", Label: "serve refresh stream 401", AccessToken: "oauth-serve-stale-stream-401",
+		RefreshToken: "oauth-serve-refresh-stream-401", AccountID: "serve-refresh-stream-401", AccountDisplayLabel: "Serve Refresh Stream 401",
+	})
+	if err != nil {
+		return err
+	}
+	streamBody := []byte(`{"model":"codex/codex-stream-delta","messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true}}`)
+	status, _, _, respBody, err := postStream(base+"/v1/chat/completions", created.Token, streamBody)
+	if err != nil || status != http.StatusOK || !bytes.Contains(respBody, []byte("data: [DONE]")) {
+		return fmt.Errorf("codex 401 stream refresh status=%d err=%v", status, err)
+	}
+	if !fakeUpstream.sawAuth("codex-chat", "oauth-serve-refreshed-stream-401") || fakeRefresh.requestCountFor("oauth-serve-refresh-stream-401") != 1 {
+		return fmt.Errorf("codex 401 stream refresh used wrong bearer or count")
+	}
+	if err := assertLatestCodexChatRetryMetadata(ctx, store, "codex-stream-delta", http.StatusOK, "", 1); err != nil {
+		return err
+	}
+	if err := disableProviderCredential(ctx, store, stream401.ID, now); err != nil {
 		return err
 	}
 
@@ -4688,6 +4873,10 @@ func hasLocalModel(models []map[string]any, id, ownedBy string) bool {
 }
 
 func hasStreamErrorEnvelope(body []byte) bool {
+	return hasStreamErrorEnvelopeCode(body, "upstream_stream_error")
+}
+
+func hasStreamErrorEnvelopeCode(body []byte, code string) bool {
 	var envelope struct {
 		Error struct {
 			Message string `json:"message"`
@@ -4700,7 +4889,7 @@ func hasStreamErrorEnvelope(body []byte) bool {
 	}
 	return envelope.Error.Message == "upstream stream failed" &&
 		envelope.Error.Type == "api_error" &&
-		envelope.Error.Code == "upstream_stream_error"
+		envelope.Error.Code == code
 }
 
 func assertRecordedStream(ctx context.Context, store *sqlite.Store, status string) error {

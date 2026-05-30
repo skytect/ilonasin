@@ -12,21 +12,22 @@ import (
 )
 
 type ChatCompletionRequest struct {
-	Model            string           `json:"model"`
-	Messages         []Message        `json:"messages"`
-	Stream           bool             `json:"stream,omitempty"`
-	MaxTokens        *int             `json:"max_tokens,omitempty"`
-	Temperature      *float64         `json:"temperature,omitempty"`
-	TopP             *float64         `json:"top_p,omitempty"`
-	Stop             any              `json:"stop,omitempty"`
-	StreamOptions    map[string]any   `json:"stream_options,omitempty"`
-	ResponseFormat   map[string]any   `json:"response_format,omitempty"`
-	Tools            []map[string]any `json:"tools,omitempty"`
-	ToolChoice       any              `json:"tool_choice,omitempty"`
-	Logprobs         *bool            `json:"logprobs,omitempty"`
-	TopLogprobs      *int             `json:"top_logprobs,omitempty"`
-	ReasoningOptions map[string]any   `json:"provider_options,omitempty"`
-	PresentFields    map[string]bool  `json:"-"`
+	Model               string           `json:"model"`
+	Messages            []Message        `json:"messages"`
+	Stream              bool             `json:"stream,omitempty"`
+	MaxTokens           *int             `json:"max_tokens,omitempty"`
+	MaxCompletionTokens *int             `json:"max_completion_tokens,omitempty"`
+	Temperature         *float64         `json:"temperature,omitempty"`
+	TopP                *float64         `json:"top_p,omitempty"`
+	Stop                any              `json:"stop,omitempty"`
+	StreamOptions       map[string]any   `json:"stream_options,omitempty"`
+	ResponseFormat      map[string]any   `json:"response_format,omitempty"`
+	Tools               []map[string]any `json:"tools,omitempty"`
+	ToolChoice          any              `json:"tool_choice,omitempty"`
+	Logprobs            *bool            `json:"logprobs,omitempty"`
+	TopLogprobs         *int             `json:"top_logprobs,omitempty"`
+	ReasoningOptions    map[string]any   `json:"provider_options,omitempty"`
+	PresentFields       map[string]bool  `json:"-"`
 }
 
 type Message struct {
@@ -91,6 +92,21 @@ func (r ChatCompletionRequest) Validate() error {
 	}
 	if len(r.Messages) == 0 {
 		return errors.New("messages is required")
+	}
+	if r.HasField("max_tokens") && r.MaxTokens == nil {
+		return errors.New("max_tokens must be a positive integer")
+	}
+	if r.MaxTokens != nil && *r.MaxTokens <= 0 {
+		return errors.New("max_tokens must be a positive integer")
+	}
+	if r.HasField("max_completion_tokens") && r.MaxCompletionTokens == nil {
+		return errors.New("max_completion_tokens must be a positive integer")
+	}
+	if r.MaxCompletionTokens != nil && *r.MaxCompletionTokens <= 0 {
+		return errors.New("max_completion_tokens must be a positive integer")
+	}
+	if r.HasField("max_tokens") && r.HasField("max_completion_tokens") {
+		return errors.New("max_tokens and max_completion_tokens are mutually exclusive")
 	}
 	for i, msg := range r.Messages {
 		switch msg.Role {
@@ -419,20 +435,21 @@ func NormalizeStreamChunk(body []byte) (NormalizedStreamChunk, error) {
 
 func validateTopLevelKeys(raw map[string]json.RawMessage) error {
 	allowed := map[string]bool{
-		"model":            true,
-		"messages":         true,
-		"stream":           true,
-		"stream_options":   true,
-		"max_tokens":       true,
-		"temperature":      true,
-		"top_p":            true,
-		"stop":             true,
-		"response_format":  true,
-		"tools":            true,
-		"tool_choice":      true,
-		"logprobs":         true,
-		"top_logprobs":     true,
-		"provider_options": true,
+		"model":                 true,
+		"messages":              true,
+		"stream":                true,
+		"stream_options":        true,
+		"max_tokens":            true,
+		"max_completion_tokens": true,
+		"temperature":           true,
+		"top_p":                 true,
+		"stop":                  true,
+		"response_format":       true,
+		"tools":                 true,
+		"tool_choice":           true,
+		"logprobs":              true,
+		"top_logprobs":          true,
+		"provider_options":      true,
 	}
 	keys := make([]string, 0, len(raw))
 	for key := range raw {

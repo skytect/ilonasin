@@ -2521,6 +2521,12 @@ func newServeCheckUpstream() *serveCheckUpstream {
 				return
 			}
 		}
+		if model == "max-completion-limit" {
+			if err := validateServeCheckMaxCompletionTokens(r.URL.Path, body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
 		if body["stream"] == nil {
 			up.mu.Lock()
 			up.observed[r.URL.Path+" "+model] = true
@@ -2568,6 +2574,28 @@ func validateServeCheckProviderOptions(path string, body map[string]any) error {
 		}
 	default:
 		return fmt.Errorf("unexpected provider option path %s", path)
+	}
+	return nil
+}
+
+func validateServeCheckMaxCompletionTokens(path string, body map[string]any) error {
+	switch path {
+	case "/chat/completions":
+		if body["max_tokens"] != float64(2) {
+			return fmt.Errorf("missing DeepSeek max_tokens translation")
+		}
+		if _, ok := body["max_completion_tokens"]; ok {
+			return fmt.Errorf("unexpected DeepSeek max_completion_tokens")
+		}
+	case "/api/v1/chat/completions":
+		if body["max_completion_tokens"] != float64(2) {
+			return fmt.Errorf("missing OpenRouter max_completion_tokens")
+		}
+		if _, ok := body["max_tokens"]; ok {
+			return fmt.Errorf("unexpected OpenRouter max_tokens")
+		}
+	default:
+		return fmt.Errorf("unexpected token limit path %s", path)
 	}
 	return nil
 }
@@ -2912,6 +2940,12 @@ func (u *serveCheckUpstream) handleServeCheckStream(w http.ResponseWriter, r *ht
 	}
 	if model == "stream-provider-options" {
 		if err := validateServeCheckProviderOptions(r.URL.Path, body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	if model == "stream-max-completion-limit" {
+		if err := validateServeCheckMaxCompletionTokens(r.URL.Path, body); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -4013,6 +4047,11 @@ type providerOptionInvalidCase struct {
 	extra string
 }
 
+type tokenLimitInvalidCase struct {
+	name  string
+	extra string
+}
+
 const providerOptionPrivacyMarker = "provider-option-private-marker"
 
 func providerOptionsExtra(providerType string) string {
@@ -4043,6 +4082,22 @@ func providerOptionInvalidCases(providerType string) []providerOptionInvalidCase
 		{name: "bad-thinking", extra: `"provider_options":{"deepseek":{"thinking":true}}`},
 		{name: "bad-thinking-type", extra: `"provider_options":{"deepseek":{"thinking":{"type":"provider-option-private-marker"}}}`},
 		{name: "bad-effort", extra: `"provider_options":{"deepseek":{"reasoning_effort":"provider-option-private-marker"}}`},
+	}
+}
+
+func tokenLimitInvalidCases() []tokenLimitInvalidCase {
+	return []tokenLimitInvalidCase{
+		{name: "both", extra: `"max_tokens":1,"max_completion_tokens":2`},
+		{name: "max-limit-null", extra: `"max_tokens":null`},
+		{name: "max-limit-zero", extra: `"max_tokens":0`},
+		{name: "max-limit-negative", extra: `"max_tokens":-1`},
+		{name: "max-limit-float", extra: `"max_tokens":1.5`},
+		{name: "max-limit-string", extra: `"max_tokens":"1"`},
+		{name: "max-completion-null", extra: `"max_completion_tokens":null`},
+		{name: "max-completion-zero", extra: `"max_completion_tokens":0`},
+		{name: "max-completion-negative", extra: `"max_completion_tokens":-1`},
+		{name: "max-completion-float", extra: `"max_completion_tokens":1.5`},
+		{name: "max-completion-string", extra: `"max_completion_tokens":"1"`},
 	}
 }
 
@@ -4109,6 +4164,13 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 	if !fakeUpstream.sawExpected(expectedPath, "provider-options") {
 		return fmt.Errorf("provider_options did not reach upstream provider=%s", instance.ID)
 	}
+	maxCompletionBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"max_completion_tokens":2}`, instance.ID+"/max-completion-limit"))
+	if status, _, err := postJSON(base+"/v1/chat/completions", token, maxCompletionBody); err != nil || status != http.StatusOK {
+		return fmt.Errorf("max_completion_tokens provider=%s status=%d err=%v", instance.ID, status, err)
+	}
+	if !fakeUpstream.sawExpected(expectedPath, "max-completion-limit") {
+		return fmt.Errorf("max_completion_tokens did not reach upstream provider=%s", instance.ID)
+	}
 	for _, tc := range []struct {
 		name  string
 		extra string
@@ -4128,6 +4190,13 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 		upstreamModel := "invalid-options-" + tc.name
 		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
 		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" provider_options "+tc.name); err != nil {
+			return err
+		}
+	}
+	for _, tc := range tokenLimitInvalidCases() {
+		upstreamModel := "invalid-limit-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" token_limit "+tc.name); err != nil {
 			return err
 		}
 	}
@@ -4219,6 +4288,13 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 	if !fakeUpstream.sawExpectedStream(expectedPath, "stream-provider-options") {
 		return fmt.Errorf("stream provider_options did not reach upstream provider=%s", instance.ID)
 	}
+	maxCompletionBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},"max_completion_tokens":2}`, instance.ID+"/stream-max-completion-limit"))
+	if status, _, _, _, err := postStream(base+"/v1/chat/completions", token, maxCompletionBody); err != nil || status != http.StatusOK {
+		return fmt.Errorf("stream max_completion_tokens provider=%s status=%d err=%v", instance.ID, status, err)
+	}
+	if !fakeUpstream.sawExpectedStream(expectedPath, "stream-max-completion-limit") {
+		return fmt.Errorf("stream max_completion_tokens did not reach upstream provider=%s", instance.ID)
+	}
 	if status, err := postStatus(base+"/v1/chat/completions", token, []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream_options":{"include_usage":true}}`, model))); err != nil || status != http.StatusBadRequest {
 		return fmt.Errorf("stream_options without stream provider=%s status=%d err=%v", instance.ID, status, err)
 	}
@@ -4257,6 +4333,13 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 		upstreamModel := "stream-invalid-options-" + tc.name
 		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/"+upstreamModel, tc.extra))
 		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" stream provider_options "+tc.name); err != nil {
+			return err
+		}
+	}
+	for _, tc := range tokenLimitInvalidCases() {
+		upstreamModel := "stream-invalid-limit-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" stream token_limit "+tc.name); err != nil {
 			return err
 		}
 	}
@@ -4580,6 +4663,23 @@ func exerciseCodexNoEligibleCacheCheck(ctx context.Context, registry provider.Re
 	unsupportedBody := []byte(`{"model":"codex/codex-noeligible-tools","messages":[{"role":"user","content":"check"}],"tools":[]}`)
 	if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, unsupportedBody, fakeUpstream, "/responses", "codex-noeligible-tools", "codex noeligible tools"); err != nil {
 		return err
+	}
+	for _, tc := range []struct {
+		name  string
+		extra string
+	}{
+		{name: "bad-max-tokens", extra: `"max_tokens":0`},
+		{name: "null-max-tokens", extra: `"max_tokens":null`},
+		{name: "bad-max-completion", extra: `"max_completion_tokens":0`},
+		{name: "null-max-completion", extra: `"max_completion_tokens":null`},
+		{name: "both-token-limits", extra: `"max_tokens":1,"max_completion_tokens":2`},
+		{name: "codex-max-completion", extra: `"max_completion_tokens":2`},
+	} {
+		upstreamModel := "codex-noeligible-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, "codex/"+upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, body, fakeUpstream, "/responses", upstreamModel, "codex noeligible "+tc.name); err != nil {
+			return err
+		}
 	}
 	status, respBody, err := getJSON(testServer.URL+"/v1/models", created.Token)
 	if err != nil || status != http.StatusBadGateway {

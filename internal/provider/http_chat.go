@@ -108,7 +108,7 @@ func (a HTTPChatAdapter) ValidateChatRequest(instance Instance, req openai.ChatC
 		}
 		return validateProviderOptions(instance.Type, req)
 	case "codex":
-		if err := rejectPresentFields(req, append(commonUnsupported, "provider_options", "max_tokens", "temperature", "top_p", "stop", "response_format")...); err != nil {
+		if err := rejectPresentFields(req, append(commonUnsupported, "provider_options", "max_tokens", "max_completion_tokens", "temperature", "top_p", "stop", "response_format")...); err != nil {
 			return err
 		}
 		return nil
@@ -279,30 +279,42 @@ func marshalChatCompletionsRequest(providerType string, req openai.ChatCompletio
 	if err != nil {
 		return nil, err
 	}
-	if !req.HasField("provider_options") {
+	if !req.HasField("provider_options") && req.MaxCompletionTokens == nil {
 		return body, nil
-	}
-	if err := validateProviderOptions(providerType, req); err != nil {
-		return nil, err
 	}
 	var out map[string]any
 	if err := json.Unmarshal(body, &out); err != nil {
 		return nil, err
 	}
-	switch providerType {
-	case "deepseek":
-		opts := req.ReasoningOptions["deepseek"].(map[string]any)
-		if thinking, ok := opts["thinking"]; ok {
-			out["thinking"] = thinking
+	if req.MaxCompletionTokens != nil {
+		switch providerType {
+		case "deepseek":
+			out["max_tokens"] = *req.MaxCompletionTokens
+		case "openrouter":
+			out["max_completion_tokens"] = *req.MaxCompletionTokens
+		default:
+			return nil, fmt.Errorf("max_completion_tokens is not supported for %s", providerType)
 		}
-		if effort, ok := opts["reasoning_effort"]; ok {
-			out["reasoning_effort"] = effort
+	}
+	if req.HasField("provider_options") {
+		if err := validateProviderOptions(providerType, req); err != nil {
+			return nil, err
 		}
-	case "openrouter":
-		opts := req.ReasoningOptions["openrouter"].(map[string]any)
-		out["reasoning"] = opts["reasoning"]
-	default:
-		return nil, fmt.Errorf("provider_options is not supported for %s", providerType)
+		switch providerType {
+		case "deepseek":
+			opts := req.ReasoningOptions["deepseek"].(map[string]any)
+			if thinking, ok := opts["thinking"]; ok {
+				out["thinking"] = thinking
+			}
+			if effort, ok := opts["reasoning_effort"]; ok {
+				out["reasoning_effort"] = effort
+			}
+		case "openrouter":
+			opts := req.ReasoningOptions["openrouter"].(map[string]any)
+			out["reasoning"] = opts["reasoning"]
+		default:
+			return nil, fmt.Errorf("provider_options is not supported for %s", providerType)
+		}
 	}
 	return json.Marshal(out)
 }

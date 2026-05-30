@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -17,6 +19,7 @@ import (
 )
 
 const MaxUpstreamChatBodyBytes int64 = 16 << 20
+const MaxUpstreamModelsBodyBytes int64 = 16 << 20
 const DefaultMaxStreamLineBytes = 1 << 20
 const DefaultMaxStreamEventBytes = 1 << 20
 const DefaultMaxStreamEvents = 1_000_000
@@ -30,6 +33,45 @@ type HTTPChatAdapter struct {
 	MaxStreamLineBytes  int
 	MaxStreamEventBytes int
 	MaxStreamEvents     int
+	ModelTimeout        time.Duration
+}
+
+func (a HTTPChatAdapter) ListModels(ctx context.Context, req ModelRequest) (ModelResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, a.modelTimeout())
+	defer cancel()
+	endpoint, err := modelsURL(req.Instance.BaseURL)
+	if err != nil {
+		return ModelResult{ErrorClass: "provider_config_error"}, err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return ModelResult{ErrorClass: "upstream_request_error"}, err
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+req.Credential.APIKey)
+	httpReq.Header.Set("Accept", "application/json")
+	resp, err := a.Client.Do(httpReq)
+	if err != nil {
+		return ModelResult{ErrorClass: classifyTransportError(err)}, err
+	}
+	defer resp.Body.Close()
+	limited := http.MaxBytesReader(nil, resp.Body, MaxUpstreamModelsBodyBytes)
+	body, readErr := io.ReadAll(limited)
+	if readErr != nil {
+		errorClass := "upstream_network_error"
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(readErr, &maxBytesErr) {
+			errorClass = "upstream_body_too_large"
+		}
+		return ModelResult{ErrorClass: errorClass}, readErr
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return ModelResult{ErrorClass: "upstream_http_error"}, fmt.Errorf("upstream models status %d", resp.StatusCode)
+	}
+	models, err := normalizeModels(req.Instance, body)
+	if err != nil {
+		return ModelResult{ErrorClass: "upstream_invalid_response"}, err
+	}
+	return ModelResult{Models: models}, nil
 }
 
 func NewHTTPChatAdapter(client *http.Client) HTTPChatAdapter {
@@ -177,14 +219,146 @@ func (a HTTPChatAdapter) StreamChat(ctx context.Context, req ChatRequest, sink C
 }
 
 func chatCompletionsURL(base string) (string, error) {
+	return joinBasePath(base, "/chat/completions")
+}
+
+func modelsURL(base string) (string, error) {
+	return joinBasePath(base, "/models")
+}
+
+func joinBasePath(base, suffix string) (string, error) {
 	u, err := url.Parse(base)
 	if err != nil {
 		return "", err
 	}
-	u.Path = strings.TrimRight(u.Path, "/") + "/chat/completions"
+	u.Path = strings.TrimRight(u.Path, "/") + suffix
 	u.RawQuery = ""
 	u.Fragment = ""
 	return u.String(), nil
+}
+
+func normalizeModels(instance Instance, body []byte) ([]ModelMetadata, error) {
+	var resp struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := jsonUnmarshal(body, &resp); err != nil {
+		return nil, err
+	}
+	if resp.Data == nil {
+		return nil, errors.New("upstream models data is missing")
+	}
+	now := time.Now().UTC()
+	models := make([]ModelMetadata, 0, len(resp.Data))
+	seen := map[string]bool{}
+	for _, item := range resp.Data {
+		id, _ := item["id"].(string)
+		if !validProviderModelID(id) {
+			continue
+		}
+		if seen[id] {
+			return nil, fmt.Errorf("upstream models contains duplicate id")
+		}
+		seen[id] = true
+		meta := ModelMetadata{
+			ProviderInstanceID: instance.ID,
+			ModelID:            id,
+			UpdatedAt:          now,
+		}
+		switch instance.Type {
+		case "openrouter":
+			if name, ok := item["name"].(string); ok {
+				meta.DisplayName = safeDisplayName(name)
+			}
+			meta.ContextLength = safeInt(item["context_length"])
+			meta.CapabilityFlags = openRouterCapabilityFlags(item)
+		case "deepseek":
+			meta.CapabilityFlags = "chat,json_object,reasoning,stream,tools"
+		}
+		models = append(models, meta)
+	}
+	if len(models) == 0 {
+		return nil, errors.New("upstream models list is empty")
+	}
+	sort.Slice(models, func(i, j int) bool {
+		return models[i].ModelID < models[j].ModelID
+	})
+	return models, nil
+}
+
+func jsonUnmarshal(body []byte, v any) error {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	if err := dec.Decode(v); err != nil {
+		return err
+	}
+	var extra struct{}
+	if err := dec.Decode(&extra); err != io.EOF {
+		return errors.New("upstream response contains trailing data")
+	}
+	return nil
+}
+
+func validProviderModelID(id string) bool {
+	if id == "" {
+		return false
+	}
+	for _, r := range id {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+func safeDisplayName(name string) string {
+	if len(name) > 256 {
+		return name[:256]
+	}
+	return name
+}
+
+func safeInt(value any) int {
+	switch v := value.(type) {
+	case json.Number:
+		i, err := v.Int64()
+		if err == nil && i > 0 && i <= int64(^uint(0)>>1) {
+			return int(i)
+		}
+	case float64:
+		if v > 0 && v == float64(int(v)) {
+			return int(v)
+		}
+	}
+	return 0
+}
+
+func openRouterCapabilityFlags(item map[string]any) string {
+	flags := map[string]bool{"chat": true}
+	params, _ := item["supported_parameters"].([]any)
+	for _, raw := range params {
+		param, ok := raw.(string)
+		if !ok {
+			continue
+		}
+		switch param {
+		case "tools", "tool_choice":
+			flags["tools"] = true
+		case "response_format":
+			flags["json_object"] = true
+		case "logprobs", "top_logprobs":
+			flags["logprobs"] = true
+		case "reasoning":
+			flags["reasoning"] = true
+		case "stream":
+			flags["stream"] = true
+		}
+	}
+	out := make([]string, 0, len(flags))
+	for flag := range flags {
+		out = append(out, flag)
+	}
+	sort.Strings(out)
+	return strings.Join(out, ",")
 }
 
 func classifyTransportError(err error) string {
@@ -244,6 +418,13 @@ func (a HTTPChatAdapter) maxStreamEvents() int {
 		return a.MaxStreamEvents
 	}
 	return DefaultMaxStreamEvents
+}
+
+func (a HTTPChatAdapter) modelTimeout() time.Duration {
+	if a.ModelTimeout > 0 {
+		return a.ModelTimeout
+	}
+	return 30 * time.Second
 }
 
 func (a HTTPChatAdapter) doStreamRequest(ctx context.Context, cancel context.CancelFunc, req *http.Request) (*http.Response, error) {

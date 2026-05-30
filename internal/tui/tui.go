@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -21,9 +22,11 @@ type Model struct {
 	registry       provider.Registry
 	tokens         credentials.LocalTokenManager
 	upstreams      credentials.UpstreamCredentialManager
+	modelCache     ModelCacheReader
 	tokenRows      []credentials.LocalTokenMetadata
 	providers      []provider.Instance
 	credentials    []credentials.UpstreamCredentialMetadata
+	modelRows      []provider.ModelMetadata
 	selected       int
 	reveal         string
 	revealTokenID  int64
@@ -35,12 +38,16 @@ type Model struct {
 	checkMode      bool
 }
 
-func NewModel(cfg config.Config, registry provider.Registry, tokens credentials.LocalTokenManager, upstreams credentials.UpstreamCredentialManager) Model {
-	return Model{cfg: cfg, registry: registry, tokens: tokens, upstreams: upstreams}
+type ModelCacheReader interface {
+	ListModelCache(ctx context.Context) ([]provider.ModelMetadata, error)
 }
 
-func newCheckModel(cfg config.Config, registry provider.Registry, tokens credentials.LocalTokenManager, upstreams credentials.UpstreamCredentialManager) Model {
-	return Model{cfg: cfg, registry: registry, tokens: tokens, upstreams: upstreams, quitOnInit: true, checkMode: true}
+func NewModel(cfg config.Config, registry provider.Registry, tokens credentials.LocalTokenManager, upstreams credentials.UpstreamCredentialManager, modelCache ModelCacheReader) Model {
+	return Model{cfg: cfg, registry: registry, tokens: tokens, upstreams: upstreams, modelCache: modelCache}
+}
+
+func newCheckModel(cfg config.Config, registry provider.Registry, tokens credentials.LocalTokenManager, upstreams credentials.UpstreamCredentialManager, modelCache ModelCacheReader) Model {
+	return Model{cfg: cfg, registry: registry, tokens: tokens, upstreams: upstreams, modelCache: modelCache, quitOnInit: true, checkMode: true}
 }
 
 func (m Model) Init() tea.Cmd {
@@ -167,19 +174,27 @@ func (m Model) View() string {
 		}
 		fmt.Fprintf(&b, "- %d %s %s %s...%s %s\n", cred.ID, cred.ProviderInstanceID, cred.Label, cred.SecretPrefix, cred.SecretLast4, state)
 	}
+	b.WriteString("\nModel cache\n")
+	summaries := modelCacheSummaries(m.modelRows)
+	if len(summaries) == 0 {
+		b.WriteString("No cached models.\n")
+	}
+	for _, summary := range summaries {
+		fmt.Fprintf(&b, "- %s %d models updated %s\n", summary.ProviderInstanceID, summary.Count, summary.UpdatedAt)
+	}
 	b.WriteString("\nPress n to create local token, a to add API key, d to disable local token, x to disable API key, q to quit.\n")
 	return b.String()
 }
 
-func Run(cfg config.Config, registry provider.Registry, tokens credentials.LocalTokenManager, upstreams credentials.UpstreamCredentialManager) error {
-	model := NewModel(cfg, registry, tokens, upstreams)
+func Run(cfg config.Config, registry provider.Registry, tokens credentials.LocalTokenManager, upstreams credentials.UpstreamCredentialManager, modelCache ModelCacheReader) error {
+	model := NewModel(cfg, registry, tokens, upstreams, modelCache)
 	_ = model.reload()
 	_, err := tea.NewProgram(model).Run()
 	return err
 }
 
-func Check(cfg config.Config, registry provider.Registry, tokens credentials.LocalTokenManager, upstreams credentials.UpstreamCredentialManager, out io.Writer) error {
-	model := newCheckModel(cfg, registry, tokens, upstreams)
+func Check(cfg config.Config, registry provider.Registry, tokens credentials.LocalTokenManager, upstreams credentials.UpstreamCredentialManager, modelCache ModelCacheReader, out io.Writer) error {
+	model := newCheckModel(cfg, registry, tokens, upstreams, modelCache)
 	_ = model.reload()
 	program := tea.NewProgram(model, tea.WithoutRenderer(), tea.WithInput(nil), tea.WithOutput(io.Discard))
 	if _, err := program.Run(); err != nil {
@@ -190,7 +205,7 @@ func Check(cfg config.Config, registry provider.Registry, tokens credentials.Loc
 }
 
 func ExerciseTokenLifecycle(ctx context.Context, tokens credentials.LocalTokenManager) error {
-	model := NewModel(config.Config{}, provider.Registry{}, tokens, nil)
+	model := NewModel(config.Config{}, provider.Registry{}, tokens, nil, nil)
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
 	m := updated.(Model)
 	if m.reveal == "" || m.revealTokenID == 0 {
@@ -230,7 +245,7 @@ func ExerciseUpstreamCredentialLifecycle(ctx context.Context, cfg config.Config,
 	if !ok {
 		return nil
 	}
-	model := newCheckModel(cfg, registry, nil, upstreams)
+	model := newCheckModel(cfg, registry, nil, upstreams, nil)
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
 	m := updated.(Model)
 	_ = m.reload()
@@ -256,6 +271,21 @@ func ExerciseUpstreamCredentialLifecycle(ctx context.Context, cfg config.Config,
 	return fmt.Errorf("check upstream credential missing")
 }
 
+func ExerciseModelCacheSummary(ctx context.Context, cfg config.Config, registry provider.Registry, cache ModelCacheReader) error {
+	model := newCheckModel(cfg, registry, nil, nil, cache)
+	_ = model.reload()
+	view := model.View()
+	if !strings.Contains(view, "Model cache") || !strings.Contains(view, "deepseek 1 models") || !strings.Contains(view, "2026-05-30T12:00:00Z") {
+		return fmt.Errorf("model cache summary missing")
+	}
+	for _, forbidden := range []string{"raw description marker", "pricing", "secret"} {
+		if strings.Contains(view, forbidden) {
+			return fmt.Errorf("model cache summary leaked %s", forbidden)
+		}
+	}
+	return nil
+}
+
 func (m *Model) reload() error {
 	if m.tokens == nil {
 		m.tokenRows = nil
@@ -276,6 +306,14 @@ func (m *Model) reload() error {
 		}
 		m.credentials = rows
 	}
+	if m.modelCache != nil {
+		rows, err := m.modelCache.ListModelCache(context.Background())
+		if err != nil {
+			m.err = err.Error()
+			return err
+		}
+		m.modelRows = rows
+	}
 	if m.selected >= len(m.tokenRows) {
 		m.selected = len(m.tokenRows) - 1
 	}
@@ -283,6 +321,34 @@ func (m *Model) reload() error {
 		m.selected = 0
 	}
 	return nil
+}
+
+type modelCacheSummary struct {
+	ProviderInstanceID string
+	Count              int
+	UpdatedAt          string
+}
+
+func modelCacheSummaries(rows []provider.ModelMetadata) []modelCacheSummary {
+	byProvider := map[string]modelCacheSummary{}
+	for _, row := range rows {
+		summary := byProvider[row.ProviderInstanceID]
+		summary.ProviderInstanceID = row.ProviderInstanceID
+		summary.Count++
+		updated := row.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z")
+		if updated > summary.UpdatedAt {
+			summary.UpdatedAt = updated
+		}
+		byProvider[row.ProviderInstanceID] = summary
+	}
+	out := make([]modelCacheSummary, 0, len(byProvider))
+	for _, summary := range byProvider {
+		out = append(out, summary)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].ProviderInstanceID < out[j].ProviderInstanceID
+	})
+	return out
 }
 
 func (m *Model) clearReveal() {

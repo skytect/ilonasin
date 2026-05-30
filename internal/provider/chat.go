@@ -16,11 +16,38 @@ type ChatAdapters interface {
 	ForProvider(providerType string) (ChatAdapter, bool)
 }
 
+type ModelDiscoverer interface {
+	ListModels(ctx context.Context, req ModelRequest) (ModelResult, error)
+}
+
+type ModelDiscoverers interface {
+	ForProvider(providerType string) (ModelDiscoverer, bool)
+}
+
 type ChatRequest struct {
 	Instance      Instance
 	UpstreamModel string
 	Request       openai.ChatCompletionRequest
 	Credential    APIKeyCredential
+}
+
+type ModelRequest struct {
+	Instance   Instance
+	Credential APIKeyCredential
+}
+
+type ModelResult struct {
+	Models     []ModelMetadata
+	ErrorClass string
+}
+
+type ModelMetadata struct {
+	ProviderInstanceID string
+	ModelID            string
+	DisplayName        string
+	CapabilityFlags    string
+	ContextLength      int
+	UpdatedAt          time.Time
 }
 
 type APIKeyCredential struct {
@@ -69,4 +96,11 @@ type StaticChatAdapters map[string]ChatAdapter
 func (a StaticChatAdapters) ForProvider(providerType string) (ChatAdapter, bool) {
 	adapter, ok := a[providerType]
 	return adapter, ok
+}
+
+type StaticModelDiscoverers map[string]ModelDiscoverer
+
+func (d StaticModelDiscoverers) ForProvider(providerType string) (ModelDiscoverer, bool) {
+	discoverer, ok := d[providerType]
+	return discoverer, ok
 }

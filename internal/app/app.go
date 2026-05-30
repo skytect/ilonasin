@@ -51,7 +51,7 @@ func Serve(opts Options) error {
 	upstreams := credentials.UpstreamService{Registry: rt.Registry, Repo: rt.Store}
 	srv := &http.Server{
 		Addr:              rt.Config.Server.Bind,
-		Handler:           server.New(rt.Registry, auth, upstreams, chatAdapters(nil), rt.Store).Handler(),
+		Handler:           server.New(rt.Registry, auth, upstreams, chatAdapters(nil), modelDiscoverers(nil), rt.Store, rt.Store).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	fmt.Fprintf(opts.Stdout, "ilonasin serving on %s\n", rt.Config.Server.Bind)
@@ -108,7 +108,7 @@ func ServeCheck(opts Options) error {
 	fakeUpstream := newServeCheckUpstream()
 	defer fakeUpstream.server.Close()
 	checkRegistry := baseURLOverrideRegistry{Registry: rt.Registry, baseURL: fakeUpstream.server.URL}
-	handler := server.New(checkRegistry, tokenService, upstreamService, chatAdapters(fakeUpstream.server.Client()), checkStore).Handler()
+	handler := server.New(checkRegistry, tokenService, upstreamService, chatAdapters(fakeUpstream.server.Client()), modelDiscoverers(fakeUpstream.server.Client()), checkStore, checkStore).Handler()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return err
@@ -150,6 +150,11 @@ func ServeCheck(opts Options) error {
 		}
 	}
 	if len(instances) > 0 {
+		if err := exerciseModelDiscoveryCheck(context.Background(), base, created2.Token, instances, fakeUpstream, checkStore, upstreamService); err != nil {
+			return err
+		}
+	}
+	if len(instances) > 0 {
 		if err := assertHomeCredentialCountsZero(context.Background(), rt.Store); err != nil {
 			return err
 		}
@@ -173,7 +178,7 @@ func Manage(opts Options) error {
 		return err
 	}
 	defer rt.Store.Close()
-	return tui.Run(rt.Config, rt.Registry, credentials.Service{Repo: rt.Store}, credentials.UpstreamService{Registry: rt.Registry, Repo: rt.Store})
+	return tui.Run(rt.Config, rt.Registry, credentials.Service{Repo: rt.Store}, credentials.UpstreamService{Registry: rt.Registry, Repo: rt.Store}, rt.Store)
 }
 
 func ManageCheck(opts Options) error {
@@ -189,9 +194,12 @@ func ManageCheck(opts Options) error {
 	if err := exerciseUpstreamCredentialCheck(context.Background(), rt.Registry, rt.Config, opts); err != nil {
 		return err
 	}
+	if err := exerciseModelCacheCheck(context.Background(), rt.Registry, rt.Config); err != nil {
+		return err
+	}
 	var buf bytes.Buffer
 	tokenService := credentials.Service{Repo: rt.Store}
-	if err := tui.Check(rt.Config, rt.Registry, tokenService, credentials.UpstreamService{Registry: rt.Registry, Repo: rt.Store}, &buf); err != nil {
+	if err := tui.Check(rt.Config, rt.Registry, tokenService, credentials.UpstreamService{Registry: rt.Registry, Repo: rt.Store}, rt.Store, &buf); err != nil {
 		return err
 	}
 	if opts.Stdout != nil {
@@ -285,6 +293,31 @@ func exerciseLocalTokenCheck(ctx context.Context) error {
 	return tui.ExerciseTokenLifecycle(ctx, credentials.Service{Repo: store})
 }
 
+func exerciseModelCacheCheck(ctx context.Context, registry provider.Registry, cfg config.Config) error {
+	checkDBDir, err := os.MkdirTemp("", "ilonasin-manage-check-models-db-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(checkDBDir)
+	store, err := sqlite.Open(ctx, filepath.Join(checkDBDir, "ilonasin.sqlite"))
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	now := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
+	if err := store.ReplaceModelCache(ctx, "deepseek", []provider.ModelMetadata{{
+		ProviderInstanceID: "deepseek",
+		ModelID:            "deepseek-v4-pro",
+		DisplayName:        "DeepSeek V4 Pro",
+		CapabilityFlags:    "chat,json_object,reasoning,stream,tools",
+		ContextLength:      1000000,
+		UpdatedAt:          now,
+	}}); err != nil {
+		return err
+	}
+	return tui.ExerciseModelCacheSummary(ctx, cfg, registry, store)
+}
+
 func firstAPIKeyProvider(registry provider.Registry) (provider.Instance, bool) {
 	instances := apiKeyProviders(registry)
 	if len(instances) == 0 {
@@ -318,6 +351,17 @@ func chatAdapters(client *http.Client) provider.StaticChatAdapters {
 	}
 }
 
+func modelDiscoverers(client *http.Client) provider.StaticModelDiscoverers {
+	adapter := provider.NewHTTPChatAdapter(client)
+	if client != nil {
+		adapter.ModelTimeout = 20 * time.Millisecond
+	}
+	return provider.StaticModelDiscoverers{
+		"deepseek":   adapter,
+		"openrouter": adapter,
+	}
+}
+
 type baseURLOverrideRegistry struct {
 	provider.Registry
 	baseURL string
@@ -325,6 +369,18 @@ type baseURLOverrideRegistry struct {
 
 func (r baseURLOverrideRegistry) Get(id string) (provider.Instance, bool) {
 	instance, ok := r.Registry.Get(id)
+	return r.override(instance, ok)
+}
+
+func (r baseURLOverrideRegistry) List() []provider.Instance {
+	instances := r.Registry.List()
+	for i, instance := range instances {
+		instances[i], _ = r.override(instance, true)
+	}
+	return instances
+}
+
+func (r baseURLOverrideRegistry) override(instance provider.Instance, ok bool) (provider.Instance, bool) {
 	if ok && r.baseURL != "" {
 		instance.BaseURL = r.baseURL
 		if instance.Type == "openrouter" {
@@ -343,6 +399,10 @@ type serveCheckUpstream struct {
 func newServeCheckUpstream() *serveCheckUpstream {
 	up := &serveCheckUpstream{observed: map[string]bool{}}
 	up.server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && (r.URL.Path == "/models" || r.URL.Path == "/api/v1/models") {
+			up.handleServeCheckModels(w, r)
+			return
+		}
 		if (r.URL.Path != "/chat/completions" && r.URL.Path != "/api/v1/chat/completions") || r.Method != http.MethodPost {
 			http.NotFound(w, r)
 			return
@@ -389,6 +449,70 @@ func newServeCheckUpstream() *serveCheckUpstream {
 		_, _ = w.Write([]byte(`{"id":"chatcmpl_check","object":"chat.completion","created":1,"model":"deepseek-v4-pro","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"completion_tokens_details":{"reasoning_tokens":0}}}`))
 	}))
 	return up
+}
+
+func (u *serveCheckUpstream) handleServeCheckModels(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Authorization") != "Bearer sk-serve-check-adapter" {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	u.mu.Lock()
+	fail := u.observed["models-fail"]
+	tooLarge := u.observed["models-too-large"]
+	malformed := u.observed["models-malformed"]
+	trailing := u.observed["models-trailing"]
+	duplicate := u.observed["models-duplicate"]
+	timeout := u.observed["models-timeout"]
+	u.observed[r.URL.Path+" models"] = true
+	u.mu.Unlock()
+	if timeout {
+		time.Sleep(200 * time.Millisecond)
+		return
+	}
+	if fail {
+		http.Error(w, "raw model failure body", http.StatusServiceUnavailable)
+		return
+	}
+	if tooLarge {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(strings.Repeat("x", int(provider.MaxUpstreamModelsBodyBytes)+1)))
+		return
+	}
+	if malformed {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[]}`))
+		return
+	}
+	if trailing {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"trailing-model"}]} raw trailing payload`))
+		return
+	}
+	if duplicate {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"dup-model"},{"id":"dup-model"}]}`))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if r.URL.Path == "/api/v1/models" {
+		_, _ = w.Write([]byte(`{"data":[{"id":"deepseek/deepseek-v4-pro","name":"DeepSeek V4 Pro","description":"raw description marker","pricing":{"prompt":"secret"},"context_length":1000000,"supported_parameters":["tools","response_format","reasoning","logprobs"]},{"id":"","name":"bad"}]}`))
+		return
+	}
+	_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"deepseek-v4-pro","object":"model","owned_by":"deepseek"},{"id":"","object":"model"}]}`))
+}
+
+func (u *serveCheckUpstream) setModelsMode(mode string) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	delete(u.observed, "models-fail")
+	delete(u.observed, "models-too-large")
+	delete(u.observed, "models-malformed")
+	delete(u.observed, "models-trailing")
+	delete(u.observed, "models-duplicate")
+	delete(u.observed, "models-timeout")
+	if mode != "" {
+		u.observed[mode] = true
+	}
 }
 
 func (u *serveCheckUpstream) handleServeCheckStream(w http.ResponseWriter, r *http.Request, body map[string]any, model string) {
@@ -481,6 +605,12 @@ func (u *serveCheckUpstream) sawExpectedStream(path, model string) bool {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	return u.observed[path+" stream "+model]
+}
+
+func (u *serveCheckUpstream) sawExpectedModels(path string) bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.observed[path+" models"]
 }
 
 func looksLikeChatCompletion(body []byte) bool {
@@ -664,6 +794,95 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 	return nil
 }
 
+func exerciseModelDiscoveryCheck(ctx context.Context, base, token string, instances []provider.Instance, fakeUpstream *serveCheckUpstream, store *sqlite.Store, upstreams credentials.UpstreamCredentialManager) error {
+	status, respBody, err := getJSON(base+"/v1/models", token)
+	if err != nil || status != http.StatusOK {
+		return fmt.Errorf("model discovery status=%d err=%v deepseek_seen=%t openrouter_seen=%t body_len=%d", status, err, fakeUpstream.sawExpectedModels("/models"), fakeUpstream.sawExpectedModels("/api/v1/models"), len(respBody))
+	}
+	models, err := decodeModelList(respBody)
+	if err != nil {
+		return err
+	}
+	if !hasLocalModel(models, "deepseek/deepseek-v4-pro", "deepseek") {
+		return fmt.Errorf("model discovery missing deepseek model")
+	}
+	if !hasLocalModel(models, "openrouter/deepseek/deepseek-v4-pro", "openrouter") {
+		return fmt.Errorf("model discovery missing openrouter model")
+	}
+	for _, row := range models {
+		if len(row) != 3 {
+			return fmt.Errorf("model response exposed non-OpenAI fields")
+		}
+	}
+	if fakeUpstream.sawExpectedModels("/models") == false || fakeUpstream.sawExpectedModels("/api/v1/models") == false {
+		return fmt.Errorf("model discovery did not call expected upstream model paths")
+	}
+	if err := assertModelCacheRows(ctx, store); err != nil {
+		return err
+	}
+	if bytes.Contains(respBody, []byte("raw description marker")) || bytes.Contains(respBody, []byte("pricing")) {
+		return fmt.Errorf("model discovery leaked raw provider metadata")
+	}
+	fakeUpstream.setModelsMode("models-fail")
+	status, respBody, err = getJSON(base+"/v1/models", token)
+	if err != nil || status != http.StatusOK {
+		return fmt.Errorf("model cache fallback status=%d err=%v", status, err)
+	}
+	if !hasLocalModelFromBody(respBody, "deepseek/deepseek-v4-pro") || bytes.Contains(respBody, []byte("raw model failure body")) {
+		return fmt.Errorf("model cache fallback failed or leaked raw body")
+	}
+	before, err := modelCacheSnapshot(ctx, store)
+	if err != nil {
+		return err
+	}
+	for _, mode := range []string{"models-malformed", "models-too-large", "models-trailing", "models-duplicate", "models-timeout"} {
+		fakeUpstream.setModelsMode(mode)
+		started := time.Now()
+		_, _, _ = getJSON(base+"/v1/models", token)
+		if mode == "models-timeout" && time.Since(started) > 150*time.Millisecond {
+			return fmt.Errorf("models-timeout did not hit adapter timeout")
+		}
+		after, err := modelCacheSnapshot(ctx, store)
+		if err != nil {
+			return err
+		}
+		if after != before {
+			return fmt.Errorf("%s refresh changed model cache", mode)
+		}
+	}
+	fakeUpstream.setModelsMode("")
+	if len(instances) > 0 {
+		creds, err := upstreams.List(ctx)
+		if err != nil {
+			return err
+		}
+		for _, cred := range creds {
+			if cred.ProviderInstanceID == instances[0].ID && !cred.Disabled {
+				if err := upstreams.Disable(ctx, cred.ID); err != nil {
+					return err
+				}
+			}
+		}
+		status, respBody, err = getJSON(base+"/v1/models", token)
+		if err != nil || status != http.StatusOK {
+			return fmt.Errorf("model no-credential status=%d err=%v", status, err)
+		}
+		if hasLocalModelFromBody(respBody, instances[0].ID+"/") {
+			return fmt.Errorf("provider without credential contributed cached models")
+		}
+	}
+	if _, err := store.DB.ExecContext(ctx, `DELETE FROM model_cache`); err != nil {
+		return err
+	}
+	fakeUpstream.setModelsMode("models-fail")
+	status, respBody, err = getJSON(base+"/v1/models", token)
+	if err != nil || status != http.StatusBadGateway || bytes.Contains(respBody, []byte("raw model failure body")) {
+		return fmt.Errorf("model all-fail status=%d err=%v body_len=%d", status, err, len(respBody))
+	}
+	fakeUpstream.setModelsMode("")
+	return nil
+}
+
 func assertHomeCredentialCountsZero(ctx context.Context, store *sqlite.Store) error {
 	for _, table := range []string{"client_tokens", "provider_credentials", "credential_secrets"} {
 		var count int
@@ -695,6 +914,79 @@ func assertRecordedCredentialID(ctx context.Context, store *sqlite.Store) error 
 		return fmt.Errorf("chat adapter metadata did not record credential and usage")
 	}
 	return nil
+}
+
+func assertModelCacheRows(ctx context.Context, store *sqlite.Store) error {
+	rows, err := store.ListModelCache(ctx)
+	if err != nil {
+		return err
+	}
+	if len(rows) < 2 {
+		return fmt.Errorf("model cache stored %d rows", len(rows))
+	}
+	for _, row := range rows {
+		if row.ModelID == "deepseek/deepseek-v4-pro" {
+			if row.DisplayName != "DeepSeek V4 Pro" || row.ContextLength != 1000000 || row.CapabilityFlags != "chat,json_object,logprobs,reasoning,tools" {
+				return fmt.Errorf("openrouter model cache metadata missing")
+			}
+			if strings.Contains(row.DisplayName, "raw description marker") || strings.Contains(row.CapabilityFlags, "pricing") {
+				return fmt.Errorf("model cache leaked raw provider metadata")
+			}
+		}
+	}
+	return nil
+}
+
+func modelCacheSnapshot(ctx context.Context, store *sqlite.Store) (string, error) {
+	rows, err := store.ListModelCache(ctx)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	for _, row := range rows {
+		fmt.Fprintf(&b, "%s|%s|%s|%s|%d\n", row.ProviderInstanceID, row.ModelID, row.DisplayName, row.CapabilityFlags, row.ContextLength)
+	}
+	return b.String(), nil
+}
+
+func decodeModelList(body []byte) ([]map[string]any, error) {
+	var resp struct {
+		Object string           `json:"object"`
+		Data   []map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, err
+	}
+	if resp.Object != "list" {
+		return nil, fmt.Errorf("model list object=%q", resp.Object)
+	}
+	return resp.Data, nil
+}
+
+func hasLocalModelFromBody(body []byte, id string) bool {
+	models, err := decodeModelList(body)
+	if err != nil {
+		return false
+	}
+	for _, row := range models {
+		rowID, _ := row["id"].(string)
+		if rowID == id || strings.HasPrefix(rowID, id) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasLocalModel(models []map[string]any, id, ownedBy string) bool {
+	for _, row := range models {
+		rowID, _ := row["id"].(string)
+		object, _ := row["object"].(string)
+		owner, _ := row["owned_by"].(string)
+		if rowID == id && object == "model" && owner == ownedBy {
+			return true
+		}
+	}
+	return false
 }
 
 func hasStreamErrorEnvelope(body []byte) bool {
@@ -782,6 +1074,26 @@ func getStatus(url, token string) (int, error) {
 	}
 	defer resp.Body.Close()
 	return resp.StatusCode, nil
+}
+
+func getJSON(url, token string) (int, []byte, error) {
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return 0, nil, err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, nil, err
+	}
+	return resp.StatusCode, respBody, nil
 }
 
 func postStatus(url, token string, body []byte) (int, error) {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 	"time"
 
 	"ilonasin/internal/credentials"
@@ -21,6 +22,8 @@ type Server struct {
 	auth      credentials.LocalTokenVerifier
 	upstreams credentials.UpstreamCredentialResolver
 	adapters  provider.ChatAdapters
+	models    provider.ModelDiscoverers
+	cache     ModelCache
 	meta      MetadataRecorder
 }
 
@@ -31,10 +34,16 @@ type MetadataRecorder interface {
 
 type ProviderRegistry interface {
 	Get(id string) (provider.Instance, bool)
+	List() []provider.Instance
 }
 
-func New(registry ProviderRegistry, auth credentials.LocalTokenVerifier, upstreams credentials.UpstreamCredentialResolver, adapters provider.ChatAdapters, meta MetadataRecorder) *Server {
-	return &Server{registry: registry, auth: auth, upstreams: upstreams, adapters: adapters, meta: meta}
+type ModelCache interface {
+	ReplaceModelCache(context.Context, string, []provider.ModelMetadata) error
+	ListModelCache(context.Context) ([]provider.ModelMetadata, error)
+}
+
+func New(registry ProviderRegistry, auth credentials.LocalTokenVerifier, upstreams credentials.UpstreamCredentialResolver, adapters provider.ChatAdapters, models provider.ModelDiscoverers, cache ModelCache, meta MetadataRecorder) *Server {
+	return &Server{registry: registry, auth: auth, upstreams: upstreams, adapters: adapters, models: models, cache: cache, meta: meta}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -61,10 +70,95 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request, _ credenti
 		Object  string `json:"object"`
 		OwnedBy string `json:"owned_by"`
 	}
+	cacheByProvider := map[string][]provider.ModelMetadata{}
+	if s.cache != nil {
+		cached, err := s.cache.ListModelCache(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "model cache is unavailable", "api_error", "model_cache_unavailable")
+			return
+		}
+		for _, row := range cached {
+			cacheByProvider[row.ProviderInstanceID] = append(cacheByProvider[row.ProviderInstanceID], row)
+		}
+	}
+	var all []provider.ModelMetadata
+	attempted := 0
+	failedWithoutCache := 0
+	for _, instance := range s.registry.List() {
+		if !instance.APIKey || instance.Placeholder {
+			continue
+		}
+		credential, err := s.upstreams.ResolveAPIKey(r.Context(), instance.ID)
+		if err != nil {
+			if errors.Is(err, credentials.ErrNoEligibleCredential) {
+				continue
+			}
+			writeError(w, http.StatusInternalServerError, "upstream credential resolver failed", "api_error", "credential_resolver_failed")
+			return
+		}
+		attempted++
+		var discoverer provider.ModelDiscoverer
+		ok := false
+		if s.models != nil {
+			discoverer, ok = s.models.ForProvider(instance.Type)
+		}
+		if !ok {
+			cached := cacheByProvider[instance.ID]
+			if len(cached) == 0 {
+				failedWithoutCache++
+				continue
+			}
+			all = append(all, cached...)
+			continue
+		}
+		result, err := discoverer.ListModels(r.Context(), provider.ModelRequest{
+			Instance: instance,
+			Credential: provider.APIKeyCredential{
+				ID:                 credential.ID,
+				ProviderInstanceID: credential.ProviderInstanceID,
+				Label:              credential.Label,
+				APIKey:             credential.APIKey,
+			},
+		})
+		if err == nil && len(result.Models) > 0 {
+			if s.cache != nil {
+				if err := s.cache.ReplaceModelCache(r.Context(), instance.ID, result.Models); err != nil {
+					writeError(w, http.StatusInternalServerError, "model cache is unavailable", "api_error", "model_cache_unavailable")
+					return
+				}
+			}
+			all = append(all, result.Models...)
+			continue
+		}
+		cached := cacheByProvider[instance.ID]
+		if len(cached) == 0 {
+			failedWithoutCache++
+			continue
+		}
+		all = append(all, cached...)
+	}
+	if len(all) == 0 && attempted > 0 && failedWithoutCache == attempted {
+		writeError(w, http.StatusBadGateway, "model discovery failed", "api_error", "model_discovery_failed")
+		return
+	}
+	sort.SliceStable(all, func(i, j int) bool {
+		if all[i].ProviderInstanceID != all[j].ProviderInstanceID {
+			return all[i].ProviderInstanceID < all[j].ProviderInstanceID
+		}
+		return all[i].ModelID < all[j].ModelID
+	})
+	data := make([]model, 0, len(all))
+	for _, row := range all {
+		data = append(data, model{
+			ID:      row.ProviderInstanceID + "/" + row.ModelID,
+			Object:  "model",
+			OwnedBy: row.ProviderInstanceID,
+		})
+	}
 	resp := struct {
 		Object string  `json:"object"`
 		Data   []model `json:"data"`
-	}{Object: "list", Data: []model{}}
+	}{Object: "list", Data: data}
 	writeJSON(w, http.StatusOK, resp)
 }
 

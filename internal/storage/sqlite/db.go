@@ -538,57 +538,107 @@ func (s *Store) ResolveAPIKeyCredentials(ctx context.Context, providerInstanceID
 }
 
 func (s *Store) ResolveOAuthBearerCredential(ctx context.Context, providerInstanceID string, now time.Time) (credentials.ResolvedOAuthBearerCredential, error) {
-	rows, err := s.DB.QueryContext(ctx, `
+	var out credentials.ResolvedOAuthBearerCredential
+	var accessSecretID sql.NullInt64
+	var expires sql.NullString
+	err := s.DB.QueryRowContext(ctx, `
 		SELECT pc.id, pc.provider_instance_id, ot.access_token_secret_id, ot.expires_at
 		FROM provider_credentials pc
-		JOIN oauth_tokens ot ON ot.credential_id = pc.id
+		LEFT JOIN oauth_tokens ot ON ot.credential_id = pc.id
 		WHERE pc.provider_instance_id = ?
 			AND pc.kind = 'oauth'
 			AND pc.disabled_at IS NULL
-			AND ot.access_token_secret_id IS NOT NULL
 		ORDER BY pc.id ASC
-	`, providerInstanceID)
+		LIMIT 1
+	`, providerInstanceID).Scan(&out.ID, &out.ProviderInstanceID, &accessSecretID, &expires)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return credentials.ResolvedOAuthBearerCredential{}, credentials.ErrNoEligibleCredential
+		}
 		return credentials.ResolvedOAuthBearerCredential{}, err
 	}
-	defer rows.Close()
-	now = now.UTC()
-	for rows.Next() {
-		var out credentials.ResolvedOAuthBearerCredential
-		var accessSecretID int64
-		var expires sql.NullString
-		if err := rows.Scan(&out.ID, &out.ProviderInstanceID, &accessSecretID, &expires); err != nil {
-			return credentials.ResolvedOAuthBearerCredential{}, err
-		}
-		if expires.Valid {
-			expiresAt, err := time.Parse(time.RFC3339Nano, expires.String)
-			if err != nil {
-				return credentials.ResolvedOAuthBearerCredential{}, err
-			}
-			expiresAt = expiresAt.UTC()
-			if !expiresAt.After(now) {
-				continue
-			}
-			out.ExpiresAt = &expiresAt
-		}
-		if err := s.DB.QueryRowContext(ctx, `
-			SELECT secret_material
-			FROM credential_secrets
-			WHERE id = ?
-				AND credential_id = ?
-				AND secret_kind = 'oauth_access'
-		`, accessSecretID, out.ID).Scan(&out.BearerToken); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				continue
-			}
-			return credentials.ResolvedOAuthBearerCredential{}, err
-		}
-		return out, nil
+	if !accessSecretID.Valid {
+		return credentials.ResolvedOAuthBearerCredential{}, credentials.ErrNoEligibleCredential
 	}
-	if err := rows.Err(); err != nil {
+	if expires.Valid {
+		expiresAt, err := time.Parse(time.RFC3339Nano, expires.String)
+		if err != nil {
+			return credentials.ResolvedOAuthBearerCredential{}, err
+		}
+		expiresAt = expiresAt.UTC()
+		if !expiresAt.After(now.UTC()) {
+			return credentials.ResolvedOAuthBearerCredential{}, credentials.ErrNoEligibleCredential
+		}
+		out.ExpiresAt = &expiresAt
+	}
+	if err := s.DB.QueryRowContext(ctx, `
+		SELECT secret_material
+		FROM credential_secrets
+		WHERE id = ?
+			AND credential_id = ?
+			AND secret_kind = 'oauth_access'
+	`, accessSecretID.Int64, out.ID).Scan(&out.BearerToken); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return credentials.ResolvedOAuthBearerCredential{}, credentials.ErrNoEligibleCredential
+		}
 		return credentials.ResolvedOAuthBearerCredential{}, err
 	}
-	return credentials.ResolvedOAuthBearerCredential{}, credentials.ErrNoEligibleCredential
+	return out, nil
+}
+
+func (s *Store) ResolveOAuthBearerCredentialByID(ctx context.Context, credentialID int64, now time.Time) (credentials.ResolvedOAuthBearerCredential, error) {
+	var out credentials.ResolvedOAuthBearerCredential
+	var accessSecretID int64
+	var expires sql.NullString
+	err := s.DB.QueryRowContext(ctx, `
+		SELECT pc.id, pc.provider_instance_id, ot.access_token_secret_id, ot.expires_at
+		FROM provider_credentials pc
+		JOIN oauth_tokens ot ON ot.credential_id = pc.id
+		JOIN credential_secrets access_secret
+			ON access_secret.id = ot.access_token_secret_id
+			AND access_secret.credential_id = pc.id
+			AND access_secret.secret_kind = 'oauth_access'
+		WHERE pc.id = ?
+			AND pc.kind = 'oauth'
+			AND pc.disabled_at IS NULL
+			AND ot.access_token_secret_id IS NOT NULL
+	`, credentialID).Scan(&out.ID, &out.ProviderInstanceID, &accessSecretID, &expires)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return credentials.ResolvedOAuthBearerCredential{}, credentials.ErrNoEligibleCredential
+		}
+		return credentials.ResolvedOAuthBearerCredential{}, err
+	}
+	if expires.Valid && !now.IsZero() {
+		expiresAt, err := time.Parse(time.RFC3339Nano, expires.String)
+		if err != nil {
+			return credentials.ResolvedOAuthBearerCredential{}, err
+		}
+		expiresAt = expiresAt.UTC()
+		if !expiresAt.After(now.UTC()) {
+			return credentials.ResolvedOAuthBearerCredential{}, credentials.ErrNoEligibleCredential
+		}
+		out.ExpiresAt = &expiresAt
+	} else if expires.Valid {
+		expiresAt, err := time.Parse(time.RFC3339Nano, expires.String)
+		if err != nil {
+			return credentials.ResolvedOAuthBearerCredential{}, err
+		}
+		out.ExpiresAt = &expiresAt
+	}
+	if err := s.DB.QueryRowContext(ctx, `
+		SELECT secret_material
+		FROM credential_secrets
+		WHERE id = ?
+			AND credential_id = ?
+			AND secret_kind = 'oauth_access'
+	`, accessSecretID, out.ID).Scan(&out.BearerToken); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return credentials.ResolvedOAuthBearerCredential{}, credentials.ErrNoEligibleCredential
+		}
+		return credentials.ResolvedOAuthBearerCredential{}, err
+	}
+	return out, nil
 }
 
 func (s *Store) ResolveOAuthRefreshCredential(ctx context.Context, credentialID int64) (credentials.ResolvedOAuthRefreshCredential, error) {
@@ -616,6 +666,59 @@ func (s *Store) ResolveOAuthRefreshCredential(ctx context.Context, credentialID 
 			return credentials.ResolvedOAuthRefreshCredential{}, credentials.ErrNoEligibleCredential
 		}
 		return credentials.ResolvedOAuthRefreshCredential{}, err
+	}
+	return out, nil
+}
+
+func (s *Store) ResolveOAuthRefreshCredentialForProvider(ctx context.Context, providerInstanceID string) (credentials.ResolvedOAuthRefreshCredential, error) {
+	var out credentials.ResolvedOAuthRefreshCredential
+	var accessSecretID sql.NullInt64
+	var refreshSecretID sql.NullInt64
+	err := s.DB.QueryRowContext(ctx, `
+		SELECT pc.id, pc.provider_instance_id, ot.access_token_secret_id, ot.refresh_token_secret_id
+		FROM provider_credentials pc
+		LEFT JOIN oauth_tokens ot ON ot.credential_id = pc.id
+		WHERE pc.provider_instance_id = ?
+			AND pc.kind = 'oauth'
+			AND pc.disabled_at IS NULL
+		ORDER BY pc.id ASC
+		LIMIT 1
+	`, providerInstanceID).Scan(&out.ID, &out.ProviderInstanceID, &accessSecretID, &refreshSecretID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return credentials.ResolvedOAuthRefreshCredential{}, credentials.ErrNoEligibleCredential
+		}
+		return credentials.ResolvedOAuthRefreshCredential{}, err
+	}
+	if !accessSecretID.Valid || !refreshSecretID.Valid {
+		return credentials.ResolvedOAuthRefreshCredential{}, credentials.ErrNoEligibleCredential
+	}
+	if err := s.DB.QueryRowContext(ctx, `
+		SELECT id
+		FROM credential_secrets
+		WHERE id = ?
+			AND credential_id = ?
+			AND secret_kind = 'oauth_access'
+	`, accessSecretID.Int64, out.ID).Scan(&out.AccessTokenSecretID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return credentials.ResolvedOAuthRefreshCredential{}, credentials.ErrNoEligibleCredential
+		}
+		return credentials.ResolvedOAuthRefreshCredential{}, err
+	}
+	if err := s.DB.QueryRowContext(ctx, `
+		SELECT id
+		FROM credential_secrets
+		WHERE id = ?
+			AND credential_id = ?
+			AND secret_kind = 'oauth_refresh'
+	`, refreshSecretID.Int64, out.ID).Scan(&out.RefreshTokenSecretID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return credentials.ResolvedOAuthRefreshCredential{}, credentials.ErrNoEligibleCredential
+		}
+		return credentials.ResolvedOAuthRefreshCredential{}, err
+	}
+	if out.AccessTokenSecretID == 0 || out.RefreshTokenSecretID == 0 {
+		return credentials.ResolvedOAuthRefreshCredential{}, credentials.ErrNoEligibleCredential
 	}
 	return out, nil
 }

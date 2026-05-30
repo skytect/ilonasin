@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"sort"
 	"time"
@@ -22,6 +23,7 @@ type Server struct {
 	auth      credentials.LocalTokenVerifier
 	upstreams credentials.UpstreamCredentialResolver
 	oauth     credentials.OAuthBearerResolver
+	refresh   credentials.OAuthProviderRefreshController
 	adapters  provider.ChatAdapters
 	models    provider.ModelDiscoverers
 	cache     ModelCache
@@ -54,7 +56,8 @@ func NewWithClock(registry ProviderRegistry, auth credentials.LocalTokenVerifier
 	if now == nil {
 		now = time.Now
 	}
-	return &Server{registry: registry, auth: auth, upstreams: upstreams, oauth: oauth, adapters: adapters, models: models, cache: cache, meta: meta, now: now}
+	refresh, _ := oauth.(credentials.OAuthProviderRefreshController)
+	return &Server{registry: registry, auth: auth, upstreams: upstreams, oauth: oauth, refresh: refresh, adapters: adapters, models: models, cache: cache, meta: meta, now: now}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -104,6 +107,11 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request, _ credenti
 			if errors.Is(err, credentials.ErrNoEligibleCredential) {
 				continue
 			}
+			if errors.Is(err, credentials.ErrOAuthRefreshFailed) {
+				attempted++
+				failedWithoutCache++
+				continue
+			}
 			writeError(w, http.StatusInternalServerError, "upstream credential resolver failed", "api_error", "credential_resolver_failed")
 			return
 		}
@@ -126,6 +134,18 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request, _ credenti
 			Instance:   instance,
 			Credential: credential,
 		})
+		if s.shouldRefreshOAuthAfterModel401(instance, result) {
+			if refreshed, refreshErr := s.refreshOAuthCredentialForRetryIfBearer(r.Context(), credential); refreshErr == nil {
+				credential = refreshed
+				result, err = discoverer.ListModels(r.Context(), provider.ModelRequest{
+					Instance:   instance,
+					Credential: credential,
+				})
+			} else {
+				failedWithoutCache++
+				continue
+			}
+		}
 		if err == nil && len(result.Models) > 0 {
 			if s.cache != nil {
 				if err := s.cache.ReplaceModelCache(r.Context(), instance.ID, result.Models); err != nil {
@@ -134,6 +154,10 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request, _ credenti
 				}
 			}
 			all = append(all, result.Models...)
+			continue
+		}
+		if s.isOAuthAuthFailure(instance, result) {
+			failedWithoutCache++
 			continue
 		}
 		cached := cacheByProvider[instance.ID]
@@ -186,6 +210,16 @@ func (s *Server) resolveModelCredential(ctx context.Context, instance provider.I
 			return provider.BearerCredential{}, credentials.ErrNoEligibleCredential
 		}
 		credential, err := s.oauth.ResolveOAuthBearer(ctx, instance.ID, s.now().UTC())
+		if err != nil && errors.Is(err, credentials.ErrNoEligibleCredential) && s.refresh != nil && instance.Type == "codex" {
+			if refreshErr := s.refresh.RefreshOAuthProviderCredential(ctx, instance.ID); refreshErr == nil {
+				credential, err = s.oauth.ResolveOAuthBearer(ctx, instance.ID, s.now().UTC())
+				if err != nil {
+					return provider.BearerCredential{}, fmt.Errorf("%w: oauth refresh did not yield bearer", credentials.ErrOAuthRefreshFailed)
+				}
+			} else {
+				return provider.BearerCredential{}, fmt.Errorf("%w: oauth refresh unavailable", credentials.ErrOAuthRefreshFailed)
+			}
+		}
 		if err != nil {
 			return provider.BearerCredential{}, err
 		}
@@ -197,6 +231,37 @@ func (s *Server) resolveModelCredential(ctx context.Context, instance provider.I
 		}, nil
 	}
 	return provider.BearerCredential{}, credentials.ErrNoEligibleCredential
+}
+
+func (s *Server) shouldRefreshOAuthAfterModel401(instance provider.Instance, result provider.ModelResult) bool {
+	return instance.Type == "codex" && instance.OAuth && result.StatusCode == http.StatusUnauthorized && s.refresh != nil
+}
+
+func (s *Server) isOAuthAuthFailure(instance provider.Instance, result provider.ModelResult) bool {
+	return instance.Type == "codex" && instance.OAuth && result.StatusCode == http.StatusUnauthorized
+}
+
+func (s *Server) shouldRefreshOAuthAfterChat401(instance provider.Instance, result provider.ChatResult) bool {
+	return instance.Type == "codex" && instance.OAuth && result.StatusCode == http.StatusUnauthorized && s.refresh != nil
+}
+
+func (s *Server) refreshOAuthCredentialForRetryIfBearer(ctx context.Context, credential provider.BearerCredential) (provider.BearerCredential, error) {
+	if s.refresh == nil {
+		return provider.BearerCredential{}, credentials.ErrNoEligibleCredential
+	}
+	if err := s.refresh.RefreshOAuthCredentialIfBearer(ctx, credential.ID, credential.BearerToken); err != nil {
+		return provider.BearerCredential{}, err
+	}
+	refreshed, err := s.refresh.ResolveOAuthBearerByID(ctx, credential.ID, s.now().UTC())
+	if err != nil {
+		return provider.BearerCredential{}, err
+	}
+	return provider.BearerCredential{
+		ID:                 refreshed.ID,
+		ProviderInstanceID: refreshed.ProviderInstanceID,
+		Kind:               provider.CredentialKindOAuthAccess,
+		BearerToken:        refreshed.BearerToken,
+	}, nil
 }
 
 func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, token credentials.VerifiedLocalToken) {
@@ -387,6 +452,32 @@ func (s *Server) handleSingleCredentialChat(w http.ResponseWriter, r *http.Reque
 			BearerToken:        sc.credential.BearerToken,
 		},
 	})
+	retryCount := 0
+	if s.shouldRefreshOAuthAfterChat401(sc.instance, result) {
+		refreshed, refreshErr := s.refreshOAuthCredentialForRetryIfBearer(r.Context(), sc.credential)
+		if refreshErr != nil {
+			result = provider.ChatResult{StatusCode: http.StatusBadGateway, ContentType: "application/json", ErrorClass: "upstream_auth_failed", Latency: time.Since(sc.start)}
+			err = refreshErr
+		} else {
+			sc.credential = refreshed
+			retryCount = 1
+			result, err = sc.adapter.CompleteChat(r.Context(), provider.ChatRequest{
+				Instance:      sc.instance,
+				UpstreamModel: sc.address.ProviderModelID,
+				Request:       sc.request,
+				Credential: provider.ChatCredential{
+					ID:                 sc.credential.ID,
+					ProviderInstanceID: sc.credential.ProviderInstanceID,
+					Kind:               sc.credential.Kind,
+					BearerToken:        sc.credential.BearerToken,
+				},
+			})
+			if s.shouldRefreshOAuthAfterChat401(sc.instance, result) {
+				result.StatusCode = http.StatusBadGateway
+				result.ErrorClass = "upstream_auth_failed"
+			}
+		}
+	}
 	status := normalizedChatStatus(result)
 	errorClass := normalizedChatErrorClass(result, status)
 	if err != nil && errorClass == "" {
@@ -408,6 +499,7 @@ func (s *Server) handleSingleCredentialChat(w http.ResponseWriter, r *http.Reque
 		ResolvedModel:             sc.address.ProviderModelID,
 		HTTPStatus:                status,
 		ErrorClass:                errorClass,
+		RetryCount:                retryCount,
 		PromptTokens:              result.Usage.PromptTokens,
 		CompletionTokens:          result.Usage.CompletionTokens,
 		TotalTokens:               result.Usage.TotalTokens,

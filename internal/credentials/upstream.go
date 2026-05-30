@@ -47,6 +47,13 @@ type OAuthBearerResolver interface {
 	ResolveOAuthBearer(ctx context.Context, providerInstanceID string, now time.Time) (ResolvedOAuthBearerCredential, error)
 }
 
+type OAuthProviderRefreshController interface {
+	ResolveOAuthBearerByID(ctx context.Context, credentialID int64, now time.Time) (ResolvedOAuthBearerCredential, error)
+	RefreshOAuthProviderCredential(ctx context.Context, providerInstanceID string) error
+	RefreshOAuthCredentialIfBearer(ctx context.Context, credentialID int64, staleBearerToken string) error
+	RefreshOAuthCredential(ctx context.Context, credentialID int64) error
+}
+
 type UpstreamCredentialRepository interface {
 	InsertAPIKeyCredential(ctx context.Context, meta NewUpstreamCredential, apiKey string) (UpstreamCredentialMetadata, error)
 	ListUpstreamCredentials(ctx context.Context) ([]UpstreamCredentialMetadata, error)
@@ -54,7 +61,9 @@ type UpstreamCredentialRepository interface {
 	ResolveAPIKeyCredential(ctx context.Context, providerInstanceID string) (ResolvedAPIKeyCredential, error)
 	ResolveAPIKeyCredentials(ctx context.Context, providerInstanceID string) ([]ResolvedAPIKeyCredential, error)
 	ResolveOAuthBearerCredential(ctx context.Context, providerInstanceID string, now time.Time) (ResolvedOAuthBearerCredential, error)
+	ResolveOAuthBearerCredentialByID(ctx context.Context, credentialID int64, now time.Time) (ResolvedOAuthBearerCredential, error)
 	ResolveOAuthRefreshCredential(ctx context.Context, credentialID int64) (ResolvedOAuthRefreshCredential, error)
+	ResolveOAuthRefreshCredentialForProvider(ctx context.Context, providerInstanceID string) (ResolvedOAuthRefreshCredential, error)
 	ResolveOAuthRefreshToken(ctx context.Context, credentialID, refreshSecretID int64) (string, error)
 	UpdateOAuthTokens(ctx context.Context, credentialID int64, update OAuthTokenUpdate) error
 	ListFallbackPolicies(ctx context.Context) ([]FallbackPolicyMetadata, error)
@@ -92,6 +101,8 @@ type UpstreamService struct {
 	OAuthLogin     provider.OAuthDeviceLoginProvider
 	Now            func() time.Time
 	DeviceLogins   *OAuthDeviceLoginSessions
+	refreshMu      sync.Mutex
+	refreshes      *OAuthRefreshCalls
 }
 
 type OAuthDeviceLoginSessions struct {
@@ -99,6 +110,16 @@ type OAuthDeviceLoginSessions struct {
 	sessions map[string]oauthDeviceLoginSession
 	max      int
 	ttl      time.Duration
+}
+
+type OAuthRefreshCalls struct {
+	mu    sync.Mutex
+	calls map[string]*oauthRefreshCall
+}
+
+type oauthRefreshCall struct {
+	done chan struct{}
+	err  error
 }
 
 func NewOAuthDeviceLoginSessions(max int, ttl time.Duration) *OAuthDeviceLoginSessions {
@@ -245,7 +266,7 @@ func (c ResolvedAPIKeyCredential) GoString() string {
 	return c.String()
 }
 
-func (s UpstreamService) AddAPIKey(ctx context.Context, providerInstanceID, label, apiKey string) (UpstreamCredentialMetadata, error) {
+func (s *UpstreamService) AddAPIKey(ctx context.Context, providerInstanceID, label, apiKey string) (UpstreamCredentialMetadata, error) {
 	if label == "" {
 		label = "api key"
 	}
@@ -273,7 +294,7 @@ func (s UpstreamService) AddAPIKey(ctx context.Context, providerInstanceID, labe
 	}, apiKey)
 }
 
-func (s UpstreamService) AddOAuthCredential(ctx context.Context, input NewOAuthCredentialInput) (OAuthCredentialMetadata, error) {
+func (s *UpstreamService) AddOAuthCredential(ctx context.Context, input NewOAuthCredentialInput) (OAuthCredentialMetadata, error) {
 	if input.Label == "" {
 		input.Label = "oauth account"
 	}
@@ -309,39 +330,39 @@ func (s UpstreamService) AddOAuthCredential(ctx context.Context, input NewOAuthC
 	return s.Repo.InsertOAuthCredential(ctx, meta, accessToken, refreshToken)
 }
 
-func (s UpstreamService) List(ctx context.Context) ([]UpstreamCredentialMetadata, error) {
+func (s *UpstreamService) List(ctx context.Context) ([]UpstreamCredentialMetadata, error) {
 	return s.Repo.ListUpstreamCredentials(ctx)
 }
 
-func (s UpstreamService) ListFallbackPolicies(ctx context.Context) ([]FallbackPolicyMetadata, error) {
+func (s *UpstreamService) ListFallbackPolicies(ctx context.Context) ([]FallbackPolicyMetadata, error) {
 	return s.Repo.ListFallbackPolicies(ctx)
 }
 
-func (s UpstreamService) ListOAuthCredentials(ctx context.Context) ([]OAuthCredentialMetadata, error) {
+func (s *UpstreamService) ListOAuthCredentials(ctx context.Context) ([]OAuthCredentialMetadata, error) {
 	return s.Repo.ListOAuthCredentials(ctx)
 }
 
-func (s UpstreamService) ListProviderAccounts(ctx context.Context) ([]ProviderAccountMetadata, error) {
+func (s *UpstreamService) ListProviderAccounts(ctx context.Context) ([]ProviderAccountMetadata, error) {
 	return s.Repo.ListProviderAccounts(ctx)
 }
 
-func (s UpstreamService) Disable(ctx context.Context, id int64) error {
+func (s *UpstreamService) Disable(ctx context.Context, id int64) error {
 	return s.Repo.DisableUpstreamCredential(ctx, id, s.now())
 }
 
-func (s UpstreamService) MarkOAuthRefreshFailure(ctx context.Context, credentialID int64, failureClass string) error {
+func (s *UpstreamService) MarkOAuthRefreshFailure(ctx context.Context, credentialID int64, failureClass string) error {
 	return s.Repo.MarkOAuthRefreshFailure(ctx, credentialID, normalizeRefreshFailureClass(failureClass), s.now())
 }
 
-func (s UpstreamService) EnableFallbackGroup(ctx context.Context, providerInstanceID, groupLabel string) error {
+func (s *UpstreamService) EnableFallbackGroup(ctx context.Context, providerInstanceID, groupLabel string) error {
 	return s.setFallbackGroup(ctx, providerInstanceID, groupLabel, true)
 }
 
-func (s UpstreamService) DisableFallbackGroup(ctx context.Context, providerInstanceID, groupLabel string) error {
+func (s *UpstreamService) DisableFallbackGroup(ctx context.Context, providerInstanceID, groupLabel string) error {
 	return s.setFallbackGroup(ctx, providerInstanceID, groupLabel, false)
 }
 
-func (s UpstreamService) ResolveAPIKey(ctx context.Context, providerInstanceID string) (ResolvedAPIKeyCredential, error) {
+func (s *UpstreamService) ResolveAPIKey(ctx context.Context, providerInstanceID string) (ResolvedAPIKeyCredential, error) {
 	instance, ok := s.Registry.Get(providerInstanceID)
 	if !ok {
 		return ResolvedAPIKeyCredential{}, ErrCredentialNotFound
@@ -352,7 +373,7 @@ func (s UpstreamService) ResolveAPIKey(ctx context.Context, providerInstanceID s
 	return s.Repo.ResolveAPIKeyCredential(ctx, providerInstanceID)
 }
 
-func (s UpstreamService) ResolveAPIKeys(ctx context.Context, providerInstanceID string) ([]ResolvedAPIKeyCredential, error) {
+func (s *UpstreamService) ResolveAPIKeys(ctx context.Context, providerInstanceID string) ([]ResolvedAPIKeyCredential, error) {
 	instance, ok := s.Registry.Get(providerInstanceID)
 	if !ok {
 		return nil, ErrCredentialNotFound
@@ -363,7 +384,7 @@ func (s UpstreamService) ResolveAPIKeys(ctx context.Context, providerInstanceID 
 	return s.Repo.ResolveAPIKeyCredentials(ctx, providerInstanceID)
 }
 
-func (s UpstreamService) ResolveOAuthBearer(ctx context.Context, providerInstanceID string, now time.Time) (ResolvedOAuthBearerCredential, error) {
+func (s *UpstreamService) ResolveOAuthBearer(ctx context.Context, providerInstanceID string, now time.Time) (ResolvedOAuthBearerCredential, error) {
 	instance, ok := s.Registry.Get(providerInstanceID)
 	if !ok {
 		return ResolvedOAuthBearerCredential{}, ErrCredentialNotFound
@@ -375,6 +396,24 @@ func (s UpstreamService) ResolveOAuthBearer(ctx context.Context, providerInstanc
 		now = s.now()
 	}
 	return s.Repo.ResolveOAuthBearerCredential(ctx, providerInstanceID, now.UTC())
+}
+
+func (s *UpstreamService) ResolveOAuthBearerByID(ctx context.Context, credentialID int64, now time.Time) (ResolvedOAuthBearerCredential, error) {
+	if now.IsZero() {
+		now = s.now()
+	}
+	credential, err := s.Repo.ResolveOAuthBearerCredentialByID(ctx, credentialID, now.UTC())
+	if err != nil {
+		return ResolvedOAuthBearerCredential{}, err
+	}
+	instance, ok := s.Registry.Get(credential.ProviderInstanceID)
+	if !ok {
+		return ResolvedOAuthBearerCredential{}, ErrCredentialNotFound
+	}
+	if !instance.OAuth || instance.Type != "codex" {
+		return ResolvedOAuthBearerCredential{}, fmt.Errorf("%w: provider %q does not support oauth credentials", ErrUnsupportedCredential, credential.ProviderInstanceID)
+	}
+	return credential, nil
 }
 
 func (s *UpstreamService) StartOAuthDeviceLogin(ctx context.Context, providerInstanceID string) (OAuthDeviceLoginChallenge, error) {
@@ -471,7 +510,45 @@ func (s *UpstreamService) CompleteOAuthDeviceLogin(ctx context.Context, handle s
 	})
 }
 
-func (s UpstreamService) RefreshOAuthCredential(ctx context.Context, credentialID int64) error {
+func (s *UpstreamService) RefreshOAuthCredential(ctx context.Context, credentialID int64) error {
+	return s.refreshCalls().do(ctx, fmt.Sprintf("credential:%d", credentialID), func() error {
+		return s.refreshOAuthCredential(ctx, credentialID)
+	})
+}
+
+func (s *UpstreamService) RefreshOAuthCredentialIfBearer(ctx context.Context, credentialID int64, staleBearerToken string) error {
+	return s.refreshCalls().do(ctx, fmt.Sprintf("credential:%d", credentialID), func() error {
+		if staleBearerToken != "" {
+			current, err := s.Repo.ResolveOAuthBearerCredentialByID(ctx, credentialID, time.Time{})
+			if err == nil && current.BearerToken != "" && current.BearerToken != staleBearerToken {
+				return nil
+			}
+		}
+		return s.refreshOAuthCredential(ctx, credentialID)
+	})
+}
+
+func (s *UpstreamService) RefreshOAuthProviderCredential(ctx context.Context, providerInstanceID string) error {
+	return s.refreshCalls().do(ctx, "provider:"+providerInstanceID, func() error {
+		instance, ok := s.Registry.Get(providerInstanceID)
+		if !ok {
+			return ErrCredentialNotFound
+		}
+		if !instance.OAuth || !instance.OAuthRefresh || instance.Type != "codex" {
+			return fmt.Errorf("%w: provider %q does not support oauth refresh", ErrUnsupportedCredential, providerInstanceID)
+		}
+		if _, err := s.ResolveOAuthBearer(ctx, providerInstanceID, s.now()); err == nil {
+			return nil
+		}
+		credential, err := s.Repo.ResolveOAuthRefreshCredentialForProvider(ctx, providerInstanceID)
+		if err != nil {
+			return err
+		}
+		return s.RefreshOAuthCredential(ctx, credential.ID)
+	})
+}
+
+func (s *UpstreamService) refreshOAuthCredential(ctx context.Context, credentialID int64) error {
 	credential, err := s.Repo.ResolveOAuthRefreshCredential(ctx, credentialID)
 	if err != nil {
 		return err
@@ -521,7 +598,43 @@ func (s UpstreamService) RefreshOAuthCredential(ctx context.Context, credentialI
 	return nil
 }
 
-func (s UpstreamService) recordOAuthRefreshFailure(ctx context.Context, credentialID int64, failureClass string) error {
+func (s *UpstreamService) refreshCalls() *OAuthRefreshCalls {
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+	if s.refreshes == nil {
+		s.refreshes = &OAuthRefreshCalls{}
+	}
+	return s.refreshes
+}
+
+func (c *OAuthRefreshCalls) do(ctx context.Context, key string, fn func() error) error {
+	c.mu.Lock()
+	if c.calls == nil {
+		c.calls = map[string]*oauthRefreshCall{}
+	}
+	if existing := c.calls[key]; existing != nil {
+		c.mu.Unlock()
+		select {
+		case <-existing.done:
+			return existing.err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	call := &oauthRefreshCall{done: make(chan struct{})}
+	c.calls[key] = call
+	c.mu.Unlock()
+
+	call.err = fn()
+	close(call.done)
+
+	c.mu.Lock()
+	delete(c.calls, key)
+	c.mu.Unlock()
+	return call.err
+}
+
+func (s *UpstreamService) recordOAuthRefreshFailure(ctx context.Context, credentialID int64, failureClass string) error {
 	if err := s.Repo.MarkOAuthRefreshFailure(ctx, credentialID, normalizeRefreshFailureClass(failureClass), s.now()); err != nil {
 		return err
 	}
@@ -808,7 +921,7 @@ func normalizeRefreshFailureClass(value string) string {
 	}
 }
 
-func (s UpstreamService) setFallbackGroup(ctx context.Context, providerInstanceID, groupLabel string, enabled bool) error {
+func (s *UpstreamService) setFallbackGroup(ctx context.Context, providerInstanceID, groupLabel string, enabled bool) error {
 	if groupLabel == "" {
 		groupLabel = DefaultFallbackGroup
 	}
@@ -822,7 +935,7 @@ func (s UpstreamService) setFallbackGroup(ctx context.Context, providerInstanceI
 	return s.Repo.SetFallbackGroupEnabled(ctx, providerInstanceID, groupLabel, enabled, s.now())
 }
 
-func (s UpstreamService) now() time.Time {
+func (s *UpstreamService) now() time.Time {
 	if s.Now != nil {
 		return s.Now().UTC()
 	}

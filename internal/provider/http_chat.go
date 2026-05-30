@@ -58,6 +58,13 @@ func (a HTTPChatAdapter) ListModels(ctx context.Context, req ModelRequest) (Mode
 		return ModelResult{ErrorClass: classifyTransportError(err)}, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		errorClass := "upstream_http_error"
+		if resp.StatusCode == http.StatusUnauthorized {
+			errorClass = "upstream_auth_failed"
+		}
+		return ModelResult{ErrorClass: errorClass, StatusCode: resp.StatusCode}, fmt.Errorf("upstream models status %d", resp.StatusCode)
+	}
 	limited := http.MaxBytesReader(nil, resp.Body, MaxUpstreamModelsBodyBytes)
 	body, readErr := io.ReadAll(limited)
 	if readErr != nil {
@@ -68,14 +75,11 @@ func (a HTTPChatAdapter) ListModels(ctx context.Context, req ModelRequest) (Mode
 		}
 		return ModelResult{ErrorClass: errorClass}, readErr
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return ModelResult{ErrorClass: "upstream_http_error"}, fmt.Errorf("upstream models status %d", resp.StatusCode)
-	}
 	models, err := normalizeModels(req.Instance, body)
 	if err != nil {
-		return ModelResult{ErrorClass: "upstream_invalid_response"}, err
+		return ModelResult{ErrorClass: "upstream_invalid_response", StatusCode: resp.StatusCode}, err
 	}
-	return ModelResult{Models: models}, nil
+	return ModelResult{Models: models, StatusCode: resp.StatusCode}, nil
 }
 
 func NewHTTPChatAdapter(client *http.Client) HTTPChatAdapter {
@@ -192,6 +196,9 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if resp.StatusCode == http.StatusUnauthorized {
+			return ChatResult{StatusCode: http.StatusUnauthorized, ContentType: "application/json", ErrorClass: "upstream_auth_failed", Latency: time.Since(start)}, fmt.Errorf("codex responses status %d", resp.StatusCode)
+		}
 		return ChatResult{StatusCode: http.StatusBadGateway, ContentType: "application/json", ErrorClass: "upstream_http_error", Latency: time.Since(start)}, fmt.Errorf("codex responses status %d", resp.StatusCode)
 	}
 	parsed, err := a.readCodexResponses(streamCtx, resp.Body)

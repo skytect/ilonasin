@@ -52,7 +52,11 @@ func Serve(opts Options) error {
 	defer rt.Store.Close()
 
 	auth := credentials.Service{Repo: rt.Store}
-	upstreams := credentials.UpstreamService{Registry: rt.Registry, Repo: rt.Store}
+	upstreams := &credentials.UpstreamService{
+		Registry:       rt.Registry,
+		Repo:           rt.Store,
+		OAuthRefresher: provider.NewHTTPOAuthRefresher(nil),
+	}
 	srv := &http.Server{
 		Addr:              rt.Config.Server.Bind,
 		Handler:           server.New(rt.Registry, auth, upstreams, upstreams, chatAdapters(nil), modelDiscoverers(nil), rt.Store, rt.Store).Handler(),
@@ -87,7 +91,7 @@ func ServeCheck(opts Options) error {
 
 	tokenService := credentials.Service{Repo: checkStore}
 	checkNow := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
-	upstreamService := credentials.UpstreamService{Registry: rt.Registry, Repo: checkStore, Now: func() time.Time { return checkNow }}
+	upstreamService := &credentials.UpstreamService{Registry: rt.Registry, Repo: checkStore, Now: func() time.Time { return checkNow }}
 	created, err := tokenService.Create(context.Background(), "serve-check")
 	if err != nil {
 		return err
@@ -221,6 +225,9 @@ func ServeCheck(opts Options) error {
 	}
 	if err := exerciseCodexChatCheck(context.Background(), base, created2.Token, fakeUpstream, checkStore); err != nil {
 		return err
+	}
+	if err := exerciseCodexServeOAuthRefreshCheck(context.Background(), rt.Config, fakeUpstream); err != nil {
+		return fmt.Errorf("codex serve oauth refresh check: %w", err)
 	}
 	for _, instance := range instances {
 		if _, err := upstreamService.AddAPIKey(context.Background(), instance.ID, "serve-check-adapter", "sk-serve-check-adapter"); err != nil {
@@ -409,7 +416,7 @@ func exerciseUpstreamCredentialCheck(ctx context.Context, registry provider.Regi
 		return err
 	}
 	defer store.Close()
-	service := credentials.UpstreamService{Registry: registry, Repo: store}
+	service := &credentials.UpstreamService{Registry: registry, Repo: store}
 	if err := tui.ExerciseUpstreamCredentialLifecycle(ctx, cfg, registry, service); err != nil {
 		return err
 	}
@@ -435,7 +442,7 @@ func exerciseFallbackPolicyCheck(ctx context.Context, registry provider.Registry
 		return err
 	}
 	defer store.Close()
-	service := credentials.UpstreamService{Registry: registry, Repo: store}
+	service := &credentials.UpstreamService{Registry: registry, Repo: store}
 	if _, err := service.AddAPIKey(ctx, instance.ID, "fallback raw-provider-payload prompt marker secret", "sk-fallback-policy-primary"); err != nil {
 		return fmt.Errorf("seed fallback policy primary: %w", err)
 	}
@@ -575,7 +582,7 @@ func exerciseObservabilityCheck(ctx context.Context, registry provider.Registry,
 		return err
 	}
 	defer store.Close()
-	upstreams := credentials.UpstreamService{Registry: registry, Repo: store}
+	upstreams := &credentials.UpstreamService{Registry: registry, Repo: store}
 	first, err := upstreams.AddAPIKey(ctx, "deepseek", "Bearer sk-observe-secret prompt marker", "sk-observe-secret-value-1")
 	if err != nil {
 		return fmt.Errorf("seed observability first credential: %w", err)
@@ -690,7 +697,7 @@ func exerciseOAuthCheck(ctx context.Context, registry provider.Registry, cfg con
 		return err
 	}
 	defer store.Close()
-	service := credentials.UpstreamService{Registry: registry, Repo: store}
+	service := &credentials.UpstreamService{Registry: registry, Repo: store}
 	expiresAt := time.Date(2026, 5, 30, 13, 0, 0, 0, time.UTC)
 	created, err := service.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
 		ProviderInstanceID:  "codex",
@@ -1085,7 +1092,7 @@ func exerciseOAuthRefreshCheck(ctx context.Context, cfg config.Config) error {
 	now := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
 	refresher := provider.NewHTTPOAuthRefresher(fakeAuth.server.Client())
 	refresher.Timeout = 20 * time.Millisecond
-	service := credentials.UpstreamService{
+	service := &credentials.UpstreamService{
 		Registry:       registry,
 		Repo:           store,
 		OAuthRefresher: refresher,
@@ -1683,7 +1690,7 @@ func (f *oauthRefreshAuthServer) requestCount() int {
 	return len(f.seen)
 }
 
-func exerciseOAuthRefreshFailureModes(ctx context.Context, store *sqlite.Store, service credentials.UpstreamService, fakeAuth *oauthRefreshAuthServer) error {
+func exerciseOAuthRefreshFailureModes(ctx context.Context, store *sqlite.Store, service *credentials.UpstreamService, fakeAuth *oauthRefreshAuthServer) error {
 	for _, tc := range []struct {
 		mode string
 		want string
@@ -1829,7 +1836,7 @@ func exerciseTelemetryPruneCheck(ctx context.Context, registry provider.Registry
 	}
 	defer store.Close()
 
-	upstreams := credentials.UpstreamService{Registry: registry, Repo: store}
+	upstreams := &credentials.UpstreamService{Registry: registry, Repo: store}
 	first, err := upstreams.AddAPIKey(ctx, "deepseek", "prune-check-primary", "sk-prune-secret-primary")
 	if err != nil {
 		return fmt.Errorf("seed prune primary credential: %w", err)
@@ -2305,7 +2312,8 @@ func modelDiscoverers(client *http.Client) provider.StaticModelDiscoverers {
 
 type baseURLOverrideRegistry struct {
 	provider.Registry
-	baseURL string
+	baseURL    string
+	authIssuer string
 }
 
 func (r baseURLOverrideRegistry) Get(id string) (provider.Instance, bool) {
@@ -2328,6 +2336,9 @@ func (r baseURLOverrideRegistry) override(instance provider.Instance, ok bool) (
 			instance.BaseURL += "/api/v1"
 		}
 	}
+	if ok && r.authIssuer != "" && instance.Type == "codex" {
+		instance.AuthIssuer = r.authIssuer
+	}
 	return instance, ok
 }
 
@@ -2335,6 +2346,81 @@ type serveCheckUpstream struct {
 	server   *httptest.Server
 	mu       sync.Mutex
 	observed map[string]bool
+}
+
+type serveRefreshAuthServer struct {
+	server *httptest.Server
+	mu     sync.Mutex
+	seen   []string
+}
+
+func newServeRefreshAuthServer() *serveRefreshAuthServer {
+	f := &serveRefreshAuthServer{}
+	f.server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/oauth/token" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("Content-Type") != "application/json" {
+			http.Error(w, "bad content type", http.StatusBadRequest)
+			return
+		}
+		var body map[string]string
+		if err := decodeStrictSmokeJSON(r.Body, &body); err != nil ||
+			len(body) != 3 ||
+			body["client_id"] != provider.CodexOAuthClientID ||
+			body["grant_type"] != "refresh_token" ||
+			body["refresh_token"] == "" {
+			http.Error(w, "bad body", http.StatusBadRequest)
+			return
+		}
+		refreshToken := body["refresh_token"]
+		f.mu.Lock()
+		f.seen = append(f.seen, refreshToken)
+		f.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		switch refreshToken {
+		case "oauth-serve-refresh-model":
+			_, _ = w.Write([]byte(`{"access_token":"oauth-serve-refreshed-model","expires_in":3600}`))
+		case "oauth-serve-refresh-chat":
+			_, _ = w.Write([]byte(`{"access_token":"oauth-serve-refreshed-chat","expires_in":3600}`))
+		case "oauth-serve-refresh-first-with-other":
+			_, _ = w.Write([]byte(`{"access_token":"oauth-serve-refreshed-first-with-other","expires_in":3600}`))
+		case "oauth-serve-refresh-model-401":
+			_, _ = w.Write([]byte(`{"access_token":"oauth-serve-refreshed-model-401","expires_in":3600}`))
+		case "oauth-serve-refresh-chat-401":
+			_, _ = w.Write([]byte(`{"access_token":"oauth-serve-refreshed-chat-401","expires_in":3600}`))
+		case "oauth-serve-refresh-model-large-401":
+			_, _ = w.Write([]byte(`{"access_token":"oauth-serve-refreshed-model-large-401","expires_in":3600}`))
+		case "oauth-serve-refresh-concurrent":
+			time.Sleep(20 * time.Millisecond)
+			_, _ = w.Write([]byte(`{"access_token":"oauth-serve-refreshed-concurrent","expires_in":3600}`))
+		case "oauth-serve-refresh-concurrent-chat":
+			time.Sleep(20 * time.Millisecond)
+			_, _ = w.Write([]byte(`{"access_token":"oauth-serve-refreshed-concurrent","expires_in":3600}`))
+		case "oauth-serve-refresh-concurrent-401":
+			time.Sleep(20 * time.Millisecond)
+			_, _ = w.Write([]byte(`{"access_token":"oauth-serve-refreshed-concurrent","expires_in":3600}`))
+		case "oauth-serve-refresh-concurrent-chat-401":
+			time.Sleep(20 * time.Millisecond)
+			_, _ = w.Write([]byte(`{"access_token":"oauth-serve-refreshed-concurrent","expires_in":3600}`))
+		default:
+			http.Error(w, "raw refresh failure marker", http.StatusUnauthorized)
+		}
+	}))
+	return f
+}
+
+func (f *serveRefreshAuthServer) requestCountFor(refreshToken string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	count := 0
+	for _, seen := range f.seen {
+		if seen == refreshToken {
+			count++
+		}
+	}
+	return count
 }
 
 func newServeCheckUpstream() *serveCheckUpstream {
@@ -2404,7 +2490,7 @@ func newServeCheckUpstream() *serveCheckUpstream {
 func (u *serveCheckUpstream) handleServeCheckCodexResponses(w http.ResponseWriter, r *http.Request) {
 	auth := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	u.recordObservedAuth("codex-chat", auth)
-	if auth != "oauth-access-secret-marker" {
+	if !isServeCheckCodexAccess(auth) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -2476,6 +2562,14 @@ func (u *serveCheckUpstream) handleServeCheckCodexResponses(w http.ResponseWrite
 	}
 	if body.Model == "codex-http-error" {
 		http.Error(w, "raw codex http body", http.StatusServiceUnavailable)
+		return
+	}
+	if body.Model == "codex-429" {
+		http.Error(w, "raw codex rate limit body", http.StatusTooManyRequests)
+		return
+	}
+	if body.Model == "codex-401-repeat" {
+		http.Error(w, "raw codex auth body", http.StatusUnauthorized)
 		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -2578,7 +2672,11 @@ func (u *serveCheckUpstream) handleServeCheckModels(w http.ResponseWriter, r *ht
 	codex := r.URL.Query().Get("client_version") == "ilonasin"
 	if codex {
 		u.recordObservedAuth("codex-models", auth)
-		if auth != "oauth-access-secret-marker" {
+		if auth == "oauth-serve-stale-model-large-401" {
+			http.Error(w, strings.Repeat("raw model auth failure body", int(provider.MaxUpstreamModelsBodyBytes/16)+1), http.StatusUnauthorized)
+			return
+		}
+		if !isServeCheckCodexAccess(auth) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -2588,6 +2686,7 @@ func (u *serveCheckUpstream) handleServeCheckModels(w http.ResponseWriter, r *ht
 	}
 	u.mu.Lock()
 	fail := u.observed["models-fail"]
+	rateLimit := u.observed["models-429"]
 	tooLarge := u.observed["models-too-large"]
 	malformed := u.observed["models-malformed"]
 	trailing := u.observed["models-trailing"]
@@ -2604,6 +2703,10 @@ func (u *serveCheckUpstream) handleServeCheckModels(w http.ResponseWriter, r *ht
 	}
 	if fail {
 		http.Error(w, "raw model failure body", http.StatusServiceUnavailable)
+		return
+	}
+	if rateLimit {
+		http.Error(w, "raw model rate limit body", http.StatusTooManyRequests)
 		return
 	}
 	if tooLarge {
@@ -2638,10 +2741,28 @@ func (u *serveCheckUpstream) handleServeCheckModels(w http.ResponseWriter, r *ht
 	_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"deepseek-v4-pro","object":"model","owned_by":"deepseek"},{"id":"","object":"model"}]}`))
 }
 
+func isServeCheckCodexAccess(auth string) bool {
+	switch auth {
+	case "oauth-access-secret-marker",
+		"oauth-serve-refreshed-model",
+		"oauth-serve-refreshed-chat",
+		"oauth-serve-refreshed-first-with-other",
+		"oauth-serve-refreshed-model-401",
+		"oauth-serve-refreshed-chat-401",
+		"oauth-serve-refreshed-model-large-401",
+		"oauth-serve-other-valid-access",
+		"oauth-serve-refreshed-concurrent":
+		return true
+	default:
+		return false
+	}
+}
+
 func (u *serveCheckUpstream) setModelsMode(mode string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	delete(u.observed, "models-fail")
+	delete(u.observed, "models-429")
 	delete(u.observed, "models-too-large")
 	delete(u.observed, "models-malformed")
 	delete(u.observed, "models-trailing")
@@ -2942,6 +3063,589 @@ func exerciseCodexCancellationCheck(ctx context.Context, base, token string, sto
 	return assertLatestCodexChatMetadata(ctx, store, "codex-client-cancel", http.StatusBadGateway, "client_disconnected")
 }
 
+func exerciseCodexServeOAuthRefreshCheck(ctx context.Context, cfg config.Config, fakeUpstream *serveCheckUpstream) error {
+	fakeRefresh := newServeRefreshAuthServer()
+	defer fakeRefresh.server.Close()
+	refreshCfg := cfg
+	refreshCfg.Providers = map[string]config.ProviderConfig{
+		"codex":    {Type: "codex", AuthIssuer: fakeRefresh.server.URL},
+		"deepseek": {Type: "deepseek"},
+	}
+	registry, err := provider.NewRegistry(refreshCfg)
+	if err != nil {
+		return err
+	}
+	checkDBDir, err := os.MkdirTemp("", "ilonasin-serve-check-oauth-refresh-db-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(checkDBDir)
+	store, err := sqlite.Open(ctx, filepath.Join(checkDBDir, "ilonasin.sqlite"))
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	tokenService := credentials.Service{Repo: store}
+	created, err := tokenService.Create(ctx, "serve-refresh")
+	if err != nil {
+		return err
+	}
+	now := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
+	refresher := provider.NewHTTPOAuthRefresher(fakeRefresh.server.Client())
+	refresher.Timeout = 100 * time.Millisecond
+	upstreams := &credentials.UpstreamService{
+		Registry:       registry,
+		Repo:           store,
+		OAuthRefresher: refresher,
+		Now:            func() time.Time { return now },
+	}
+	checkRegistry := baseURLOverrideRegistry{Registry: registry, baseURL: fakeUpstream.server.URL, authIssuer: fakeRefresh.server.URL}
+	handler := server.NewWithClock(checkRegistry, tokenService, upstreams, upstreams, chatAdapters(fakeUpstream.server.Client()), modelDiscoverers(fakeUpstream.server.Client()), store, store, func() time.Time { return now }).Handler()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return err
+	}
+	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second}
+	errc := make(chan error, 1)
+	go func() { errc <- srv.Serve(listener) }()
+	defer srv.Shutdown(context.Background())
+	base := "http://" + listener.Addr().String()
+	expiredAt := now.Add(-time.Minute)
+	chatBody := []byte(`{"model":"codex/gpt-5.5-codex","messages":[{"role":"system","content":"codex system marker"},{"role":"user","content":"check"},{"role":"assistant","content":"prior"}]}`)
+
+	modelExpired, err := upstreams.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID: "codex", Label: "serve refresh model", AccessToken: "oauth-serve-expired-model",
+		RefreshToken: "oauth-serve-refresh-model", AccountID: "serve-refresh-model", AccountDisplayLabel: "Serve Refresh Model", ExpiresAt: &expiredAt,
+	})
+	if err != nil {
+		return err
+	}
+	if status, err := getStatus(base+"/v1/models", created.Token); err != nil || status != http.StatusOK {
+		return fmt.Errorf("codex expired model refresh status=%d err=%v", status, err)
+	}
+	if !fakeUpstream.sawAuth("codex-models", "oauth-serve-refreshed-model") || fakeUpstream.sawAuth("codex-models", "oauth-serve-expired-model") || fakeRefresh.requestCountFor("oauth-serve-refresh-model") != 1 {
+		return fmt.Errorf("codex expired model refresh used wrong bearer or count")
+	}
+	if err := disableProviderCredential(ctx, store, modelExpired.ID, now); err != nil {
+		return err
+	}
+
+	chatExpired, err := upstreams.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID: "codex", Label: "serve refresh chat", AccessToken: "oauth-serve-expired-chat",
+		RefreshToken: "oauth-serve-refresh-chat", AccountID: "serve-refresh-chat", AccountDisplayLabel: "Serve Refresh Chat", ExpiresAt: &expiredAt,
+	})
+	if err != nil {
+		return err
+	}
+	if status, _, err := postJSON(base+"/v1/chat/completions", created.Token, chatBody); err != nil || status != http.StatusOK {
+		return fmt.Errorf("codex expired chat refresh status=%d err=%v", status, err)
+	}
+	if !fakeUpstream.sawAuth("codex-chat", "oauth-serve-refreshed-chat") || fakeUpstream.sawAuth("codex-chat", "oauth-serve-expired-chat") || fakeRefresh.requestCountFor("oauth-serve-refresh-chat") != 1 {
+		return fmt.Errorf("codex expired chat refresh used wrong bearer or count")
+	}
+	if err := disableProviderCredential(ctx, store, chatExpired.ID, now); err != nil {
+		return err
+	}
+
+	expiredBeforeOther, err := upstreams.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID: "codex", Label: "serve refresh first with other", AccessToken: "oauth-serve-expired-first-with-other",
+		RefreshToken: "oauth-serve-refresh-first-with-other", AccountID: "serve-refresh-first-with-other", AccountDisplayLabel: "Serve Refresh First With Other", ExpiresAt: &expiredAt,
+	})
+	if err != nil {
+		return err
+	}
+	validOtherAfterExpired, err := upstreams.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID: "codex", Label: "serve refresh valid other", AccessToken: "oauth-serve-other-valid-access",
+		RefreshToken: "oauth-serve-other-valid-refresh", AccountID: "serve-refresh-valid-other", AccountDisplayLabel: "Serve Refresh Valid Other",
+	})
+	if err != nil {
+		return err
+	}
+	if status, err := getStatus(base+"/v1/models", created.Token); err != nil || status != http.StatusOK {
+		return fmt.Errorf("codex expired first with other status=%d err=%v", status, err)
+	}
+	if !fakeUpstream.sawAuth("codex-models", "oauth-serve-refreshed-first-with-other") || fakeUpstream.sawAuth("codex-models", "oauth-serve-other-valid-access") || fakeRefresh.requestCountFor("oauth-serve-refresh-first-with-other") != 1 {
+		return fmt.Errorf("codex expired first with other used wrong bearer or count")
+	}
+	if err := disableProviderCredential(ctx, store, expiredBeforeOther.ID, now); err != nil {
+		return err
+	}
+	if err := disableProviderCredential(ctx, store, validOtherAfterExpired.ID, now); err != nil {
+		return err
+	}
+
+	model401, err := upstreams.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID: "codex", Label: "serve refresh model 401", AccessToken: "oauth-serve-stale-model-401",
+		RefreshToken: "oauth-serve-refresh-model-401", AccountID: "serve-refresh-model-401", AccountDisplayLabel: "Serve Refresh Model 401",
+	})
+	if err != nil {
+		return err
+	}
+	otherAccount, err := upstreams.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID: "codex", Label: "serve refresh other account", AccessToken: "oauth-access-secret-marker",
+		RefreshToken: "oauth-serve-other-refresh", AccountID: "serve-refresh-other", AccountDisplayLabel: "Serve Refresh Other",
+	})
+	if err != nil {
+		return err
+	}
+	if status, err := getStatus(base+"/v1/models", created.Token); err != nil || status != http.StatusOK {
+		return fmt.Errorf("codex 401 model refresh status=%d err=%v", status, err)
+	}
+	if !fakeUpstream.sawAuth("codex-models", "oauth-serve-refreshed-model-401") || fakeRefresh.requestCountFor("oauth-serve-refresh-model-401") != 1 {
+		return fmt.Errorf("codex 401 model refresh used wrong bearer or count")
+	}
+	if err := disableProviderCredential(ctx, store, model401.ID, now); err != nil {
+		return err
+	}
+	if err := disableProviderCredential(ctx, store, otherAccount.ID, now); err != nil {
+		return err
+	}
+
+	modelLarge401, err := upstreams.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID: "codex", Label: "serve refresh model large 401", AccessToken: "oauth-serve-stale-model-large-401",
+		RefreshToken: "oauth-serve-refresh-model-large-401", AccountID: "serve-refresh-model-large-401", AccountDisplayLabel: "Serve Refresh Model Large 401",
+	})
+	if err != nil {
+		return err
+	}
+	if status, err := getStatus(base+"/v1/models", created.Token); err != nil || status != http.StatusOK {
+		return fmt.Errorf("codex large 401 model refresh status=%d err=%v", status, err)
+	}
+	if !fakeUpstream.sawAuth("codex-models", "oauth-serve-refreshed-model-large-401") || fakeRefresh.requestCountFor("oauth-serve-refresh-model-large-401") != 1 {
+		return fmt.Errorf("codex large 401 model refresh used wrong bearer or count")
+	}
+	if err := disableProviderCredential(ctx, store, modelLarge401.ID, now); err != nil {
+		return err
+	}
+
+	chat401, err := upstreams.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID: "codex", Label: "serve refresh chat 401", AccessToken: "oauth-serve-stale-chat-401",
+		RefreshToken: "oauth-serve-refresh-chat-401", AccountID: "serve-refresh-chat-401", AccountDisplayLabel: "Serve Refresh Chat 401",
+	})
+	if err != nil {
+		return err
+	}
+	if status, _, err := postJSON(base+"/v1/chat/completions", created.Token, chatBody); err != nil || status != http.StatusOK {
+		return fmt.Errorf("codex 401 chat refresh status=%d err=%v", status, err)
+	}
+	if !fakeUpstream.sawAuth("codex-chat", "oauth-serve-refreshed-chat-401") || fakeRefresh.requestCountFor("oauth-serve-refresh-chat-401") != 1 {
+		return fmt.Errorf("codex 401 chat refresh used wrong bearer or count")
+	}
+	if err := assertLatestCodexChatRetryMetadata(ctx, store, "gpt-5.5-codex", http.StatusOK, "", 1); err != nil {
+		return err
+	}
+	if err := disableProviderCredential(ctx, store, chat401.ID, now); err != nil {
+		return err
+	}
+
+	concurrentModel, err := upstreams.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID: "codex", Label: "serve refresh concurrent model", AccessToken: "oauth-serve-expired-concurrent-model",
+		RefreshToken: "oauth-serve-refresh-concurrent", AccountID: "serve-refresh-concurrent-model", AccountDisplayLabel: "Serve Refresh Concurrent Model", ExpiresAt: &expiredAt,
+	})
+	if err != nil {
+		return err
+	}
+	if err := runConcurrent(6, func() error {
+		status, err := getStatus(base+"/v1/models", created.Token)
+		if err != nil || status != http.StatusOK {
+			return fmt.Errorf("concurrent model status=%d err=%v", status, err)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if count := fakeRefresh.requestCountFor("oauth-serve-refresh-concurrent"); count != 1 {
+		return fmt.Errorf("concurrent model refresh count=%d", count)
+	}
+	if err := disableProviderCredential(ctx, store, concurrentModel.ID, now); err != nil {
+		return err
+	}
+
+	concurrentChat, err := upstreams.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID: "codex", Label: "serve refresh concurrent chat", AccessToken: "oauth-serve-expired-concurrent-chat",
+		RefreshToken: "oauth-serve-refresh-concurrent-chat", AccountID: "serve-refresh-concurrent-chat", AccountDisplayLabel: "Serve Refresh Concurrent Chat", ExpiresAt: &expiredAt,
+	})
+	if err != nil {
+		return err
+	}
+	if err := runConcurrent(6, func() error {
+		status, _, err := postJSON(base+"/v1/chat/completions", created.Token, chatBody)
+		if err != nil || status != http.StatusOK {
+			return fmt.Errorf("concurrent chat status=%d err=%v", status, err)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if count := fakeRefresh.requestCountFor("oauth-serve-refresh-concurrent-chat"); count != 1 {
+		return fmt.Errorf("concurrent chat refresh count=%d", count)
+	}
+	if err := disableProviderCredential(ctx, store, concurrentChat.ID, now); err != nil {
+		return err
+	}
+	concurrentModel401, err := upstreams.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID: "codex", Label: "serve refresh concurrent model 401", AccessToken: "oauth-serve-stale-concurrent-401",
+		RefreshToken: "oauth-serve-refresh-concurrent-401", AccountID: "serve-refresh-concurrent-model-401", AccountDisplayLabel: "Serve Refresh Concurrent Model 401",
+	})
+	if err != nil {
+		return err
+	}
+	if err := runConcurrent(6, func() error {
+		status, err := getStatus(base+"/v1/models", created.Token)
+		if err != nil || status != http.StatusOK {
+			return fmt.Errorf("concurrent 401 model status=%d err=%v", status, err)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if count := fakeRefresh.requestCountFor("oauth-serve-refresh-concurrent-401"); count != 1 {
+		return fmt.Errorf("concurrent 401 model refresh count=%d", count)
+	}
+	if err := disableProviderCredential(ctx, store, concurrentModel401.ID, now); err != nil {
+		return err
+	}
+	concurrentChat401, err := upstreams.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID: "codex", Label: "serve refresh concurrent chat 401", AccessToken: "oauth-serve-stale-concurrent-chat-401",
+		RefreshToken: "oauth-serve-refresh-concurrent-chat-401", AccountID: "serve-refresh-concurrent-chat-401", AccountDisplayLabel: "Serve Refresh Concurrent Chat 401",
+	})
+	if err != nil {
+		return err
+	}
+	if err := runConcurrent(6, func() error {
+		status, _, err := postJSON(base+"/v1/chat/completions", created.Token, chatBody)
+		if err != nil || status != http.StatusOK {
+			return fmt.Errorf("concurrent 401 chat status=%d err=%v", status, err)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if count := fakeRefresh.requestCountFor("oauth-serve-refresh-concurrent-chat-401"); count != 1 {
+		return fmt.Errorf("concurrent 401 chat refresh count=%d", count)
+	}
+	if err := disableProviderCredential(ctx, store, concurrentChat401.ID, now); err != nil {
+		return err
+	}
+	if err := exerciseServeOAuthRefreshMalformedAccess(ctx, store, upstreams, fakeRefresh, now); err != nil {
+		return err
+	}
+	if err := exerciseServeOAuthRefreshFailureSemantics(ctx, base, created.Token, chatBody, store, upstreams, fakeUpstream, fakeRefresh, now); err != nil {
+		return err
+	}
+
+	if err := assertServeCheckOAuthRefreshSafety(ctx, store); err != nil {
+		return err
+	}
+	_ = srv.Shutdown(context.Background())
+	select {
+	case err := <-errc:
+		if err != nil && err != http.ErrServerClosed {
+			return err
+		}
+	case <-time.After(time.Second):
+		return fmt.Errorf("serve refresh server did not shut down")
+	}
+	return nil
+}
+
+func exerciseServeOAuthRefreshMalformedAccess(ctx context.Context, store *sqlite.Store, upstreams *credentials.UpstreamService, fakeRefresh *serveRefreshAuthServer, now time.Time) error {
+	disabled, err := upstreams.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID: "codex", Label: "serve refresh disabled", AccessToken: "oauth-serve-disabled-access",
+		RefreshToken: "oauth-serve-disabled-refresh", AccountID: "serve-refresh-disabled", AccountDisplayLabel: "Disabled Refresh",
+	})
+	if err != nil {
+		return err
+	}
+	if err := disableProviderCredential(ctx, store, disabled.ID, now); err != nil {
+		return err
+	}
+	staleID, err := seedRawOAuthCredential(ctx, store, "stale-provider", "serve refresh stale provider", "oauth-serve-stale-provider-access", "oauth-serve-stale-provider-refresh", now)
+	if err != nil {
+		return err
+	}
+	if err := upstreams.RefreshOAuthCredential(ctx, staleID); !errors.Is(err, credentials.ErrCredentialNotFound) {
+		return fmt.Errorf("stale provider refresh err=%v", err)
+	}
+	ts := now.UTC().Format(time.RFC3339Nano)
+	missingTokenRowResult, err := store.DB.ExecContext(ctx, `
+		INSERT INTO provider_credentials(
+			provider_instance_id, kind, label, secret_prefix, secret_last4, fallback_group, created_at, updated_at
+		) VALUES('codex', 'oauth', 'serve refresh missing token row', '', '', ?, ?, ?)
+	`, credentials.DefaultFallbackGroup, ts, ts)
+	if err != nil {
+		return err
+	}
+	missingTokenRowID, err := missingTokenRowResult.LastInsertId()
+	if err != nil {
+		return err
+	}
+	if err := upstreams.RefreshOAuthProviderCredential(ctx, "codex"); !errors.Is(err, credentials.ErrNoEligibleCredential) {
+		return fmt.Errorf("missing token row refresh err=%v", err)
+	}
+	if err := disableProviderCredential(ctx, store, missingTokenRowID, now); err != nil {
+		return err
+	}
+	nullAccess, err := upstreams.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID: "codex", Label: "serve refresh null access", AccessToken: "oauth-serve-null-access",
+		RefreshToken: "oauth-serve-null-refresh", AccountID: "serve-refresh-null-access", AccountDisplayLabel: "Null Access",
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := store.DB.ExecContext(ctx, `UPDATE oauth_tokens SET access_token_secret_id = NULL WHERE credential_id = ?`, nullAccess.ID); err != nil {
+		return err
+	}
+	missingAccess, err := upstreams.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID: "codex", Label: "serve refresh missing access", AccessToken: "oauth-serve-missing-access",
+		RefreshToken: "oauth-serve-missing-refresh", AccountID: "serve-refresh-missing-access", AccountDisplayLabel: "Missing Access",
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := store.DB.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+		return err
+	}
+	if _, err := store.DB.ExecContext(ctx, `UPDATE oauth_tokens SET access_token_secret_id = 999999 WHERE credential_id = ?`, missingAccess.ID); err != nil {
+		return err
+	}
+	if _, err := store.DB.ExecContext(ctx, `PRAGMA foreign_keys = ON`); err != nil {
+		return err
+	}
+	crossSource, err := upstreams.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID: "codex", Label: "serve refresh cross source", AccessToken: "oauth-serve-cross-source-access",
+		RefreshToken: "oauth-serve-cross-source-refresh", AccountID: "serve-refresh-cross-source", AccountDisplayLabel: "Cross Source",
+	})
+	if err != nil {
+		return err
+	}
+	var crossAccessID int64
+	if err := store.DB.QueryRowContext(ctx, `SELECT access_token_secret_id FROM oauth_tokens WHERE credential_id = ?`, crossSource.ID).Scan(&crossAccessID); err != nil {
+		return err
+	}
+	if err := disableProviderCredential(ctx, store, crossSource.ID, now); err != nil {
+		return err
+	}
+	crossLinked, err := upstreams.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID: "codex", Label: "serve refresh cross linked", AccessToken: "oauth-serve-cross-linked-access",
+		RefreshToken: "oauth-serve-cross-linked-refresh", AccountID: "serve-refresh-cross-linked", AccountDisplayLabel: "Cross Linked",
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := store.DB.ExecContext(ctx, `UPDATE oauth_tokens SET access_token_secret_id = ? WHERE credential_id = ?`, crossAccessID, crossLinked.ID); err != nil {
+		return err
+	}
+	if err := upstreams.RefreshOAuthProviderCredential(ctx, "codex"); !errors.Is(err, credentials.ErrNoEligibleCredential) {
+		return fmt.Errorf("malformed access refresh err=%v", err)
+	}
+	for _, marker := range []string{"oauth-serve-disabled-refresh", "oauth-serve-stale-provider-refresh", "oauth-serve-null-refresh", "oauth-serve-missing-refresh", "oauth-serve-cross-linked-refresh"} {
+		if fakeRefresh.requestCountFor(marker) != 0 {
+			return fmt.Errorf("malformed access refresh token was read")
+		}
+	}
+	for _, id := range []int64{nullAccess.ID, missingAccess.ID, crossLinked.ID} {
+		if err := disableProviderCredential(ctx, store, id, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func exerciseServeOAuthRefreshFailureSemantics(ctx context.Context, base, token string, chatBody []byte, store *sqlite.Store, upstreams *credentials.UpstreamService, fakeUpstream *serveCheckUpstream, fakeRefresh *serveRefreshAuthServer, now time.Time) error {
+	expiredAt := now.Add(-time.Minute)
+	refreshFailure, err := upstreams.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID: "codex", Label: "serve refresh failure", AccessToken: "oauth-serve-refresh-failure-access",
+		RefreshToken: "oauth-serve-refresh-failure-token", AccountID: "serve-refresh-failure", AccountDisplayLabel: "Serve Refresh Failure", ExpiresAt: &expiredAt,
+	})
+	if err != nil {
+		return err
+	}
+	beforeFailures, err := metadataErrorCount(ctx, store, "credential_unavailable")
+	if err != nil {
+		return err
+	}
+	status, respBody, err := postJSON(base+"/v1/chat/completions", token, chatBody)
+	if err != nil || status != http.StatusUnauthorized || bytes.Contains(respBody, []byte("raw refresh failure marker")) || bytes.Contains(respBody, []byte("oauth-serve-refresh-failure")) {
+		return fmt.Errorf("refresh failure chat status=%d err=%v", status, err)
+	}
+	if after, err := metadataErrorCount(ctx, store, "credential_unavailable"); err != nil || after <= beforeFailures {
+		return fmt.Errorf("refresh failure metadata count did not increase")
+	}
+	if fakeUpstream.sawAuth("codex-chat", "oauth-serve-refresh-failure-access") || fakeRefresh.requestCountFor("oauth-serve-refresh-failure-token") != 1 {
+		return fmt.Errorf("refresh failure sent stale chat bearer or wrong refresh count")
+	}
+	if err := disableProviderCredential(ctx, store, refreshFailure.ID, now); err != nil {
+		return err
+	}
+
+	modelRefreshFailure, err := upstreams.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID: "codex", Label: "serve model refresh failure", AccessToken: "oauth-serve-model-refresh-failure-access",
+		RefreshToken: "oauth-serve-model-refresh-failure-token", AccountID: "serve-model-refresh-failure", AccountDisplayLabel: "Serve Model Refresh Failure", ExpiresAt: &expiredAt,
+	})
+	if err != nil {
+		return err
+	}
+	status, respBody, err = getJSON(base+"/v1/models", token)
+	if err != nil || status != http.StatusBadGateway || bytes.Contains(respBody, []byte("gpt-5.5-codex")) || bytes.Contains(respBody, []byte("oauth-serve-model-refresh-failure")) || bytes.Contains(respBody, []byte("raw refresh failure marker")) {
+		return fmt.Errorf("model refresh failure status=%d err=%v", status, err)
+	}
+	if fakeUpstream.sawAuth("codex-models", "oauth-serve-model-refresh-failure-access") || fakeRefresh.requestCountFor("oauth-serve-model-refresh-failure-token") != 1 {
+		return fmt.Errorf("model refresh failure sent stale bearer or wrong refresh count")
+	}
+	if err := disableProviderCredential(ctx, store, modelRefreshFailure.ID, now); err != nil {
+		return err
+	}
+
+	noRefresh, err := upstreams.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID: "codex", Label: "serve missing refresh", AccessToken: "oauth-serve-missing-refresh-access",
+		RefreshToken: "oauth-serve-missing-refresh-token", AccountID: "serve-missing-refresh", AccountDisplayLabel: "Serve Missing Refresh", ExpiresAt: &expiredAt,
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := store.DB.ExecContext(ctx, `UPDATE oauth_tokens SET refresh_token_secret_id = NULL WHERE credential_id = ?`, noRefresh.ID); err != nil {
+		return err
+	}
+	status, respBody, err = postJSON(base+"/v1/chat/completions", token, chatBody)
+	if err != nil || status != http.StatusUnauthorized || bytes.Contains(respBody, []byte("oauth-serve-missing-refresh")) {
+		return fmt.Errorf("missing refresh chat status=%d err=%v", status, err)
+	}
+	if fakeRefresh.requestCountFor("oauth-serve-missing-refresh-token") != 0 {
+		return fmt.Errorf("missing refresh token was read")
+	}
+	if err := disableProviderCredential(ctx, store, noRefresh.ID, now); err != nil {
+		return err
+	}
+
+	noRefreshModel, err := upstreams.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID: "codex", Label: "serve model missing refresh", AccessToken: "oauth-serve-model-missing-refresh-access",
+		RefreshToken: "oauth-serve-model-missing-refresh-token", AccountID: "serve-model-missing-refresh", AccountDisplayLabel: "Serve Model Missing Refresh", ExpiresAt: &expiredAt,
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := store.DB.ExecContext(ctx, `UPDATE oauth_tokens SET refresh_token_secret_id = NULL WHERE credential_id = ?`, noRefreshModel.ID); err != nil {
+		return err
+	}
+	status, respBody, err = getJSON(base+"/v1/models", token)
+	if err != nil || status != http.StatusBadGateway || bytes.Contains(respBody, []byte("gpt-5.5-codex")) || bytes.Contains(respBody, []byte("oauth-serve-model-missing-refresh")) {
+		return fmt.Errorf("model missing refresh status=%d err=%v", status, err)
+	}
+	if fakeRefresh.requestCountFor("oauth-serve-model-missing-refresh-token") != 0 {
+		return fmt.Errorf("model missing refresh token was read")
+	}
+	if err := disableProviderCredential(ctx, store, noRefreshModel.ID, now); err != nil {
+		return err
+	}
+
+	retryFailure, err := upstreams.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID: "codex", Label: "serve retry failure", AccessToken: "oauth-serve-stale-retry-failure",
+		RefreshToken: "oauth-serve-retry-failure-token", AccountID: "serve-retry-failure", AccountDisplayLabel: "Serve Retry Failure",
+	})
+	if err != nil {
+		return err
+	}
+	beforeAuthFailures, err := metadataErrorCount(ctx, store, "upstream_auth_failed")
+	if err != nil {
+		return err
+	}
+	status, respBody, err = postJSON(base+"/v1/chat/completions", token, []byte(`{"model":"codex/codex-401-repeat","messages":[{"role":"user","content":"check"}]}`))
+	if err != nil || status != http.StatusBadGateway || bytes.Contains(respBody, []byte("raw codex auth body")) || bytes.Contains(respBody, []byte("oauth-serve-retry-failure")) {
+		return fmt.Errorf("retry failure chat status=%d err=%v", status, err)
+	}
+	if after, err := metadataErrorCount(ctx, store, "upstream_auth_failed"); err != nil || after <= beforeAuthFailures {
+		return fmt.Errorf("retry failure metadata count did not increase")
+	}
+	if fakeRefresh.requestCountFor("oauth-serve-retry-failure-token") != 1 {
+		return fmt.Errorf("retry failure refresh count mismatch")
+	}
+	if err := disableProviderCredential(ctx, store, retryFailure.ID, now); err != nil {
+		return err
+	}
+
+	noRefresh429, err := upstreams.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID: "codex", Label: "serve no refresh 429", AccessToken: "oauth-access-secret-marker",
+		RefreshToken: "oauth-serve-no-refresh-429", AccountID: "serve-no-refresh-429", AccountDisplayLabel: "Serve No Refresh 429",
+	})
+	if err != nil {
+		return err
+	}
+	status, _, err = postJSON(base+"/v1/chat/completions", token, []byte(`{"model":"codex/codex-429","messages":[{"role":"user","content":"check"}]}`))
+	if err != nil || status != http.StatusBadGateway {
+		return fmt.Errorf("429 no refresh chat status=%d err=%v", status, err)
+	}
+	if fakeRefresh.requestCountFor("oauth-serve-no-refresh-429") != 0 {
+		return fmt.Errorf("429 triggered refresh")
+	}
+	fakeUpstream.setModelsMode("models-429")
+	if status, err := getStatus(base+"/v1/models", token); err != nil || status != http.StatusOK {
+		return fmt.Errorf("429 no refresh models status=%d err=%v", status, err)
+	}
+	fakeUpstream.setModelsMode("")
+	if fakeRefresh.requestCountFor("oauth-serve-no-refresh-429") != 0 {
+		return fmt.Errorf("model 429 triggered refresh")
+	}
+	if err := disableProviderCredential(ctx, store, noRefresh429.ID, now); err != nil {
+		return err
+	}
+
+	noRefresh5xx, err := upstreams.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID: "codex", Label: "serve no refresh 5xx", AccessToken: "oauth-access-secret-marker",
+		RefreshToken: "oauth-serve-no-refresh-5xx", AccountID: "serve-no-refresh-5xx", AccountDisplayLabel: "Serve No Refresh 5xx",
+	})
+	if err != nil {
+		return err
+	}
+	status, respBody, err = postJSON(base+"/v1/chat/completions", token, []byte(`{"model":"codex/codex-http-error","messages":[{"role":"user","content":"check"}]}`))
+	if err != nil || status != http.StatusBadGateway || bytes.Contains(respBody, []byte("raw codex http body")) {
+		return fmt.Errorf("5xx no refresh chat status=%d err=%v", status, err)
+	}
+	if fakeRefresh.requestCountFor("oauth-serve-no-refresh-5xx") != 0 {
+		return fmt.Errorf("5xx chat triggered refresh")
+	}
+	fakeUpstream.setModelsMode("models-fail")
+	if status, err := getStatus(base+"/v1/models", token); err != nil || status != http.StatusOK {
+		return fmt.Errorf("5xx no refresh models status=%d err=%v", status, err)
+	}
+	fakeUpstream.setModelsMode("")
+	if fakeRefresh.requestCountFor("oauth-serve-no-refresh-5xx") != 0 {
+		return fmt.Errorf("model 5xx triggered refresh")
+	}
+	if err := disableProviderCredential(ctx, store, noRefresh5xx.ID, now); err != nil {
+		return err
+	}
+	return nil
+}
+
+func metadataErrorCount(ctx context.Context, store *sqlite.Store, errorClass string) (int, error) {
+	var count int
+	if err := store.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM request_metadata WHERE error_class = ?`, errorClass).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func assertLatestCodexChatRetryMetadata(ctx context.Context, store *sqlite.Store, model string, status int, errorClass string, retryCount int) error {
+	var gotStatus, gotRetry int
+	var gotClass string
+	err := store.DB.QueryRowContext(ctx, `
+		SELECT http_status, error_class, retry_count
+		FROM request_metadata
+		WHERE requested_provider_instance = 'codex'
+			AND requested_model = ?
+		ORDER BY id DESC
+		LIMIT 1
+	`, model).Scan(&gotStatus, &gotClass, &gotRetry)
+	if err != nil {
+		return err
+	}
+	if gotStatus != status || gotClass != errorClass || gotRetry != retryCount {
+		return fmt.Errorf("codex retry metadata %s status=%d class=%s retry=%d", model, gotStatus, gotClass, gotRetry)
+	}
+	return nil
+}
+
 func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance provider.Instance, fakeUpstream *serveCheckUpstream, store *sqlite.Store) error {
 	modelID := "deepseek-v4-pro"
 	if instance.Type == "openrouter" {
@@ -3238,7 +3942,7 @@ func exerciseCodexNoEligibleCacheCheck(ctx context.Context, registry provider.Re
 	defer store.Close()
 	checkNow := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
 	tokenService := credentials.Service{Repo: store}
-	upstreams := credentials.UpstreamService{Registry: registry, Repo: store, Now: func() time.Time { return checkNow }}
+	upstreams := &credentials.UpstreamService{Registry: registry, Repo: store, Now: func() time.Time { return checkNow }}
 	created, err := tokenService.Create(ctx, "codex-noeligible")
 	if err != nil {
 		return err
@@ -3328,7 +4032,7 @@ func exerciseCodexNoEligibleCacheCheck(ctx context.Context, registry provider.Re
 	testServer := httptest.NewServer(handler)
 	defer testServer.Close()
 	status, respBody, err := getJSON(testServer.URL+"/v1/models", created.Token)
-	if err != nil || status != http.StatusOK {
+	if err != nil || status != http.StatusBadGateway {
 		return fmt.Errorf("codex no-eligible cache status=%d err=%v", status, err)
 	}
 	if hasLocalModelFromBody(respBody, "codex/") || fakeUpstream.sawCodexModels() {
@@ -3744,6 +4448,136 @@ func assertServeCheckOAuthMarkerPlacement(ctx context.Context, store *sqlite.Sto
 		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func assertServeCheckOAuthRefreshSafety(ctx context.Context, store *sqlite.Store) error {
+	for _, marker := range []string{
+		"oauth-serve-expired-model",
+		"oauth-serve-expired-chat",
+		"oauth-serve-stale-model-401",
+		"oauth-serve-stale-chat-401",
+		"oauth-serve-refresh-model",
+		"oauth-serve-refreshed-model",
+		"oauth-serve-refresh-chat",
+		"oauth-serve-refreshed-chat",
+		"oauth-serve-expired-first-with-other",
+		"oauth-serve-refresh-first-with-other",
+		"oauth-serve-refreshed-first-with-other",
+		"oauth-serve-other-valid-access",
+		"oauth-serve-other-valid-refresh",
+		"oauth-serve-refresh-model-401",
+		"oauth-serve-refreshed-model-401",
+		"oauth-serve-refresh-chat-401",
+		"oauth-serve-refreshed-chat-401",
+		"oauth-serve-stale-model-large-401",
+		"oauth-serve-refresh-model-large-401",
+		"oauth-serve-refreshed-model-large-401",
+		"oauth-serve-other-refresh",
+		"oauth-serve-refresh-concurrent",
+		"oauth-serve-refreshed-concurrent",
+		"oauth-serve-refresh-concurrent-chat",
+		"oauth-serve-expired-concurrent-model",
+		"oauth-serve-expired-concurrent-chat",
+		"oauth-serve-stale-concurrent-401",
+		"oauth-serve-refresh-concurrent-401",
+		"oauth-serve-stale-concurrent-chat-401",
+		"oauth-serve-refresh-concurrent-chat-401",
+		"oauth-serve-disabled-access",
+		"oauth-serve-disabled-refresh",
+		"oauth-serve-stale-provider-access",
+		"oauth-serve-stale-provider-refresh",
+		"oauth-serve-null-access",
+		"oauth-serve-null-refresh",
+		"oauth-serve-missing-access",
+		"oauth-serve-missing-refresh",
+		"oauth-serve-cross-source-access",
+		"oauth-serve-cross-source-refresh",
+		"oauth-serve-cross-linked-access",
+		"oauth-serve-cross-linked-refresh",
+		"oauth-serve-refresh-failure-access",
+		"oauth-serve-refresh-failure-token",
+		"oauth-serve-model-refresh-failure-access",
+		"oauth-serve-model-refresh-failure-token",
+		"oauth-serve-missing-refresh-access",
+		"oauth-serve-missing-refresh-token",
+		"oauth-serve-model-missing-refresh-access",
+		"oauth-serve-model-missing-refresh-token",
+		"oauth-serve-stale-retry-failure",
+		"oauth-serve-retry-failure-token",
+		"oauth-serve-no-refresh-429",
+		"oauth-serve-no-refresh-5xx",
+		"serve-refresh-model",
+		"serve-refresh-chat",
+		"serve-refresh-first-with-other",
+		"serve-refresh-valid-other",
+		"serve-refresh-model-401",
+		"serve-refresh-chat-401",
+		"serve-refresh-model-large-401",
+		"serve-refresh-other",
+		"serve-refresh-concurrent-model",
+		"serve-refresh-concurrent-chat",
+		"serve-refresh-concurrent-model-401",
+		"serve-refresh-concurrent-chat-401",
+		"serve-refresh-disabled",
+		"serve-refresh-stale-provider",
+		"serve-refresh-null-access",
+		"serve-refresh-missing-access",
+		"serve-refresh-cross-source",
+		"serve-refresh-cross-linked",
+		"serve-refresh-failure",
+		"serve-model-refresh-failure",
+		"serve-missing-refresh",
+		"serve-model-missing-refresh",
+		"serve-retry-failure",
+		"serve-no-refresh-429",
+		"serve-no-refresh-5xx",
+	} {
+		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func runConcurrent(n int, fn func() error) error {
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := fn(); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func disableProviderCredential(ctx context.Context, store *sqlite.Store, credentialID int64, at time.Time) error {
+	res, err := store.DB.ExecContext(ctx, `
+		UPDATE provider_credentials
+		SET disabled_at = COALESCE(disabled_at, ?), updated_at = ?
+		WHERE id = ?
+	`, at.UTC().Format(time.RFC3339Nano), at.UTC().Format(time.RFC3339Nano), credentialID)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return credentials.ErrCredentialNotFound
 	}
 	return nil
 }

@@ -39,6 +39,7 @@ type ModelRequest struct {
 type ModelResult struct {
 	Models     []ModelMetadata
 	ErrorClass string
+	StatusCode int
 }
 
 type ModelMetadata struct {

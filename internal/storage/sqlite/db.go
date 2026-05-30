@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -61,19 +62,45 @@ func (s *Store) Migrate(ctx context.Context) error {
 		return err
 	}
 	defer tx.Rollback()
-	for _, stmt := range migration001 {
+
+	for _, stmt := range migration001[:1] {
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {
 			return err
 		}
 	}
-	_, err = tx.ExecContext(ctx, `
-		INSERT OR IGNORE INTO migrations(version, name, applied_at)
-		VALUES(1, 'initial_schema', ?)
-	`, time.Now().UTC().Format(time.RFC3339Nano))
-	if err != nil {
-		return err
+	for _, m := range migrations {
+		applied, err := migrationApplied(ctx, tx, m.version)
+		if err != nil {
+			return err
+		}
+		if applied {
+			continue
+		}
+		for _, stmt := range m.stmts {
+			if _, err := tx.ExecContext(ctx, stmt); err != nil {
+				return err
+			}
+		}
+		if _, err = tx.ExecContext(ctx, `
+			INSERT INTO migrations(version, name, applied_at)
+			VALUES(?, ?, ?)
+		`, m.version, m.name, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
+}
+
+func migrationApplied(ctx context.Context, tx *sql.Tx, version int) (bool, error) {
+	var exists int
+	err := tx.QueryRowContext(ctx, `SELECT 1 FROM migrations WHERE version = ?`, version).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *Store) InsertLocalToken(ctx context.Context, meta credentials.NewLocalTokenMetadata) (credentials.LocalTokenMetadata, error) {
@@ -179,6 +206,136 @@ func scanLocalTokenMetadata(row localTokenScanner) (credentials.LocalTokenMetada
 		meta.Disabled = true
 	}
 	return meta, nil
+}
+
+func (s *Store) InsertAPIKeyCredential(ctx context.Context, meta credentials.NewUpstreamCredential, apiKey string) (credentials.UpstreamCredentialMetadata, error) {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return credentials.UpstreamCredentialMetadata{}, err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `
+		INSERT INTO provider_credentials(
+			provider_instance_id, kind, label, secret_prefix, secret_last4, created_at, updated_at
+		) VALUES(?, ?, ?, ?, ?, ?, ?)
+	`, meta.ProviderInstanceID, meta.Kind, meta.Label, meta.SecretPrefix, meta.SecretLast4,
+		meta.CreatedAt.UTC().Format(time.RFC3339Nano), meta.CreatedAt.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		if isUniqueConstraint(err) {
+			return credentials.UpstreamCredentialMetadata{}, credentials.ErrDuplicateCredential
+		}
+		return credentials.UpstreamCredentialMetadata{}, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return credentials.UpstreamCredentialMetadata{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO credential_secrets(credential_id, secret_kind, secret_material, created_at, updated_at)
+		VALUES(?, 'api_key', ?, ?, ?)
+	`, id, apiKey, meta.CreatedAt.UTC().Format(time.RFC3339Nano), meta.CreatedAt.UTC().Format(time.RFC3339Nano)); err != nil {
+		return credentials.UpstreamCredentialMetadata{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return credentials.UpstreamCredentialMetadata{}, err
+	}
+	return credentials.UpstreamCredentialMetadata{
+		ID:                 id,
+		ProviderInstanceID: meta.ProviderInstanceID,
+		Kind:               meta.Kind,
+		Label:              meta.Label,
+		SecretPrefix:       meta.SecretPrefix,
+		SecretLast4:        meta.SecretLast4,
+		CreatedAt:          meta.CreatedAt.UTC(),
+	}, nil
+}
+
+func (s *Store) ListUpstreamCredentials(ctx context.Context) ([]credentials.UpstreamCredentialMetadata, error) {
+	rows, err := s.DB.QueryContext(ctx, `
+		SELECT id, provider_instance_id, kind, label, secret_prefix, secret_last4, created_at, disabled_at
+		FROM provider_credentials
+		ORDER BY id ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []credentials.UpstreamCredentialMetadata
+	for rows.Next() {
+		meta, err := scanUpstreamCredentialMetadata(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, meta)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) DisableUpstreamCredential(ctx context.Context, id int64, disabledAt time.Time) error {
+	res, err := s.DB.ExecContext(ctx, `
+		UPDATE provider_credentials
+		SET disabled_at = COALESCE(disabled_at, ?), updated_at = ?
+		WHERE id = ?
+	`, disabledAt.UTC().Format(time.RFC3339Nano), disabledAt.UTC().Format(time.RFC3339Nano), id)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return credentials.ErrCredentialNotFound
+	}
+	return nil
+}
+
+func (s *Store) ResolveAPIKeyCredential(ctx context.Context, providerInstanceID string) (credentials.ResolvedAPIKeyCredential, error) {
+	row := s.DB.QueryRowContext(ctx, `
+		SELECT pc.id, pc.provider_instance_id, pc.label, cs.secret_material
+		FROM provider_credentials pc
+		JOIN credential_secrets cs ON cs.credential_id = pc.id AND cs.secret_kind = 'api_key'
+		WHERE pc.provider_instance_id = ?
+			AND pc.kind = 'api_key'
+			AND pc.disabled_at IS NULL
+		ORDER BY pc.id ASC
+		LIMIT 1
+	`, providerInstanceID)
+	var out credentials.ResolvedAPIKeyCredential
+	if err := row.Scan(&out.ID, &out.ProviderInstanceID, &out.Label, &out.APIKey); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return credentials.ResolvedAPIKeyCredential{}, credentials.ErrNoEligibleCredential
+		}
+		return credentials.ResolvedAPIKeyCredential{}, err
+	}
+	return out, nil
+}
+
+func scanUpstreamCredentialMetadata(row localTokenScanner) (credentials.UpstreamCredentialMetadata, error) {
+	var meta credentials.UpstreamCredentialMetadata
+	var created string
+	var disabled sql.NullString
+	if err := row.Scan(&meta.ID, &meta.ProviderInstanceID, &meta.Kind, &meta.Label, &meta.SecretPrefix, &meta.SecretLast4, &created, &disabled); err != nil {
+		return credentials.UpstreamCredentialMetadata{}, err
+	}
+	createdAt, err := time.Parse(time.RFC3339Nano, created)
+	if err != nil {
+		return credentials.UpstreamCredentialMetadata{}, err
+	}
+	meta.CreatedAt = createdAt
+	if disabled.Valid {
+		disabledAt, err := time.Parse(time.RFC3339Nano, disabled.String)
+		if err != nil {
+			return credentials.UpstreamCredentialMetadata{}, err
+		}
+		meta.DisabledAt = &disabledAt
+		meta.Disabled = true
+	}
+	return meta, nil
+}
+
+func isUniqueConstraint(err error) bool {
+	return strings.Contains(err.Error(), "UNIQUE constraint failed")
 }
 
 func (s *Store) RecordRequestMetadata(ctx context.Context, m metadata.Request) error {

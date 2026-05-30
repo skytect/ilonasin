@@ -1,12 +1,21 @@
 package provider
 
-import "fmt"
+import (
+	"fmt"
+	"net/url"
+	"sort"
+	"strings"
+	"unicode"
+
+	"ilonasin/internal/config"
+)
 
 type Defaults struct {
 	Type        string
 	BaseURL     string
 	AuthStyle   string
 	Placeholder bool
+	APIKey      bool
 }
 
 var builtIns = map[string]Defaults{
@@ -14,11 +23,13 @@ var builtIns = map[string]Defaults{
 		Type:      "deepseek",
 		BaseURL:   "https://api.deepseek.com",
 		AuthStyle: "bearer_api_key",
+		APIKey:    true,
 	},
 	"openrouter": {
 		Type:      "openrouter",
 		BaseURL:   "https://openrouter.ai/api/v1",
 		AuthStyle: "bearer_api_key",
+		APIKey:    true,
 	},
 	"codex": {
 		Type:        "codex",
@@ -34,4 +45,99 @@ func Lookup(providerType string) (Defaults, error) {
 		return Defaults{}, fmt.Errorf("unknown provider type %q", providerType)
 	}
 	return d, nil
+}
+
+type Registry struct {
+	instances map[string]Instance
+	ordered   []Instance
+}
+
+type Instance struct {
+	ID          string
+	Type        string
+	BaseURL     string
+	AuthStyle   string
+	Placeholder bool
+	APIKey      bool
+}
+
+func NewRegistry(cfg config.Config) (Registry, error) {
+	ids := make([]string, 0, len(cfg.Providers))
+	for id := range cfg.Providers {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	reg := Registry{instances: map[string]Instance{}}
+	for _, id := range ids {
+		if err := validateInstanceID(id); err != nil {
+			return Registry{}, err
+		}
+		providerCfg := cfg.Providers[id]
+		def, err := Lookup(providerCfg.Type)
+		if err != nil {
+			return Registry{}, err
+		}
+		baseURL := def.BaseURL
+		if providerCfg.BaseURL != "" {
+			baseURL = providerCfg.BaseURL
+			if err := validateHTTPSBaseURL(baseURL); err != nil {
+				return Registry{}, fmt.Errorf("provider %q base_url: %w", id, err)
+			}
+		}
+		instance := Instance{
+			ID:          id,
+			Type:        providerCfg.Type,
+			BaseURL:     baseURL,
+			AuthStyle:   def.AuthStyle,
+			Placeholder: def.Placeholder,
+			APIKey:      def.APIKey,
+		}
+		reg.instances[id] = instance
+		reg.ordered = append(reg.ordered, instance)
+	}
+	return reg, nil
+}
+
+func (r Registry) Get(id string) (Instance, bool) {
+	instance, ok := r.instances[id]
+	return instance, ok
+}
+
+func (r Registry) List() []Instance {
+	out := make([]Instance, len(r.ordered))
+	copy(out, r.ordered)
+	return out
+}
+
+func validateInstanceID(id string) error {
+	if id == "" {
+		return fmt.Errorf("provider instance id must not be empty")
+	}
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= '0' && r <= '9':
+		case r == '_' || r == '-':
+		default:
+			if r == '/' || unicode.IsSpace(r) || unicode.IsControl(r) {
+				return fmt.Errorf("invalid provider instance id %q", id)
+			}
+			return fmt.Errorf("provider instance id %q must use lowercase ASCII letters, digits, '_' or '-'", id)
+		}
+	}
+	if strings.ToLower(id) != id {
+		return fmt.Errorf("provider instance id %q must be lowercase", id)
+	}
+	return nil
+}
+
+func validateHTTPSBaseURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return err
+	}
+	if u.Scheme != "https" || u.Host == "" {
+		return fmt.Errorf("must be an https URL")
+	}
+	return nil
 }

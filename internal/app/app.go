@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -14,6 +15,7 @@ import (
 	"ilonasin/internal/config"
 	"ilonasin/internal/credentials"
 	"ilonasin/internal/home"
+	"ilonasin/internal/provider"
 	"ilonasin/internal/server"
 	"ilonasin/internal/storage/sqlite"
 	"ilonasin/internal/tui"
@@ -29,6 +31,7 @@ type runtime struct {
 	HomeDir    string
 	ConfigPath string
 	Config     config.Config
+	Registry   provider.Registry
 	Store      *sqlite.Store
 	cleanup    func()
 }
@@ -41,9 +44,10 @@ func Serve(opts Options) error {
 	defer rt.Store.Close()
 
 	auth := credentials.Service{Repo: rt.Store}
+	upstreams := credentials.UpstreamService{Registry: rt.Registry, Repo: rt.Store}
 	srv := &http.Server{
 		Addr:              rt.Config.Server.Bind,
-		Handler:           server.New(rt.Config, auth, rt.Store).Handler(),
+		Handler:           server.New(rt.Registry, auth, upstreams, rt.Store).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	fmt.Fprintf(opts.Stdout, "ilonasin serving on %s\n", rt.Config.Server.Bind)
@@ -70,12 +74,32 @@ func ServeCheck(opts Options) error {
 	defer checkStore.Close()
 
 	tokenService := credentials.Service{Repo: checkStore}
+	upstreamService := credentials.UpstreamService{Registry: rt.Registry, Repo: checkStore}
 	created, err := tokenService.Create(context.Background(), "serve-check")
 	if err != nil {
 		return err
 	}
 
-	handler := server.New(rt.Config, tokenService, checkStore).Handler()
+	if instance, ok := firstAPIKeyProvider(rt.Registry); ok {
+		if _, err := upstreamService.AddAPIKey(context.Background(), instance.ID, "serve-check-upstream", "sk-serve-check-upstream"); err != nil {
+			return err
+		}
+		resolved, err := upstreamService.ResolveAPIKey(context.Background(), instance.ID)
+		if err != nil {
+			return err
+		}
+		if resolved.APIKey == "" {
+			return fmt.Errorf("resolved empty upstream api key")
+		}
+		if err := upstreamService.Disable(context.Background(), resolved.ID); err != nil {
+			return err
+		}
+		if _, err := upstreamService.ResolveAPIKey(context.Background(), instance.ID); !errors.Is(err, credentials.ErrNoEligibleCredential) {
+			return fmt.Errorf("disabled upstream credential resolved err=%v", err)
+		}
+	}
+
+	handler := server.New(rt.Registry, tokenService, upstreamService, checkStore).Handler()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return err
@@ -127,7 +151,7 @@ func Manage(opts Options) error {
 		return err
 	}
 	defer rt.Store.Close()
-	return tui.Run(rt.Config, credentials.Service{Repo: rt.Store})
+	return tui.Run(rt.Config, rt.Registry, credentials.Service{Repo: rt.Store}, credentials.UpstreamService{Registry: rt.Registry, Repo: rt.Store})
 }
 
 func ManageCheck(opts Options) error {
@@ -137,12 +161,15 @@ func ManageCheck(opts Options) error {
 	}
 	defer rt.cleanup()
 	defer rt.Store.Close()
-	tokenService := credentials.Service{Repo: rt.Store}
-	if err := tui.ExerciseTokenLifecycle(context.Background(), tokenService); err != nil {
+	if err := exerciseLocalTokenCheck(context.Background()); err != nil {
+		return err
+	}
+	if err := exerciseUpstreamCredentialCheck(context.Background(), rt.Registry, rt.Config, opts); err != nil {
 		return err
 	}
 	var buf bytes.Buffer
-	if err := tui.Check(rt.Config, tokenService, &buf); err != nil {
+	tokenService := credentials.Service{Repo: rt.Store}
+	if err := tui.Check(rt.Config, rt.Registry, tokenService, credentials.UpstreamService{Registry: rt.Registry, Repo: rt.Store}, &buf); err != nil {
 		return err
 	}
 	if opts.Stdout != nil {
@@ -188,12 +215,61 @@ func bootstrap(ctx context.Context, opts Options, checkSafeHome bool) (*runtime,
 			return nil, err
 		}
 	}
+	registry, err := provider.NewRegistry(cfg)
+	if err != nil {
+		cleanup()
+		return nil, err
+	}
 	store, err := sqlite.Open(ctx, filepath.Clean(cfg.Paths.Database))
 	if err != nil {
 		cleanup()
 		return nil, err
 	}
-	return &runtime{HomeDir: homeDir, ConfigPath: cfgPath, Config: cfg, Store: store, cleanup: cleanup}, nil
+	return &runtime{HomeDir: homeDir, ConfigPath: cfgPath, Config: cfg, Registry: registry, Store: store, cleanup: cleanup}, nil
+}
+
+func exerciseUpstreamCredentialCheck(ctx context.Context, registry provider.Registry, cfg config.Config, opts Options) error {
+	if _, ok := firstAPIKeyProvider(registry); !ok {
+		return nil
+	}
+	checkDBDir, err := os.MkdirTemp("", "ilonasin-manage-check-db-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(checkDBDir)
+	store, err := sqlite.Open(ctx, filepath.Join(checkDBDir, "ilonasin.sqlite"))
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	service := credentials.UpstreamService{Registry: registry, Repo: store}
+	if err := tui.ExerciseUpstreamCredentialLifecycle(ctx, cfg, registry, service); err != nil {
+		return err
+	}
+	return nil
+}
+
+func exerciseLocalTokenCheck(ctx context.Context) error {
+	checkDBDir, err := os.MkdirTemp("", "ilonasin-manage-check-local-db-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(checkDBDir)
+	store, err := sqlite.Open(ctx, filepath.Join(checkDBDir, "ilonasin.sqlite"))
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	return tui.ExerciseTokenLifecycle(ctx, credentials.Service{Repo: store})
+}
+
+func firstAPIKeyProvider(registry provider.Registry) (provider.Instance, bool) {
+	for _, instance := range registry.List() {
+		if instance.APIKey && !instance.Placeholder {
+			return instance, true
+		}
+	}
+	return provider.Instance{}, false
 }
 
 func getStatus(url, token string) (int, error) {

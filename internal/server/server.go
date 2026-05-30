@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"time"
 
-	"ilonasin/internal/config"
 	"ilonasin/internal/credentials"
 	"ilonasin/internal/metadata"
 	"ilonasin/internal/openai"
@@ -18,17 +17,22 @@ import (
 const maxRequestBodyBytes = 1 << 20
 
 type Server struct {
-	cfg  config.Config
-	auth credentials.LocalTokenVerifier
-	meta MetadataRecorder
+	registry  ProviderRegistry
+	auth      credentials.LocalTokenVerifier
+	upstreams credentials.UpstreamCredentialResolver
+	meta      MetadataRecorder
 }
 
 type MetadataRecorder interface {
 	RecordRequestMetadata(context.Context, metadata.Request) error
 }
 
-func New(cfg config.Config, auth credentials.LocalTokenVerifier, meta MetadataRecorder) *Server {
-	return &Server{cfg: cfg, auth: auth, meta: meta}
+type ProviderRegistry interface {
+	Get(id string) (provider.Instance, bool)
+}
+
+func New(registry ProviderRegistry, auth credentials.LocalTokenVerifier, upstreams credentials.UpstreamCredentialResolver, meta MetadataRecorder) *Server {
+	return &Server{registry: registry, auth: auth, upstreams: upstreams, meta: meta}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -79,13 +83,13 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "invalid_model")
 		return
 	}
-	instance, ok := s.cfg.Providers[addr.ProviderInstanceID]
+	instance, ok := s.registry.Get(addr.ProviderInstanceID)
 	if !ok {
 		writeError(w, http.StatusNotFound, "provider instance is not configured", "invalid_request_error", "provider_not_configured")
 		return
 	}
-	if _, err := provider.Lookup(instance.Type); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "unknown_provider_type")
+	if !instance.APIKey || instance.Placeholder {
+		writeError(w, http.StatusNotImplemented, "provider credential type is not implemented in this slice", "invalid_request_error", "provider_unimplemented")
 		return
 	}
 	_ = s.record(r.Context(), metadata.Request{

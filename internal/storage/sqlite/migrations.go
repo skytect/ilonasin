@@ -125,3 +125,17 @@ var migration001 = []string{
 		allowed_by_policy INTEGER NOT NULL
 	)`,
 }
+
+type migration struct {
+	version int
+	name    string
+	stmts   []string
+}
+
+var migrations = []migration{
+	{version: 1, name: "initial_schema", stmts: migration001},
+	{version: 2, name: "provider_credential_display_metadata", stmts: []string{
+		`ALTER TABLE provider_credentials ADD COLUMN secret_prefix TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE provider_credentials ADD COLUMN secret_last4 TEXT NOT NULL DEFAULT ''`,
+	}},
+}

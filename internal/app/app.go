@@ -258,6 +258,9 @@ func ServeCheck(opts Options) error {
 	if err := exerciseCodexNoEligibleCacheCheck(context.Background(), rt.Registry); err != nil {
 		return fmt.Errorf("codex no-eligible cache check: %w", err)
 	}
+	if err := exerciseResponseFormatNoEligibleCheck(context.Background(), rt.Registry); err != nil {
+		return fmt.Errorf("response_format no-eligible check: %w", err)
+	}
 	afterSnapshot, err := selectedHomeSnapshot(context.Background(), rt.Store, rt.ConfigPath)
 	if err != nil {
 		return err
@@ -2515,6 +2518,19 @@ func newServeCheckUpstream() *serveCheckUpstream {
 				return
 			}
 		}
+		if model == "text-format" {
+			format, _ := body["response_format"].(map[string]any)
+			if format["type"] != "text" {
+				http.Error(w, "missing text response format", http.StatusBadRequest)
+				return
+			}
+		}
+		if model == "json-schema-format" {
+			if err := validateServeCheckJSONSchemaResponseFormat(r.URL.Path, body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
 		if model == "provider-options" {
 			if err := validateServeCheckProviderOptions(r.URL.Path, body); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
@@ -2596,6 +2612,39 @@ func validateServeCheckMaxCompletionTokens(path string, body map[string]any) err
 		}
 	default:
 		return fmt.Errorf("unexpected token limit path %s", path)
+	}
+	return nil
+}
+
+func validateServeCheckJSONSchemaResponseFormat(path string, body map[string]any) error {
+	if path != "/api/v1/chat/completions" {
+		return fmt.Errorf("json_schema response format reached unsupported provider")
+	}
+	format, ok := body["response_format"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("missing response_format")
+	}
+	if len(format) != 2 || format["type"] != "json_schema" {
+		return fmt.Errorf("invalid response_format")
+	}
+	wrapper, ok := format["json_schema"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("missing json_schema wrapper")
+	}
+	schema, ok := wrapper["schema"].(map[string]any)
+	if !ok || wrapper["name"] != "check_schema" || wrapper["strict"] != true || wrapper["description"] != responseFormatPrivacyMarker {
+		return fmt.Errorf("invalid json_schema wrapper")
+	}
+	if schema["type"] != "object" {
+		return fmt.Errorf("invalid json_schema body")
+	}
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("missing json_schema properties")
+	}
+	markerProperty, ok := properties["marker"].(map[string]any)
+	if !ok || markerProperty["const"] != responseFormatSchemaMarker {
+		return fmt.Errorf("missing json_schema marker")
 	}
 	return nil
 }
@@ -2944,6 +2993,19 @@ func (u *serveCheckUpstream) handleServeCheckStream(w http.ResponseWriter, r *ht
 			return
 		}
 	}
+	if model == "stream-text-format" {
+		format, _ := body["response_format"].(map[string]any)
+		if format["type"] != "text" {
+			http.Error(w, "missing stream text response format", http.StatusBadRequest)
+			return
+		}
+	}
+	if model == "stream-json-schema-format" {
+		if err := validateServeCheckJSONSchemaResponseFormat(r.URL.Path, body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 	if model == "stream-max-completion-limit" {
 		if err := validateServeCheckMaxCompletionTokens(r.URL.Path, body); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -3117,8 +3179,10 @@ func assertUnsupportedChatNoUpstream(base, token string, body []byte, fakeUpstre
 	if bytes.Contains(respBody, []byte("in this slice")) {
 		return fmt.Errorf("unsupported %s returned slice-era wording", name)
 	}
-	if bytes.Contains(respBody, []byte(providerOptionPrivacyMarker)) {
-		return fmt.Errorf("unsupported %s leaked provider option marker", name)
+	for _, marker := range []string{providerOptionPrivacyMarker, responseFormatPrivacyMarker, responseFormatSchemaMarker} {
+		if bytes.Contains(respBody, []byte(marker)) {
+			return fmt.Errorf("unsupported %s leaked private marker", name)
+		}
 	}
 	if fakeUpstream.sawExpected(path, upstreamModel) {
 		return fmt.Errorf("unsupported %s reached upstream", name)
@@ -4053,6 +4117,8 @@ type tokenLimitInvalidCase struct {
 }
 
 const providerOptionPrivacyMarker = "provider-option-private-marker"
+const responseFormatPrivacyMarker = "response-format-private-marker"
+const responseFormatSchemaMarker = "schema-secret-marker"
 
 func providerOptionsExtra(providerType string) string {
 	if providerType == "openrouter" {
@@ -4083,6 +4149,50 @@ func providerOptionInvalidCases(providerType string) []providerOptionInvalidCase
 		{name: "bad-thinking-type", extra: `"provider_options":{"deepseek":{"thinking":{"type":"provider-option-private-marker"}}}`},
 		{name: "bad-effort", extra: `"provider_options":{"deepseek":{"reasoning_effort":"provider-option-private-marker"}}`},
 	}
+}
+
+type responseFormatInvalidCase struct {
+	name  string
+	extra string
+}
+
+func openRouterJSONSchemaResponseFormatExtra() string {
+	return `"response_format":{"type":"json_schema","json_schema":{"name":"check_schema","strict":true,"schema":{"type":"object","properties":{"answer":{"type":"string"},"marker":{"const":"schema-secret-marker"}}},"description":"response-format-private-marker"}}`
+}
+
+func responseFormatInvalidCases(providerType string) []responseFormatInvalidCase {
+	common := []responseFormatInvalidCase{
+		{name: "null", extra: `"response_format":null`},
+		{name: "missing-type", extra: `"response_format":{"json_schema":{"name":"check_schema","schema":{"type":"object"}}}`},
+		{name: "non-string-type", extra: `"response_format":{"type":7}`},
+		{name: "unsupported-type", extra: `"response_format":{"type":"schema-secret-marker"}`},
+		{name: "text-extra", extra: `"response_format":{"type":"text","response-format-private-marker":true}`},
+		{name: "json-object-extra", extra: `"response_format":{"type":"json_object","response-format-private-marker":true}`},
+	}
+	if providerType != "openrouter" {
+		return append(common, responseFormatInvalidCase{
+			name:  "json-schema-unsupported",
+			extra: openRouterJSONSchemaResponseFormatExtra(),
+		})
+	}
+	return append(common,
+		responseFormatInvalidCase{name: "schema-top-extra", extra: `"response_format":{"type":"json_schema","json_schema":{"name":"check_schema","schema":{"type":"object"}},"response-format-private-marker":true}`},
+		responseFormatInvalidCase{name: "schema-missing-wrapper", extra: `"response_format":{"type":"json_schema"}`},
+		responseFormatInvalidCase{name: "schema-null-wrapper", extra: `"response_format":{"type":"json_schema","json_schema":null}`},
+		responseFormatInvalidCase{name: "schema-array-wrapper", extra: `"response_format":{"type":"json_schema","json_schema":["schema-secret-marker"]}`},
+		responseFormatInvalidCase{name: "schema-missing-name", extra: `"response_format":{"type":"json_schema","json_schema":{"schema":{"type":"object"}}}`},
+		responseFormatInvalidCase{name: "schema-empty-name", extra: `"response_format":{"type":"json_schema","json_schema":{"name":"","schema":{"type":"object"}}}`},
+		responseFormatInvalidCase{name: "schema-non-string-name", extra: `"response_format":{"type":"json_schema","json_schema":{"name":7,"schema":{"type":"object"}}}`},
+		responseFormatInvalidCase{name: "schema-invalid-name", extra: `"response_format":{"type":"json_schema","json_schema":{"name":"schema-secret-marker!","schema":{"type":"object"}}}`},
+		responseFormatInvalidCase{name: "schema-too-long-name", extra: `"response_format":{"type":"json_schema","json_schema":{"name":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","schema":{"type":"object"}}}`},
+		responseFormatInvalidCase{name: "schema-missing-body", extra: `"response_format":{"type":"json_schema","json_schema":{"name":"check_schema"}}`},
+		responseFormatInvalidCase{name: "schema-null-body", extra: `"response_format":{"type":"json_schema","json_schema":{"name":"check_schema","schema":null}}`},
+		responseFormatInvalidCase{name: "schema-array-body", extra: `"response_format":{"type":"json_schema","json_schema":{"name":"check_schema","schema":["schema-secret-marker"]}}`},
+		responseFormatInvalidCase{name: "schema-bad-strict", extra: `"response_format":{"type":"json_schema","json_schema":{"name":"check_schema","schema":{"type":"object"},"strict":"schema-secret-marker"}}`},
+		responseFormatInvalidCase{name: "schema-bad-description", extra: `"response_format":{"type":"json_schema","json_schema":{"name":"check_schema","schema":{"type":"object"},"description":7}}`},
+		responseFormatInvalidCase{name: "schema-description-marker-error", extra: `"response_format":{"type":"json_schema","json_schema":{"name":"check_schema","schema":{"type":"object"},"description":"response-format-private-marker","strict":"schema-secret-marker"}}`},
+		responseFormatInvalidCase{name: "schema-unknown-key", extra: `"response_format":{"type":"json_schema","json_schema":{"name":"check_schema","schema":{"type":"object","response-format-private-marker":true},"response-format-private-marker":true}}`},
+	)
 }
 
 func tokenLimitInvalidCases() []tokenLimitInvalidCase {
@@ -4156,6 +4266,26 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 	if !fakeUpstream.sawExpected(expectedPath, "json-format") {
 		return fmt.Errorf("json response_format did not reach upstream provider=%s", instance.ID)
 	}
+	textFormatBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"response_format":{"type":"text"}}`, instance.ID+"/text-format"))
+	if status, _, err := postJSON(base+"/v1/chat/completions", token, textFormatBody); err != nil || status != http.StatusOK {
+		return fmt.Errorf("text response_format provider=%s status=%d err=%v", instance.ID, status, err)
+	}
+	if !fakeUpstream.sawExpected(expectedPath, "text-format") {
+		return fmt.Errorf("text response_format did not reach upstream provider=%s", instance.ID)
+	}
+	if instance.Type == "openrouter" {
+		jsonSchemaBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/json-schema-format", openRouterJSONSchemaResponseFormatExtra()))
+		status, respBody, err := postJSON(base+"/v1/chat/completions", token, jsonSchemaBody)
+		if err != nil || status != http.StatusOK {
+			return fmt.Errorf("json_schema response_format provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if bytes.Contains(respBody, []byte(responseFormatPrivacyMarker)) || bytes.Contains(respBody, []byte(responseFormatSchemaMarker)) {
+			return fmt.Errorf("json_schema response_format echoed private marker")
+		}
+		if !fakeUpstream.sawExpected(expectedPath, "json-schema-format") {
+			return fmt.Errorf("json_schema response_format did not reach upstream provider=%s", instance.ID)
+		}
+	}
 	optionExtra := providerOptionsExtra(instance.Type)
 	optionBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-options", optionExtra))
 	if status, _, err := postJSON(base+"/v1/chat/completions", token, optionBody); err != nil || status != http.StatusOK {
@@ -4193,6 +4323,13 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 			return err
 		}
 	}
+	for _, tc := range responseFormatInvalidCases(instance.Type) {
+		upstreamModel := "invalid-format-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" response_format "+tc.name); err != nil {
+			return err
+		}
+	}
 	for _, tc := range tokenLimitInvalidCases() {
 		upstreamModel := "invalid-limit-" + tc.name
 		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
@@ -4202,6 +4339,11 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 	}
 	if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, providerOptionPrivacyMarker); err != nil {
 		return err
+	}
+	for _, marker := range []string{responseFormatPrivacyMarker, responseFormatSchemaMarker} {
+		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
+			return err
+		}
 	}
 	invalidBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}]}`, instance.ID+"/invalid-json"))
 	if status, err := postStatus(base+"/v1/chat/completions", token, invalidBody); err != nil || status != http.StatusBadGateway {
@@ -4281,6 +4423,26 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 	if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, "requestid-unsafe-marker"); err != nil {
 		return err
 	}
+	textFormatBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},"response_format":{"type":"text"}}`, instance.ID+"/stream-text-format"))
+	if status, _, _, _, err := postStream(base+"/v1/chat/completions", token, textFormatBody); err != nil || status != http.StatusOK {
+		return fmt.Errorf("stream text response_format provider=%s status=%d err=%v", instance.ID, status, err)
+	}
+	if !fakeUpstream.sawExpectedStream(expectedPath, "stream-text-format") {
+		return fmt.Errorf("stream text response_format did not reach upstream provider=%s", instance.ID)
+	}
+	if instance.Type == "openrouter" {
+		jsonSchemaBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/stream-json-schema-format", openRouterJSONSchemaResponseFormatExtra()))
+		status, _, _, raw, err := postStream(base+"/v1/chat/completions", token, jsonSchemaBody)
+		if err != nil || status != http.StatusOK {
+			return fmt.Errorf("stream json_schema response_format provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if bytes.Contains(raw, []byte(responseFormatPrivacyMarker)) || bytes.Contains(raw, []byte(responseFormatSchemaMarker)) {
+			return fmt.Errorf("stream json_schema response_format echoed private marker")
+		}
+		if !fakeUpstream.sawExpectedStream(expectedPath, "stream-json-schema-format") {
+			return fmt.Errorf("stream json_schema response_format did not reach upstream provider=%s", instance.ID)
+		}
+	}
 	optionBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/stream-provider-options", providerOptionsExtra(instance.Type)))
 	if status, _, _, _, err := postStream(base+"/v1/chat/completions", token, optionBody); err != nil || status != http.StatusOK {
 		return fmt.Errorf("stream provider_options provider=%s status=%d err=%v", instance.ID, status, err)
@@ -4336,6 +4498,13 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 			return err
 		}
 	}
+	for _, tc := range responseFormatInvalidCases(instance.Type) {
+		upstreamModel := "stream-invalid-format-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" stream response_format "+tc.name); err != nil {
+			return err
+		}
+	}
 	for _, tc := range tokenLimitInvalidCases() {
 		upstreamModel := "stream-invalid-limit-" + tc.name
 		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/"+upstreamModel, tc.extra))
@@ -4345,6 +4514,11 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 	}
 	if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, providerOptionPrivacyMarker); err != nil {
 		return err
+	}
+	for _, marker := range []string{responseFormatPrivacyMarker, responseFormatSchemaMarker} {
+		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
+			return err
+		}
 	}
 	preErrorBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true}}`, instance.ID+"/stream-error-before"))
 	status, _, _, raw, err := postStream(base+"/v1/chat/completions", token, preErrorBody)
@@ -4687,6 +4861,63 @@ func exerciseCodexNoEligibleCacheCheck(ctx context.Context, registry provider.Re
 	}
 	if hasLocalModelFromBody(respBody, "codex/") || fakeUpstream.sawCodexModels() {
 		return fmt.Errorf("codex no-eligible exposed stale cache or called upstream")
+	}
+	return nil
+}
+
+func exerciseResponseFormatNoEligibleCheck(ctx context.Context, registry provider.Registry) error {
+	checkDBDir, err := os.MkdirTemp("", "ilonasin-serve-check-format-noeligible-db-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(checkDBDir)
+	store, err := sqlite.Open(ctx, filepath.Join(checkDBDir, "ilonasin.sqlite"))
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	tokenService := credentials.Service{Repo: store}
+	upstreams := &credentials.UpstreamService{Registry: registry, Repo: store}
+	created, err := tokenService.Create(ctx, "format-noeligible")
+	if err != nil {
+		return err
+	}
+	fakeUpstream := newServeCheckUpstream()
+	defer fakeUpstream.server.Close()
+	checkRegistry := baseURLOverrideRegistry{Registry: registry, baseURL: fakeUpstream.server.URL}
+	handler := server.New(checkRegistry, tokenService, upstreams, upstreams, chatAdapters(fakeUpstream.server.Client()), modelDiscoverers(fakeUpstream.server.Client()), store, store).Handler()
+	testServer := httptest.NewServer(handler)
+	defer testServer.Close()
+	for _, instance := range apiKeyProviders(registry) {
+		expectedPath := "/chat/completions"
+		if instance.Type == "openrouter" {
+			expectedPath = "/api/v1/chat/completions"
+		}
+		for _, tc := range responseFormatInvalidCases(instance.Type) {
+			upstreamModel := "noeligible-format-" + tc.name
+			body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+			if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, body, fakeUpstream, expectedPath, upstreamModel, "noeligible "+instance.ID+" response_format "+tc.name); err != nil {
+				return err
+			}
+		}
+	}
+	for _, tc := range []struct {
+		name  string
+		extra string
+	}{
+		{name: "json-object", extra: `"response_format":{"type":"json_object"}`},
+		{name: "json-schema", extra: openRouterJSONSchemaResponseFormatExtra()},
+	} {
+		upstreamModel := "codex-noeligible-format-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, "codex/"+upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, body, fakeUpstream, "/responses", upstreamModel, "codex noeligible response_format "+tc.name); err != nil {
+			return err
+		}
+	}
+	for _, marker := range []string{responseFormatPrivacyMarker, responseFormatSchemaMarker} {
+		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
+			return err
+		}
 	}
 	return nil
 }

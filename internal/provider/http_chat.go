@@ -103,7 +103,7 @@ func (a HTTPChatAdapter) ValidateChatRequest(instance Instance, req openai.ChatC
 		if err := rejectPresentFields(req, commonUnsupported...); err != nil {
 			return err
 		}
-		if err := validateChatResponseFormat(req); err != nil {
+		if err := validateChatResponseFormat(instance.Type, req); err != nil {
 			return err
 		}
 		return validateProviderOptions(instance.Type, req)
@@ -126,23 +126,91 @@ func rejectPresentFields(req openai.ChatCompletionRequest, fields ...string) err
 	return nil
 }
 
-func validateChatResponseFormat(req openai.ChatCompletionRequest) error {
+func validateChatResponseFormat(providerType string, req openai.ChatCompletionRequest) error {
 	if !req.HasField("response_format") {
 		return nil
 	}
 	if req.ResponseFormat == nil {
 		return errors.New("response_format must be an object")
 	}
-	if len(req.ResponseFormat) != 1 {
-		return errors.New("response_format only supports the type field")
-	}
 	typ, _ := req.ResponseFormat["type"].(string)
 	switch typ {
 	case "text", "json_object":
+		if len(req.ResponseFormat) != 1 {
+			return errors.New("response_format only supports the type field")
+		}
 		return nil
+	case "json_schema":
+		if providerType != "openrouter" {
+			return errors.New("response_format.type is unsupported")
+		}
+		return validateOpenRouterJSONSchemaResponseFormat(req.ResponseFormat)
 	default:
-		return fmt.Errorf("response_format.type %q is unsupported", typ)
+		return errors.New("response_format.type is unsupported")
 	}
+}
+
+func validateOpenRouterJSONSchemaResponseFormat(format map[string]any) error {
+	if len(format) != 2 {
+		return errors.New("response_format only supports type and json_schema")
+	}
+	rawSchema, ok := format["json_schema"]
+	if !ok {
+		return errors.New("response_format.json_schema is required")
+	}
+	schema, ok := rawSchema.(map[string]any)
+	if !ok || schema == nil {
+		return errors.New("response_format.json_schema must be an object")
+	}
+	if len(schema) == 0 {
+		return errors.New("response_format.json_schema must not be empty")
+	}
+	name, ok := schema["name"].(string)
+	if !ok {
+		return errors.New("response_format.json_schema.name must be a string")
+	}
+	if name == "" || len(name) > 64 || !isOpenRouterJSONSchemaName(name) {
+		return errors.New("response_format.json_schema.name is invalid")
+	}
+	rawBody, ok := schema["schema"]
+	if !ok {
+		return errors.New("response_format.json_schema.schema is required")
+	}
+	body, ok := rawBody.(map[string]any)
+	if !ok || body == nil {
+		return errors.New("response_format.json_schema.schema must be an object")
+	}
+	_ = body
+	for key, value := range schema {
+		switch key {
+		case "name", "schema":
+		case "strict":
+			if _, ok := value.(bool); !ok {
+				return errors.New("response_format.json_schema.strict must be a boolean")
+			}
+		case "description":
+			if _, ok := value.(string); !ok {
+				return errors.New("response_format.json_schema.description must be a string")
+			}
+		default:
+			return errors.New("response_format.json_schema contains an unsupported field")
+		}
+	}
+	return nil
+}
+
+func isOpenRouterJSONSchemaName(value string) bool {
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '_' || r == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func validateProviderOptions(providerType string, req openai.ChatCompletionRequest) error {

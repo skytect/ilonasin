@@ -77,6 +77,9 @@ func ServeCheck(opts Options) error {
 	if err != nil {
 		return err
 	}
+	if err := sqlite.RunMigrationSmokeCheck(context.Background()); err != nil {
+		return fmt.Errorf("sqlite migration check: %w", err)
+	}
 
 	checkDBDir, err := os.MkdirTemp("", "ilonasin-serve-check-db-*")
 	if err != nil {

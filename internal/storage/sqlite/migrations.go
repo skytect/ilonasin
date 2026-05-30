@@ -1,5 +1,72 @@
 package sqlite
 
+import (
+	"context"
+	"database/sql"
+)
+
+type migrationStep func(context.Context, *sql.Tx) error
+
+func sqlStep(stmt string) migrationStep {
+	return func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, stmt)
+		return err
+	}
+}
+
+func addColumnIfMissing(table, column, definition string) migrationStep {
+	table = migrationIdentifier(table)
+	column = migrationIdentifier(column)
+	return func(ctx context.Context, tx *sql.Tx) error {
+		exists, err := columnExists(ctx, tx, table, column)
+		if err != nil {
+			return err
+		}
+		if exists {
+			return nil
+		}
+		_, err = tx.ExecContext(ctx, "ALTER TABLE "+table+" ADD COLUMN "+definition)
+		return err
+	}
+}
+
+func columnExists(ctx context.Context, tx *sql.Tx, table, column string) (bool, error) {
+	rows, err := tx.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+func migrationIdentifier(value string) string {
+	if value == "" {
+		panic("empty migration identifier")
+	}
+	for i, r := range value {
+		if r == '_' || r >= 'a' && r <= 'z' || i > 0 && r >= '0' && r <= '9' {
+			continue
+		}
+		panic("invalid migration identifier: " + value)
+	}
+	return value
+}
+
+// migration001, migration002, and migration003 are historical compatibility
+// contracts. Future schema changes must use new migration versions.
 var migration001 = []string{
 	`CREATE TABLE IF NOT EXISTS migrations (
 		version INTEGER PRIMARY KEY,
@@ -129,18 +196,18 @@ var migration001 = []string{
 type migration struct {
 	version int
 	name    string
-	stmts   []string
+	steps   []migrationStep
 }
 
 var migrations = []migration{
-	{version: 1, name: "initial_schema", stmts: migration001},
-	{version: 2, name: "provider_credential_display_metadata", stmts: []string{
-		`ALTER TABLE provider_credentials ADD COLUMN secret_prefix TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE provider_credentials ADD COLUMN secret_last4 TEXT NOT NULL DEFAULT ''`,
+	{version: 1, name: "initial_schema", steps: sqlSteps(migration001)},
+	{version: 2, name: "provider_credential_display_metadata", steps: []migrationStep{
+		addColumnIfMissing("provider_credentials", "secret_prefix", `secret_prefix TEXT NOT NULL DEFAULT ''`),
+		addColumnIfMissing("provider_credentials", "secret_last4", `secret_last4 TEXT NOT NULL DEFAULT ''`),
 	}},
-	{version: 3, name: "credential_fallback_policy", stmts: []string{
-		`ALTER TABLE provider_credentials ADD COLUMN fallback_group TEXT NOT NULL DEFAULT 'default'`,
-		`CREATE TABLE IF NOT EXISTS credential_fallback_policies (
+	{version: 3, name: "credential_fallback_policy", steps: []migrationStep{
+		addColumnIfMissing("provider_credentials", "fallback_group", `fallback_group TEXT NOT NULL DEFAULT 'default'`),
+		sqlStep(`CREATE TABLE IF NOT EXISTS credential_fallback_policies (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			provider_instance_id TEXT NOT NULL,
 			group_label TEXT NOT NULL,
@@ -148,6 +215,14 @@ var migrations = []migration{
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL,
 			UNIQUE(provider_instance_id, group_label)
-		)`,
+		)`),
 	}},
+}
+
+func sqlSteps(stmts []string) []migrationStep {
+	steps := make([]migrationStep, 0, len(stmts))
+	for _, stmt := range stmts {
+		steps = append(steps, sqlStep(stmt))
+	}
+	return steps
 }

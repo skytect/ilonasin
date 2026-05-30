@@ -77,8 +77,8 @@ func (s *Store) Migrate(ctx context.Context) error {
 		if applied {
 			continue
 		}
-		for _, stmt := range m.stmts {
-			if _, err := tx.ExecContext(ctx, stmt); err != nil {
+		for _, step := range m.steps {
+			if err := step(ctx, tx); err != nil {
 				return err
 			}
 		}

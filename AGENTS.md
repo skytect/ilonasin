@@ -8,16 +8,18 @@
 - Read all markdown files in `docs/**` before making architecture-sensitive
   changes.
 - Refer to `docs/ilonasin-architecture.md` as the target architecture.
-- Write implementation plans in `docs/plans/` only when the active task requires
-  a planned slice.
+- Only if explicitly told to save an implementation plan, add it to
+  `docs/plans/`.
 
 ## Coding Style
 
-- Do not write permanent tests unless explicitly told to.
+- Do not write tests by yourself unless explicitly told to. Tests are not fixes,
+  they are false assurances.
 - Use direct compile, vet, and CLI smoke checks instead of keeping test files.
-- Never implement more than necessary; every line adds maintenance burden.
-- Never hardcode or bodge. Start with the proper interfaces and stubs even for
-  a vertical slice.
+- Never implement more than necessary. Every piece of code you write adds to
+  maintenance burden.
+- Never hardcode or bodge, always start with the proper interfaces with stubs,
+  even if just implementing a vertical slice.
 - Keep local API auth, upstream provider credentials, provider adapters,
   routing, HTTP transport, TUI, config, and SQLite storage as separate
   boundaries.
@@ -28,11 +30,11 @@
 
 ## Execution Style
 
-- Use subagents when the active goal requires senior-engineer reviews or parallel
-  review work.
-- Run subagents in parallel when possible, but keep shared-state edits local
-  unless deliberately delegated.
-- Do not use `request_user_input` during goal pursuit.
+- Prefer delegating tasks to subagents rather than doing them in the main agent,
+  to keep the main agent focused on orchestration and reduce complexity.
+- Run subagents in parallel or in the background whenever possible to save time,
+  but be mindful of synchronization and shared state issues.
+- DO NOT use `request_user_input` in the middle of a goal pursuit.
 - Do not push.
 
 ## Smoke Checks
@@ -48,8 +50,9 @@
 
 ### Writing a plan
 
-- If the active goal requires a plan, document it in `docs/plans/`.
-- Keep plans scoped to one coherent slice.
+1. Discuss grey-areas using the `request_user_input` tool if not in the middle
+   of a goal pursuit.
+2. Document the plan in `docs/plans/` only when explicitly told to save one.
 
 ### Fixing a bug
 
@@ -57,8 +60,13 @@ Philosophy: bugs are not simply issues to patch. They are a view into how the
 codebase design varies from the ideal. Use this view to refactor toward the
 ideal.
 
-When fixing a bug:
+When fixing a bug, you MUST:
 
-- Do not write a one-time bodge.
-- Think about the robust long-term fix.
-- Remove dead code made obsolete by the fix.
+- Do not write a one-time bodge. Think about the root cause and the robust
+  long-term fix.
+
+After fixing a bug, you MUST think:
+
+- Is there any refactoring to make the fix more robust?
+- Is there any refactoring to make sure adjacent issues never happen again?
+- Any dead code to clean up?

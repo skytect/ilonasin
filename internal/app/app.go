@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -105,6 +106,24 @@ func ServeCheck(opts Options) error {
 			return fmt.Errorf("disabled upstream credential resolved err=%v", err)
 		}
 	}
+	if _, err := upstreamService.AddOAuthCredential(context.Background(), credentials.NewOAuthCredentialInput{
+		ProviderInstanceID:  "codex",
+		Label:               "serve-check-oauth",
+		AccessToken:         "oauth-access-secret-marker",
+		RefreshToken:        "oauth-refresh-secret-marker",
+		AccountID:           "serve-check-account",
+		AccountDisplayLabel: "Serve Check OAuth",
+		PlanLabel:           "team",
+		Scopes:              "openid profile email",
+	}); err != nil {
+		return err
+	}
+	if _, err := upstreamService.ResolveAPIKey(context.Background(), "codex"); err == nil {
+		return fmt.Errorf("oauth credential resolved as api key")
+	}
+	if _, err := upstreamService.ResolveAPIKeys(context.Background(), "codex"); err == nil {
+		return fmt.Errorf("oauth credential resolved as api key set")
+	}
 
 	fakeUpstream := newServeCheckUpstream()
 	defer fakeUpstream.server.Close()
@@ -124,6 +143,9 @@ func ServeCheck(opts Options) error {
 	base := "http://" + listener.Addr().String()
 	if status, err := getStatus(base+"/v1/models", ""); err != nil || status != http.StatusUnauthorized {
 		return fmt.Errorf("unauthenticated models status=%d err=%v", status, err)
+	}
+	if status, err := getStatus(base+"/v1/models", "oauth-access-secret-marker"); err != nil || status != http.StatusUnauthorized {
+		return fmt.Errorf("oauth credential authenticated as local token status=%d err=%v", status, err)
 	}
 	if status, err := getStatus(base+"/v1/models", created.Token); err != nil || status != http.StatusOK {
 		return fmt.Errorf("authenticated models status=%d err=%v", status, err)
@@ -184,7 +206,8 @@ func Manage(opts Options) error {
 		return err
 	}
 	defer rt.Store.Close()
-	return tui.Run(rt.Config, rt.Registry, credentials.Service{Repo: rt.Store}, credentials.UpstreamService{Registry: rt.Registry, Repo: rt.Store}, rt.Store, rt.Store)
+	upstreams := credentials.UpstreamService{Registry: rt.Registry, Repo: rt.Store}
+	return tui.Run(rt.Config, rt.Registry, credentials.Service{Repo: rt.Store}, upstreams, upstreams, rt.Store, rt.Store)
 }
 
 func ManageCheck(opts Options) error {
@@ -194,7 +217,7 @@ func ManageCheck(opts Options) error {
 	}
 	defer rt.cleanup()
 	defer rt.Store.Close()
-	beforeSnapshot, err := selectedHomeSnapshot(context.Background(), rt.Store)
+	beforeSnapshot, err := selectedHomeSnapshot(context.Background(), rt.Store, rt.ConfigPath)
 	if err != nil {
 		return err
 	}
@@ -210,12 +233,16 @@ func ManageCheck(opts Options) error {
 	if err := exerciseObservabilityCheck(context.Background(), rt.Registry, rt.Config); err != nil {
 		return err
 	}
-	var buf bytes.Buffer
-	tokenService := credentials.Service{Repo: rt.Store}
-	if err := tui.Check(rt.Config, rt.Registry, tokenService, credentials.UpstreamService{Registry: rt.Registry, Repo: rt.Store}, rt.Store, rt.Store, &buf); err != nil {
+	if err := exerciseOAuthCheck(context.Background(), rt.Registry, rt.Config); err != nil {
 		return err
 	}
-	afterSnapshot, err := selectedHomeSnapshot(context.Background(), rt.Store)
+	var buf bytes.Buffer
+	tokenService := credentials.Service{Repo: rt.Store}
+	upstreams := credentials.UpstreamService{Registry: rt.Registry, Repo: rt.Store}
+	if err := tui.Check(rt.Config, rt.Registry, tokenService, upstreams, upstreams, rt.Store, rt.Store, &buf); err != nil {
+		return err
+	}
+	afterSnapshot, err := selectedHomeSnapshot(context.Background(), rt.Store, rt.ConfigPath)
 	if err != nil {
 		return err
 	}
@@ -453,10 +480,163 @@ func exerciseObservabilityCheck(ctx context.Context, registry provider.Registry,
 	return tui.ExerciseObservabilitySummary(ctx, cfg, registry, store)
 }
 
-func selectedHomeSnapshot(ctx context.Context, store *sqlite.Store) (string, error) {
+func exerciseOAuthCheck(ctx context.Context, registry provider.Registry, cfg config.Config) error {
+	checkDBDir, err := os.MkdirTemp("", "ilonasin-manage-check-oauth-db-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(checkDBDir)
+	store, err := sqlite.Open(ctx, filepath.Join(checkDBDir, "ilonasin.sqlite"))
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	service := credentials.UpstreamService{Registry: registry, Repo: store}
+	expiresAt := time.Date(2026, 5, 30, 13, 0, 0, 0, time.UTC)
+	created, err := service.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID:  "codex",
+		Label:               "callback Authorization: Bearer token_endpoint_body",
+		AccessToken:         "oauth-access-secret-marker",
+		RefreshToken:        "oauth-refresh-secret-marker",
+		AccountID:           "acct_raw_forbidden",
+		AccountDisplayLabel: "Codex Safe",
+		PlanLabel:           "team",
+		Scopes:              "openid profile email",
+		ExpiresAt:           &expiresAt,
+	})
+	if err != nil {
+		return fmt.Errorf("seed oauth credential: %w", err)
+	}
+	if created.Label != "" {
+		return fmt.Errorf("unsafe oauth label was not sanitized")
+	}
+	if err := service.MarkOAuthRefreshFailure(ctx, created.ID, "refresh_token_expired"); err != nil {
+		return fmt.Errorf("seed oauth refresh failure: %w", err)
+	}
+	if _, err := service.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID:  "codex",
+		Label:               "safe two",
+		AccessToken:         "opaqueaccessvalue12345",
+		RefreshToken:        "opaquerefreshvalue67890",
+		AccountID:           "acct_raw_second_forbidden",
+		AccountDisplayLabel: "sk-account-secret prompt opaqueaccessvalue12345",
+		PlanLabel:           "iln_plan_secret raw payload balance credit opaquerefreshvalue67890",
+		Scopes:              "sk-scope-secret completion body opaqueaccessvalue12345",
+	}); err != nil {
+		return fmt.Errorf("seed unsafe oauth metadata credential: %w", err)
+	}
+	for _, invalid := range []credentials.NewOAuthCredentialInput{
+		{ProviderInstanceID: "codex", AccessToken: "eyJ.bad.jwt", RefreshToken: "oauth-refresh-secret-marker", AccountID: "acct_invalid"},
+		{ProviderInstanceID: "codex", AccessToken: "https://auth.openai.com/oauth/callback", RefreshToken: "oauth-refresh-secret-marker", AccountID: "acct_invalid"},
+		{ProviderInstanceID: "codex", AccessToken: `{"access_token":"opaque","refresh_token":"opaque","expires_in":3600}`, RefreshToken: "oauth-refresh-secret-marker", AccountID: "acct_invalid"},
+		{ProviderInstanceID: "codex", AccessToken: "access_token=opaque&refresh_token=opaque", RefreshToken: "oauth-refresh-secret-marker", AccountID: "acct_invalid"},
+		{ProviderInstanceID: "codex", AccessToken: "Set-Cookie: session=opaque", RefreshToken: "oauth-refresh-secret-marker", AccountID: "acct_invalid"},
+		{ProviderInstanceID: "deepseek", AccessToken: "oauth-access-secret-marker", RefreshToken: "oauth-refresh-secret-marker", AccountID: "acct_invalid"},
+	} {
+		if _, err := service.AddOAuthCredential(ctx, invalid); err == nil {
+			return fmt.Errorf("invalid oauth credential was accepted")
+		}
+	}
+	if err := assertOAuthStorageSafety(ctx, store); err != nil {
+		return err
+	}
+	return tui.ExerciseOAuthSummary(ctx, cfg, registry, service)
+}
+
+func assertOAuthStorageSafety(ctx context.Context, store *sqlite.Store) error {
+	for _, marker := range []string{"oauth-access-secret-marker", "oauth-refresh-secret-marker"} {
+		var count int
+		if err := store.DB.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM credential_secrets WHERE secret_material = ?
+		`, marker).Scan(&count); err != nil {
+			return err
+		}
+		if count != 1 {
+			return fmt.Errorf("oauth secret marker count mismatch")
+		}
+		if err := assertMarkerAbsentOutsideOAuthSecrets(ctx, store, marker); err != nil {
+			return err
+		}
+	}
+	for _, marker := range []string{"opaqueaccessvalue12345", "opaquerefreshvalue67890"} {
+		if err := assertMarkerAbsentOutsideOAuthSecrets(ctx, store, marker); err != nil {
+			return err
+		}
+	}
+	for _, marker := range []string{
+		"acct_raw_forbidden",
+		"acct_raw_second_forbidden",
+		"eyJ",
+		"callback",
+		"Authorization:",
+		"Bearer ",
+		"token_endpoint_body",
+		"cookie",
+		"stdout",
+		"req_",
+		"sk-label-secret",
+		"sk-account-secret",
+		"iln_plan_secret",
+		"sk-scope-secret",
+		"prompt",
+		"completion",
+		"body",
+		"raw",
+		"payload",
+		"balance",
+		"credit",
+	} {
+		if err := assertMarkerAbsentInOAuthTables(ctx, store, marker); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func assertMarkerAbsentOutsideOAuthSecrets(ctx context.Context, store *sqlite.Store, marker string) error {
+	for _, query := range oauthMarkerQueries(false) {
+		var count int
+		if err := store.DB.QueryRowContext(ctx, query, "%"+marker+"%").Scan(&count); err != nil {
+			return err
+		}
+		if count != 0 {
+			return fmt.Errorf("oauth marker leaked outside credential secrets")
+		}
+	}
+	return nil
+}
+
+func assertMarkerAbsentInOAuthTables(ctx context.Context, store *sqlite.Store, marker string) error {
+	for _, query := range oauthMarkerQueries(true) {
+		var count int
+		if err := store.DB.QueryRowContext(ctx, query, "%"+marker+"%").Scan(&count); err != nil {
+			return err
+		}
+		if count != 0 {
+			return fmt.Errorf("forbidden oauth marker persisted")
+		}
+	}
+	return nil
+}
+
+func oauthMarkerQueries(includeSecrets bool) []string {
+	queries := []string{
+		`SELECT COUNT(*) FROM provider_credentials WHERE provider_instance_id || kind || label || secret_prefix || secret_last4 || fallback_group LIKE ?`,
+		`SELECT COUNT(*) FROM oauth_tokens WHERE scopes || COALESCE(expires_at, '') || COALESCE(last_refresh_at, '') || COALESCE(refresh_failure_class, '') LIKE ?`,
+		`SELECT COUNT(*) FROM provider_accounts WHERE provider_instance_id || account_hash || display_label || plan_label LIKE ?`,
+	}
+	if includeSecrets {
+		queries = append(queries, `SELECT COUNT(*) FROM credential_secrets WHERE secret_kind || secret_material LIKE ?`)
+	}
+	return queries
+}
+
+func selectedHomeSnapshot(ctx context.Context, store *sqlite.Store, configPath string) (string, error) {
 	queries := []string{
 		`SELECT 'client_tokens:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || label || ':' || token_prefix || ':' || token_last4 || ':' || COALESCE(disabled_at, '') AS part FROM client_tokens ORDER BY id)), '')`,
 		`SELECT 'provider_credentials:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || provider_instance_id || ':' || kind || ':' || label || ':' || fallback_group || ':' || COALESCE(disabled_at, '') AS part FROM provider_credentials ORDER BY id)), '')`,
+		`SELECT 'oauth_tokens:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || credential_id || ':' || COALESCE(access_token_secret_id, 0) || ':' || COALESCE(refresh_token_secret_id, 0) || ':' || COALESCE(expires_at, '') || ':' || scopes || ':' || COALESCE(last_refresh_at, '') || ':' || COALESCE(refresh_failure_class, '') AS part FROM oauth_tokens ORDER BY id)), '')`,
+		`SELECT 'provider_accounts:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || provider_instance_id || ':' || COALESCE(credential_id, 0) || ':' || account_hash || ':' || display_label || ':' || plan_label AS part FROM provider_accounts ORDER BY id)), '')`,
 		`SELECT 'request_metadata:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || requested_provider_instance || ':' || requested_model || ':' || http_status || ':' || error_class || ':' || retry_count || ':' || fallback_count AS part FROM request_metadata ORDER BY id)), '')`,
 		`SELECT 'stream_metrics:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || request_metadata_id || ':' || completion_status || ':' || chunk_count AS part FROM stream_metrics ORDER BY id)), '')`,
 		`SELECT 'health_events:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || provider_instance_id || ':' || COALESCE(credential_id, 0) || ':' || model_id || ':' || event_class || ':' || COALESCE(http_status, 0) || ':' || normalized_error_class AS part FROM health_events ORDER BY id)), '')`,
@@ -472,7 +652,53 @@ func selectedHomeSnapshot(ctx context.Context, store *sqlite.Store) (string, err
 		b.WriteString(part)
 		b.WriteByte('\n')
 	}
+	secretSnapshot, err := credentialSecretSnapshot(ctx, store)
+	if err != nil {
+		return "", err
+	}
+	b.WriteString(secretSnapshot)
+	if configPath != "" {
+		info, err := os.Stat(configPath)
+		if err != nil {
+			return "", err
+		}
+		body, err := os.ReadFile(configPath)
+		if err != nil {
+			return "", err
+		}
+		b.WriteString(fmt.Sprintf("config:%d:%s:%x\n", info.Size(), info.ModTime().UTC().Format(time.RFC3339Nano), body))
+	}
 	return b.String(), nil
+}
+
+func credentialSecretSnapshot(ctx context.Context, store *sqlite.Store) (string, error) {
+	rows, err := store.DB.QueryContext(ctx, `
+		SELECT id, credential_id, secret_kind, secret_material
+		FROM credential_secrets
+		ORDER BY id
+	`)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var b strings.Builder
+	b.WriteString("credential_secrets:")
+	first := true
+	for rows.Next() {
+		var id, credentialID int64
+		var kind, material string
+		if err := rows.Scan(&id, &credentialID, &kind, &material); err != nil {
+			return "", err
+		}
+		if !first {
+			b.WriteByte('|')
+		}
+		first = false
+		sum := sha256.Sum256([]byte(material))
+		fmt.Fprintf(&b, "%d:%d:%s:%x", id, credentialID, kind, sum[:])
+	}
+	b.WriteByte('\n')
+	return b.String(), rows.Err()
 }
 
 func firstAPIKeyProvider(registry provider.Registry) (provider.Instance, bool) {

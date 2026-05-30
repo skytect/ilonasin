@@ -26,11 +26,14 @@ type Model struct {
 	registry       provider.Registry
 	tokens         credentials.LocalTokenManager
 	upstreams      credentials.UpstreamCredentialManager
+	oauth          credentials.OAuthMetadataReader
 	modelCache     ModelCacheReader
 	observability  ObservabilityReader
 	tokenRows      []credentials.LocalTokenMetadata
 	providers      []provider.Instance
 	credentials    []credentials.UpstreamCredentialMetadata
+	oauthRows      []credentials.OAuthCredentialMetadata
+	accountRows    []credentials.ProviderAccountMetadata
 	modelRows      []provider.ModelMetadata
 	requestRows    []metadata.RequestSummary
 	usageRows      []metadata.UsageSummary
@@ -62,12 +65,12 @@ type ObservabilityReader interface {
 	RecentFallbacks(ctx context.Context, limit int) ([]metadata.FallbackSummary, error)
 }
 
-func NewModel(cfg config.Config, registry provider.Registry, tokens credentials.LocalTokenManager, upstreams credentials.UpstreamCredentialManager, modelCache ModelCacheReader, observability ObservabilityReader) Model {
-	return Model{cfg: cfg, registry: registry, tokens: tokens, upstreams: upstreams, modelCache: modelCache, observability: observability}
+func NewModel(cfg config.Config, registry provider.Registry, tokens credentials.LocalTokenManager, upstreams credentials.UpstreamCredentialManager, oauth credentials.OAuthMetadataReader, modelCache ModelCacheReader, observability ObservabilityReader) Model {
+	return Model{cfg: cfg, registry: registry, tokens: tokens, upstreams: upstreams, oauth: oauth, modelCache: modelCache, observability: observability}
 }
 
-func newCheckModel(cfg config.Config, registry provider.Registry, tokens credentials.LocalTokenManager, upstreams credentials.UpstreamCredentialManager, modelCache ModelCacheReader, observability ObservabilityReader) Model {
-	return Model{cfg: cfg, registry: registry, tokens: tokens, upstreams: upstreams, modelCache: modelCache, observability: observability, quitOnInit: true, checkMode: true}
+func newCheckModel(cfg config.Config, registry provider.Registry, tokens credentials.LocalTokenManager, upstreams credentials.UpstreamCredentialManager, oauth credentials.OAuthMetadataReader, modelCache ModelCacheReader, observability ObservabilityReader) Model {
+	return Model{cfg: cfg, registry: registry, tokens: tokens, upstreams: upstreams, oauth: oauth, modelCache: modelCache, observability: observability, quitOnInit: true, checkMode: true}
 }
 
 func (m Model) Init() tea.Cmd {
@@ -181,7 +184,11 @@ func (m Model) View() string {
 		if instance.APIKey {
 			apiKey = "api-key"
 		}
-		fmt.Fprintf(&b, "- %s %s %s %s\n", instance.ID, instance.Type, instance.BaseURL, apiKey)
+		oauth := "oauth disabled"
+		if instance.OAuth {
+			oauth = "oauth"
+		}
+		fmt.Fprintf(&b, "- %s %s %s %s %s\n", instance.ID, instance.Type, instance.BaseURL, apiKey, oauth)
 	}
 	b.WriteString("\nUpstream credentials\n")
 	if len(m.credentials) == 0 {
@@ -194,6 +201,7 @@ func (m Model) View() string {
 		}
 		fmt.Fprintf(&b, "- %d %s %s %s...%s %s\n", cred.ID, cred.ProviderInstanceID, cred.Label, cred.SecretPrefix, cred.SecretLast4, state)
 	}
+	m.writeOAuth(&b)
 	b.WriteString("\nModel cache\n")
 	summaries := modelCacheSummaries(m.modelRows)
 	if len(summaries) == 0 {
@@ -207,15 +215,15 @@ func (m Model) View() string {
 	return b.String()
 }
 
-func Run(cfg config.Config, registry provider.Registry, tokens credentials.LocalTokenManager, upstreams credentials.UpstreamCredentialManager, modelCache ModelCacheReader, observability ObservabilityReader) error {
-	model := NewModel(cfg, registry, tokens, upstreams, modelCache, observability)
+func Run(cfg config.Config, registry provider.Registry, tokens credentials.LocalTokenManager, upstreams credentials.UpstreamCredentialManager, oauth credentials.OAuthMetadataReader, modelCache ModelCacheReader, observability ObservabilityReader) error {
+	model := NewModel(cfg, registry, tokens, upstreams, oauth, modelCache, observability)
 	_ = model.reload()
 	_, err := tea.NewProgram(model).Run()
 	return err
 }
 
-func Check(cfg config.Config, registry provider.Registry, tokens credentials.LocalTokenManager, upstreams credentials.UpstreamCredentialManager, modelCache ModelCacheReader, observability ObservabilityReader, out io.Writer) error {
-	model := newCheckModel(cfg, registry, tokens, upstreams, modelCache, observability)
+func Check(cfg config.Config, registry provider.Registry, tokens credentials.LocalTokenManager, upstreams credentials.UpstreamCredentialManager, oauth credentials.OAuthMetadataReader, modelCache ModelCacheReader, observability ObservabilityReader, out io.Writer) error {
+	model := newCheckModel(cfg, registry, tokens, upstreams, oauth, modelCache, observability)
 	_ = model.reload()
 	program := tea.NewProgram(model, tea.WithoutRenderer(), tea.WithInput(nil), tea.WithOutput(io.Discard))
 	if _, err := program.Run(); err != nil {
@@ -226,7 +234,7 @@ func Check(cfg config.Config, registry provider.Registry, tokens credentials.Loc
 }
 
 func ExerciseTokenLifecycle(ctx context.Context, tokens credentials.LocalTokenManager) error {
-	model := NewModel(config.Config{}, provider.Registry{}, tokens, nil, nil, nil)
+	model := NewModel(config.Config{}, provider.Registry{}, tokens, nil, nil, nil, nil)
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
 	m := updated.(Model)
 	if m.reveal == "" || m.revealTokenID == 0 {
@@ -266,7 +274,7 @@ func ExerciseUpstreamCredentialLifecycle(ctx context.Context, cfg config.Config,
 	if !ok {
 		return nil
 	}
-	model := newCheckModel(cfg, registry, nil, upstreams, nil, nil)
+	model := newCheckModel(cfg, registry, nil, upstreams, nil, nil, nil)
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
 	m := updated.(Model)
 	_ = m.reload()
@@ -293,7 +301,7 @@ func ExerciseUpstreamCredentialLifecycle(ctx context.Context, cfg config.Config,
 }
 
 func ExerciseModelCacheSummary(ctx context.Context, cfg config.Config, registry provider.Registry, cache ModelCacheReader) error {
-	model := newCheckModel(cfg, registry, nil, nil, cache, nil)
+	model := newCheckModel(cfg, registry, nil, nil, nil, cache, nil)
 	_ = model.reload()
 	view := model.View()
 	if !strings.Contains(view, "Model cache") || !strings.Contains(view, "deepseek 1 models") || !strings.Contains(view, "2026-05-30T12:00:00Z") {
@@ -308,7 +316,7 @@ func ExerciseModelCacheSummary(ctx context.Context, cfg config.Config, registry 
 }
 
 func ExerciseObservabilitySummary(ctx context.Context, cfg config.Config, registry provider.Registry, observability ObservabilityReader) error {
-	model := newCheckModel(cfg, registry, nil, nil, nil, observability)
+	model := newCheckModel(cfg, registry, nil, nil, nil, nil, observability)
 	_ = model.reload()
 	view := model.View()
 	required := []string{
@@ -346,6 +354,40 @@ func ExerciseObservabilitySummary(ctx context.Context, cfg config.Config, regist
 	return nil
 }
 
+func ExerciseOAuthSummary(ctx context.Context, cfg config.Config, registry provider.Registry, oauth credentials.OAuthMetadataReader) error {
+	model := newCheckModel(cfg, registry, nil, nil, oauth, nil, nil)
+	_ = model.reload()
+	view := model.View()
+	for _, text := range []string{
+		"OAuth accounts",
+		"codex oauth account Codex Safe plan team expires 2026-05-30T13:00:00Z refresh refresh_token_expired",
+		"Provider accounts",
+		"codex credential 1 Codex Safe plan team",
+	} {
+		if !strings.Contains(view, text) {
+			return fmt.Errorf("oauth summary missing %q", text)
+		}
+	}
+	for _, forbidden := range []string{
+		"oauth-access-secret-marker",
+		"oauth-refresh-secret-marker",
+		"acct_raw_forbidden",
+		"eyJ",
+		"callback",
+		"Authorization:",
+		"Bearer ",
+		"token_endpoint_body",
+		"cookie",
+		"stdout",
+		"req_",
+	} {
+		if strings.Contains(view, forbidden) {
+			return fmt.Errorf("oauth summary leaked %q", forbidden)
+		}
+	}
+	return nil
+}
+
 func (m *Model) reload() error {
 	if m.tokens == nil {
 		m.tokenRows = nil
@@ -365,6 +407,20 @@ func (m *Model) reload() error {
 			return err
 		}
 		m.credentials = rows
+	}
+	if m.oauth != nil {
+		oauthRows, err := m.oauth.ListOAuthCredentials(context.Background())
+		if err != nil {
+			m.err = err.Error()
+			return err
+		}
+		m.oauthRows = oauthRows
+		accountRows, err := m.oauth.ListProviderAccounts(context.Background())
+		if err != nil {
+			m.err = err.Error()
+			return err
+		}
+		m.accountRows = accountRows
 	}
 	if m.modelCache != nil {
 		rows, err := m.modelCache.ListModelCache(context.Background())
@@ -419,6 +475,42 @@ func (m *Model) reload() error {
 		m.selected = 0
 	}
 	return nil
+}
+
+func (m Model) writeOAuth(b *strings.Builder) {
+	if m.oauth == nil {
+		return
+	}
+	b.WriteString("\nOAuth accounts\n")
+	if len(m.oauthRows) == 0 {
+		b.WriteString("No OAuth accounts.\n")
+	}
+	for _, row := range m.oauthRows {
+		state := "enabled"
+		if row.Disabled {
+			state = "disabled"
+		}
+		expires := "none"
+		if row.ExpiresAt != nil {
+			expires = formatTime(*row.ExpiresAt)
+		}
+		refresh := safeRefreshFailureClass(row.RefreshFailureClass)
+		if refresh == "" {
+			refresh = "none"
+		}
+		fmt.Fprintf(b, "- %d %s oauth account %s plan %s expires %s refresh %s %s\n",
+			row.ID, safeDisplay(row.ProviderInstanceID), safeDisplay(row.AccountDisplayLabel),
+			safeDisplay(row.PlanLabel), expires, refresh, state)
+	}
+	b.WriteString("\nProvider accounts\n")
+	if len(m.accountRows) == 0 {
+		b.WriteString("No provider accounts.\n")
+	}
+	for _, row := range m.accountRows {
+		fmt.Fprintf(b, "- %s credential %d %s plan %s\n",
+			safeDisplay(row.ProviderInstanceID), row.CredentialID,
+			safeDisplay(row.DisplayLabel), safeDisplay(row.PlanLabel))
+	}
 }
 
 func (m Model) writeObservability(b *strings.Builder) {
@@ -522,6 +614,17 @@ func safeDisplay(value string) string {
 		return string(runes[:maxDisplayRunes]) + "..."
 	}
 	return value
+}
+
+func safeRefreshFailureClass(value string) string {
+	switch value {
+	case "refresh_token_expired", "refresh_token_invalidated", "refresh_token_reused",
+		"refresh_unauthorized", "refresh_network_error", "refresh_timeout",
+		"refresh_unavailable", "refresh_invalid_response":
+		return value
+	default:
+		return safeDisplay(value)
+	}
 }
 
 type modelCacheSummary struct {

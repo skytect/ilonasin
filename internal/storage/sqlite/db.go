@@ -256,6 +256,7 @@ func (s *Store) ListUpstreamCredentials(ctx context.Context) ([]credentials.Upst
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT id, provider_instance_id, kind, label, secret_prefix, secret_last4, fallback_group, created_at, disabled_at
 		FROM provider_credentials
+		WHERE kind = 'api_key'
 		ORDER BY id ASC
 	`)
 	if err != nil {
@@ -273,11 +274,186 @@ func (s *Store) ListUpstreamCredentials(ctx context.Context) ([]credentials.Upst
 	return out, rows.Err()
 }
 
+func (s *Store) InsertOAuthCredential(ctx context.Context, meta credentials.NewOAuthCredential, accessToken, refreshToken string) (credentials.OAuthCredentialMetadata, error) {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return credentials.OAuthCredentialMetadata{}, err
+	}
+	defer tx.Rollback()
+	ts := meta.CreatedAt.UTC().Format(time.RFC3339Nano)
+	res, err := tx.ExecContext(ctx, `
+		INSERT INTO provider_credentials(
+			provider_instance_id, kind, label, secret_prefix, secret_last4, fallback_group, created_at, updated_at
+		) VALUES(?, 'oauth', ?, '', '', ?, ?, ?)
+	`, meta.ProviderInstanceID, meta.Label, credentials.DefaultFallbackGroup, ts, ts)
+	if err != nil {
+		if isUniqueConstraint(err) {
+			return credentials.OAuthCredentialMetadata{}, credentials.ErrDuplicateCredential
+		}
+		return credentials.OAuthCredentialMetadata{}, err
+	}
+	credentialID, err := res.LastInsertId()
+	if err != nil {
+		return credentials.OAuthCredentialMetadata{}, err
+	}
+	accessID, err := insertCredentialSecret(ctx, tx, credentialID, "oauth_access", accessToken, ts)
+	if err != nil {
+		return credentials.OAuthCredentialMetadata{}, err
+	}
+	refreshID, err := insertCredentialSecret(ctx, tx, credentialID, "oauth_refresh", refreshToken, ts)
+	if err != nil {
+		return credentials.OAuthCredentialMetadata{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO oauth_tokens(
+			credential_id, access_token_secret_id, refresh_token_secret_id, expires_at, scopes
+		) VALUES(?, ?, ?, ?, ?)
+	`, credentialID, accessID, refreshID, nullableTime(meta.ExpiresAt), meta.Scopes); err != nil {
+		return credentials.OAuthCredentialMetadata{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO provider_accounts(
+			provider_instance_id, credential_id, account_hash, display_label, plan_label, created_at, updated_at
+		) VALUES(?, ?, ?, ?, ?, ?, ?)
+	`, meta.ProviderInstanceID, credentialID, meta.AccountHash, meta.AccountDisplayLabel, meta.PlanLabel, ts, ts); err != nil {
+		return credentials.OAuthCredentialMetadata{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return credentials.OAuthCredentialMetadata{}, err
+	}
+	return credentials.OAuthCredentialMetadata{
+		ID:                  credentialID,
+		ProviderInstanceID:  meta.ProviderInstanceID,
+		Label:               meta.Label,
+		AccountDisplayLabel: meta.AccountDisplayLabel,
+		PlanLabel:           meta.PlanLabel,
+		Scopes:              meta.Scopes,
+		ExpiresAt:           cloneTime(meta.ExpiresAt),
+		CreatedAt:           meta.CreatedAt.UTC(),
+	}, nil
+}
+
+func insertCredentialSecret(ctx context.Context, tx *sql.Tx, credentialID int64, kind, material, ts string) (int64, error) {
+	res, err := tx.ExecContext(ctx, `
+		INSERT INTO credential_secrets(credential_id, secret_kind, secret_material, created_at, updated_at)
+		VALUES(?, ?, ?, ?, ?)
+	`, credentialID, kind, material, ts, ts)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+func (s *Store) ListOAuthCredentials(ctx context.Context) ([]credentials.OAuthCredentialMetadata, error) {
+	rows, err := s.DB.QueryContext(ctx, `
+		SELECT pc.id, pc.provider_instance_id, pc.label,
+			COALESCE(pa.display_label, ''), COALESCE(pa.plan_label, ''),
+			ot.scopes, ot.expires_at, ot.last_refresh_at,
+			COALESCE(ot.refresh_failure_class, ''), pc.created_at, pc.disabled_at
+		FROM provider_credentials pc
+		JOIN oauth_tokens ot ON ot.credential_id = pc.id
+		LEFT JOIN provider_accounts pa ON pa.credential_id = pc.id
+		WHERE pc.kind = 'oauth'
+		ORDER BY pc.id ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []credentials.OAuthCredentialMetadata
+	for rows.Next() {
+		var row credentials.OAuthCredentialMetadata
+		var created string
+		var expires, lastRefresh, disabled sql.NullString
+		if err := rows.Scan(&row.ID, &row.ProviderInstanceID, &row.Label,
+			&row.AccountDisplayLabel, &row.PlanLabel, &row.Scopes, &expires,
+			&lastRefresh, &row.RefreshFailureClass, &created, &disabled); err != nil {
+			return nil, err
+		}
+		createdAt, err := time.Parse(time.RFC3339Nano, created)
+		if err != nil {
+			return nil, err
+		}
+		row.CreatedAt = createdAt
+		if expires.Valid {
+			expiresAt, err := time.Parse(time.RFC3339Nano, expires.String)
+			if err != nil {
+				return nil, err
+			}
+			row.ExpiresAt = &expiresAt
+		}
+		if lastRefresh.Valid {
+			refreshAt, err := time.Parse(time.RFC3339Nano, lastRefresh.String)
+			if err != nil {
+				return nil, err
+			}
+			row.LastRefreshAt = &refreshAt
+		}
+		if disabled.Valid {
+			disabledAt, err := time.Parse(time.RFC3339Nano, disabled.String)
+			if err != nil {
+				return nil, err
+			}
+			row.DisabledAt = &disabledAt
+			row.Disabled = true
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) ListProviderAccounts(ctx context.Context) ([]credentials.ProviderAccountMetadata, error) {
+	rows, err := s.DB.QueryContext(ctx, `
+		SELECT id, provider_instance_id, COALESCE(credential_id, 0), display_label, plan_label, created_at
+		FROM provider_accounts
+		ORDER BY id ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []credentials.ProviderAccountMetadata
+	for rows.Next() {
+		var row credentials.ProviderAccountMetadata
+		var created string
+		if err := rows.Scan(&row.ID, &row.ProviderInstanceID, &row.CredentialID,
+			&row.DisplayLabel, &row.PlanLabel, &created); err != nil {
+			return nil, err
+		}
+		createdAt, err := time.Parse(time.RFC3339Nano, created)
+		if err != nil {
+			return nil, err
+		}
+		row.CreatedAt = createdAt
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) MarkOAuthRefreshFailure(ctx context.Context, credentialID int64, failureClass string, now time.Time) error {
+	res, err := s.DB.ExecContext(ctx, `
+		UPDATE oauth_tokens
+		SET refresh_failure_class = ?, last_refresh_at = ?
+		WHERE credential_id = ?
+	`, failureClass, now.UTC().Format(time.RFC3339Nano), credentialID)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return credentials.ErrCredentialNotFound
+	}
+	return nil
+}
+
 func (s *Store) DisableUpstreamCredential(ctx context.Context, id int64, disabledAt time.Time) error {
 	res, err := s.DB.ExecContext(ctx, `
 		UPDATE provider_credentials
 		SET disabled_at = COALESCE(disabled_at, ?), updated_at = ?
-		WHERE id = ?
+		WHERE id = ? AND kind = 'api_key'
 	`, disabledAt.UTC().Format(time.RFC3339Nano), disabledAt.UTC().Format(time.RFC3339Nano), id)
 	if err != nil {
 		return err
@@ -754,4 +930,19 @@ func nullableInt64(v int64) any {
 		return nil
 	}
 	return v
+}
+
+func nullableTime(t *time.Time) any {
+	if t == nil || t.IsZero() {
+		return nil
+	}
+	return t.UTC().Format(time.RFC3339Nano)
+}
+
+func cloneTime(t *time.Time) *time.Time {
+	if t == nil {
+		return nil
+	}
+	cloned := t.UTC()
+	return &cloned
 }

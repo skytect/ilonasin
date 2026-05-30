@@ -2,9 +2,13 @@ package credentials
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+	"unicode"
 
 	"ilonasin/internal/provider"
 )
@@ -15,6 +19,7 @@ var (
 	ErrUnsupportedCredential = errors.New("unsupported credential")
 	ErrDuplicateCredential   = errors.New("duplicate credential")
 	ErrInvalidSecretDomain   = errors.New("invalid secret domain")
+	ErrInvalidOAuthInput     = errors.New("invalid oauth input")
 )
 
 const DefaultFallbackGroup = "default"
@@ -39,6 +44,20 @@ type UpstreamCredentialRepository interface {
 	ResolveAPIKeyCredential(ctx context.Context, providerInstanceID string) (ResolvedAPIKeyCredential, error)
 	ResolveAPIKeyCredentials(ctx context.Context, providerInstanceID string) ([]ResolvedAPIKeyCredential, error)
 	SetFallbackGroupEnabled(ctx context.Context, providerInstanceID, groupLabel string, enabled bool, now time.Time) error
+	InsertOAuthCredential(ctx context.Context, meta NewOAuthCredential, accessToken, refreshToken string) (OAuthCredentialMetadata, error)
+	ListOAuthCredentials(ctx context.Context) ([]OAuthCredentialMetadata, error)
+	ListProviderAccounts(ctx context.Context) ([]ProviderAccountMetadata, error)
+	MarkOAuthRefreshFailure(ctx context.Context, credentialID int64, failureClass string, now time.Time) error
+}
+
+type OAuthCredentialManager interface {
+	AddOAuthCredential(ctx context.Context, input NewOAuthCredentialInput) (OAuthCredentialMetadata, error)
+	MarkOAuthRefreshFailure(ctx context.Context, credentialID int64, failureClass string) error
+}
+
+type OAuthMetadataReader interface {
+	ListOAuthCredentials(ctx context.Context) ([]OAuthCredentialMetadata, error)
+	ListProviderAccounts(ctx context.Context) ([]ProviderAccountMetadata, error)
 }
 
 type UpstreamService struct {
@@ -68,6 +87,53 @@ type UpstreamCredentialMetadata struct {
 	CreatedAt          time.Time
 	DisabledAt         *time.Time
 	Disabled           bool
+}
+
+type NewOAuthCredentialInput struct {
+	ProviderInstanceID  string
+	Label               string
+	AccessToken         string
+	RefreshToken        string
+	AccountID           string
+	AccountDisplayLabel string
+	PlanLabel           string
+	Scopes              string
+	ExpiresAt           *time.Time
+}
+
+type NewOAuthCredential struct {
+	ProviderInstanceID  string
+	Label               string
+	AccountHash         string
+	AccountDisplayLabel string
+	PlanLabel           string
+	Scopes              string
+	ExpiresAt           *time.Time
+	CreatedAt           time.Time
+}
+
+type OAuthCredentialMetadata struct {
+	ID                  int64
+	ProviderInstanceID  string
+	Label               string
+	AccountDisplayLabel string
+	PlanLabel           string
+	Scopes              string
+	ExpiresAt           *time.Time
+	LastRefreshAt       *time.Time
+	RefreshFailureClass string
+	CreatedAt           time.Time
+	DisabledAt          *time.Time
+	Disabled            bool
+}
+
+type ProviderAccountMetadata struct {
+	ID                 int64
+	ProviderInstanceID string
+	CredentialID       int64
+	DisplayLabel       string
+	PlanLabel          string
+	CreatedAt          time.Time
 }
 
 type ResolvedAPIKeyCredential struct {
@@ -114,12 +180,60 @@ func (s UpstreamService) AddAPIKey(ctx context.Context, providerInstanceID, labe
 	}, apiKey)
 }
 
+func (s UpstreamService) AddOAuthCredential(ctx context.Context, input NewOAuthCredentialInput) (OAuthCredentialMetadata, error) {
+	if input.Label == "" {
+		input.Label = "oauth account"
+	}
+	instance, ok := s.Registry.Get(input.ProviderInstanceID)
+	if !ok {
+		return OAuthCredentialMetadata{}, ErrCredentialNotFound
+	}
+	if !instance.OAuth {
+		return OAuthCredentialMetadata{}, fmt.Errorf("%w: provider %q does not support oauth credentials", ErrUnsupportedCredential, input.ProviderInstanceID)
+	}
+	accessToken := strings.TrimSpace(input.AccessToken)
+	refreshToken := strings.TrimSpace(input.RefreshToken)
+	if err := validateOAuthSecret(accessToken); err != nil {
+		return OAuthCredentialMetadata{}, err
+	}
+	if err := validateOAuthSecret(refreshToken); err != nil {
+		return OAuthCredentialMetadata{}, err
+	}
+	accountID, err := canonicalAccountID(input.AccountID)
+	if err != nil {
+		return OAuthCredentialMetadata{}, err
+	}
+	meta := NewOAuthCredential{
+		ProviderInstanceID:  input.ProviderInstanceID,
+		Label:               sanitizeOAuthDisplay(input.Label, accessToken, refreshToken),
+		AccountHash:         AccountHash(instance.Type, input.ProviderInstanceID, accountID),
+		AccountDisplayLabel: sanitizeOAuthDisplay(input.AccountDisplayLabel, accessToken, refreshToken),
+		PlanLabel:           sanitizeOAuthDisplay(input.PlanLabel, accessToken, refreshToken),
+		Scopes:              sanitizeOAuthDisplay(input.Scopes, accessToken, refreshToken),
+		ExpiresAt:           input.ExpiresAt,
+		CreatedAt:           s.now(),
+	}
+	return s.Repo.InsertOAuthCredential(ctx, meta, accessToken, refreshToken)
+}
+
 func (s UpstreamService) List(ctx context.Context) ([]UpstreamCredentialMetadata, error) {
 	return s.Repo.ListUpstreamCredentials(ctx)
 }
 
+func (s UpstreamService) ListOAuthCredentials(ctx context.Context) ([]OAuthCredentialMetadata, error) {
+	return s.Repo.ListOAuthCredentials(ctx)
+}
+
+func (s UpstreamService) ListProviderAccounts(ctx context.Context) ([]ProviderAccountMetadata, error) {
+	return s.Repo.ListProviderAccounts(ctx)
+}
+
 func (s UpstreamService) Disable(ctx context.Context, id int64) error {
 	return s.Repo.DisableUpstreamCredential(ctx, id, s.now())
+}
+
+func (s UpstreamService) MarkOAuthRefreshFailure(ctx context.Context, credentialID int64, failureClass string) error {
+	return s.Repo.MarkOAuthRefreshFailure(ctx, credentialID, normalizeRefreshFailureClass(failureClass), s.now())
 }
 
 func (s UpstreamService) EnableFallbackGroup(ctx context.Context, providerInstanceID, groupLabel string) error {
@@ -154,6 +268,125 @@ func (s UpstreamService) ResolveAPIKeys(ctx context.Context, providerInstanceID 
 
 func LooksLikeLocalToken(value string) bool {
 	return len(value) > 4 && value[:4] == "iln_"
+}
+
+func AccountHash(providerType, providerInstanceID, canonicalAccountID string) string {
+	sum := sha256.Sum256([]byte("ilonasin-provider-account-v1\x00" + providerType + "\x00" + providerInstanceID + "\x00" + canonicalAccountID))
+	return hex.EncodeToString(sum[:])
+}
+
+func canonicalAccountID(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", ErrInvalidOAuthInput
+	}
+	for _, r := range value {
+		if unicode.IsControl(r) {
+			return "", ErrInvalidOAuthInput
+		}
+	}
+	if containsForbiddenOAuthMarker(value) {
+		return "", ErrInvalidOAuthInput
+	}
+	return value, nil
+}
+
+func validateOAuthSecret(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" || LooksLikeLocalToken(value) || looksLikeJWT(value) || containsForbiddenOAuthMarker(value) || looksStructuredOAuthMaterial(value) {
+		return ErrInvalidOAuthInput
+	}
+	for _, r := range value {
+		if unicode.IsControl(r) || unicode.IsSpace(r) {
+			return ErrInvalidOAuthInput
+		}
+	}
+	return nil
+}
+
+func looksStructuredOAuthMaterial(value string) bool {
+	lower := strings.ToLower(value)
+	for _, marker := range []string{
+		"{", "}", "[", "]", "\"", ";", "&",
+		"access_token", "refresh_token", "token_type", "expires_in",
+		"set-cookie", "cookie:", "grant_type", "application/json",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeJWT(value string) bool {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	return strings.HasPrefix(lower, "eyj") || strings.Count(value, ".") >= 2
+}
+
+func containsForbiddenOAuthMarker(value string) bool {
+	lower := strings.ToLower(value)
+	for _, marker := range []string{
+		"authorization:", "bearer ", "http://", "https://", "callback",
+		"id_token", "agent_identity", "private_key", "cookie", "stdout",
+		"token_endpoint_body", "raw-provider-payload", "req_", "request_id",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func sanitizeOAuthDisplay(value, accessToken, refreshToken string) string {
+	value = strings.TrimSpace(value)
+	value = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, value)
+	if containsOAuthSecretValue(value, accessToken, refreshToken) || containsForbiddenOAuthMarker(value) || containsForbiddenOAuthMetadataMarker(value) || looksLikeJWT(value) || strings.Contains(strings.ToLower(value), "acct_") {
+		return ""
+	}
+	if len([]rune(value)) > 64 {
+		return string([]rune(value)[:64])
+	}
+	return value
+}
+
+func containsOAuthSecretValue(value, accessToken, refreshToken string) bool {
+	for _, secret := range []string{accessToken, refreshToken} {
+		secret = strings.TrimSpace(secret)
+		if secret != "" && strings.Contains(value, secret) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsForbiddenOAuthMetadataMarker(value string) bool {
+	lower := strings.ToLower(value)
+	for _, marker := range []string{
+		"sk-", "iln_", "secret", "oauth-access", "oauth-refresh", "token",
+		"prompt", "completion", "body", "raw", "payload", "account",
+		"balance", "credit",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeRefreshFailureClass(value string) string {
+	switch value {
+	case "refresh_token_expired", "refresh_token_invalidated", "refresh_token_reused",
+		"refresh_unauthorized", "refresh_network_error", "refresh_timeout",
+		"refresh_unavailable", "refresh_invalid_response":
+		return value
+	default:
+		return "refresh_unavailable"
+	}
 }
 
 func (s UpstreamService) setFallbackGroup(ctx context.Context, providerInstanceID, groupLabel string, enabled bool) error {

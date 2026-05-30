@@ -16,6 +16,7 @@ type Defaults struct {
 	AuthStyle   string
 	Placeholder bool
 	APIKey      bool
+	OAuth       bool
 }
 
 var builtIns = map[string]Defaults{
@@ -36,6 +37,7 @@ var builtIns = map[string]Defaults{
 		BaseURL:     "https://chatgpt.com/backend-api/codex",
 		AuthStyle:   "deferred",
 		Placeholder: true,
+		OAuth:       true,
 	},
 }
 
@@ -59,6 +61,7 @@ type Instance struct {
 	AuthStyle   string
 	Placeholder bool
 	APIKey      bool
+	OAuth       bool
 }
 
 func NewRegistry(cfg config.Config) (Registry, error) {
@@ -91,6 +94,7 @@ func NewRegistry(cfg config.Config) (Registry, error) {
 			AuthStyle:   def.AuthStyle,
 			Placeholder: def.Placeholder,
 			APIKey:      def.APIKey,
+			OAuth:       def.OAuth,
 		}
 		reg.instances[id] = instance
 		reg.ordered = append(reg.ordered, instance)

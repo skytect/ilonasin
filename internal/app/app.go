@@ -565,7 +565,7 @@ func exerciseModelCacheCheck(ctx context.Context, registry provider.Registry, cf
 		ProviderInstanceID: "deepseek",
 		ModelID:            "deepseek-v4-pro",
 		DisplayName:        "DeepSeek V4 Pro",
-		CapabilityFlags:    "chat,json_object,reasoning,stream,tools",
+		CapabilityFlags:    "chat,json_object,reasoning,stream",
 		ContextLength:      1000000,
 		UpdatedAt:          now,
 	}}); err != nil {
@@ -2481,7 +2481,14 @@ func newServeCheckUpstream() *serveCheckUpstream {
 			_, _ = w.Write([]byte(strings.Repeat("x", int(provider.MaxUpstreamChatBodyBytes)+1)))
 			return
 		}
-		if body["stream"] == nil && (model == "deepseek-v4-pro" || model == "deepseek/deepseek-v4-pro") {
+		if model == "json-format" {
+			format, _ := body["response_format"].(map[string]any)
+			if format["type"] != "json_object" {
+				http.Error(w, "missing json response format", http.StatusBadRequest)
+				return
+			}
+		}
+		if body["stream"] == nil {
 			up.mu.Lock()
 			up.observed[r.URL.Path+" "+model] = true
 			up.mu.Unlock()
@@ -2542,6 +2549,9 @@ func (u *serveCheckUpstream) handleServeCheckCodexResponses(w http.ResponseWrite
 		http.Error(w, "bad request shape", http.StatusBadRequest)
 		return
 	}
+	u.mu.Lock()
+	u.observed["/responses "+body.Model] = true
+	u.mu.Unlock()
 	if body.Store || !body.Stream {
 		http.Error(w, "bad responses flags", http.StatusBadRequest)
 		return
@@ -2559,9 +2569,6 @@ func (u *serveCheckUpstream) handleServeCheckCodexResponses(w http.ResponseWrite
 			http.Error(w, "bad assistant input", http.StatusBadRequest)
 			return
 		}
-		u.mu.Lock()
-		u.observed["/responses "+body.Model] = true
-		u.mu.Unlock()
 	}
 	if body.Model == "codex-system-only" {
 		if body.Instructions != "system only" || len(body.Input) != 0 {
@@ -2801,6 +2808,9 @@ func (u *serveCheckUpstream) handleServeCheckStream(w http.ResponseWriter, r *ht
 		http.Error(w, "bad accept", http.StatusBadRequest)
 		return
 	}
+	u.mu.Lock()
+	u.observed[r.URL.Path+" stream "+model] = true
+	u.mu.Unlock()
 	if strings.HasPrefix(model, "stream-fallback") {
 		u.recordObservedAuth(model, auth)
 	}
@@ -2880,11 +2890,6 @@ func (u *serveCheckUpstream) handleServeCheckStream(w http.ResponseWriter, r *ht
 		http.Error(w, "missing include_usage", http.StatusBadRequest)
 		return
 	}
-	if model == "deepseek-v4-pro" || model == "deepseek/deepseek-v4-pro" {
-		u.mu.Lock()
-		u.observed[r.URL.Path+" stream "+model] = true
-		u.mu.Unlock()
-	}
 	write(": keep-alive\n\n")
 	write(`data: {"id":"chunk_raw_id","object":"chat.completion.chunk","created":1,"model":"` + model + `","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}],"usage":null,"provider":"raw-provider-extra"}` + "\n\n")
 	write(`data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"ok","reasoning_content":"r"}}],"usage":null}` + "\n\n")
@@ -2950,6 +2955,23 @@ func looksLikeChatCompletion(body []byte) bool {
 	return resp.Object == "chat.completion" && len(resp.Choices) > 0 && resp.Usage != nil
 }
 
+func assertUnsupportedChatNoUpstream(base, token string, body []byte, fakeUpstream *serveCheckUpstream, path, upstreamModel, name string) error {
+	status, respBody, err := postJSON(base+"/v1/chat/completions", token, body)
+	if err != nil || status != http.StatusBadRequest {
+		return fmt.Errorf("unsupported %s status=%d err=%v", name, status, err)
+	}
+	if bytes.Contains(respBody, []byte("in this slice")) {
+		return fmt.Errorf("unsupported %s returned slice-era wording", name)
+	}
+	if fakeUpstream.sawExpected(path, upstreamModel) {
+		return fmt.Errorf("unsupported %s reached upstream", name)
+	}
+	if fakeUpstream.sawExpectedStream(path, upstreamModel) {
+		return fmt.Errorf("unsupported %s reached upstream stream", name)
+	}
+	return nil
+}
+
 func exerciseCodexChatCheck(ctx context.Context, base, token string, fakeUpstream *serveCheckUpstream, store *sqlite.Store) error {
 	fakeUpstream.clearObservedAuth()
 	successBody := []byte(`{"model":"codex/gpt-5.5-codex","messages":[{"role":"system","content":"codex system marker"},{"role":"user","content":"check"},{"role":"assistant","content":"prior"}]}`)
@@ -2978,6 +3000,22 @@ func exerciseCodexChatCheck(ctx context.Context, base, token string, fakeUpstrea
 	} {
 		if fakeUpstream.sawAuth("codex-chat", marker) {
 			return fmt.Errorf("codex chat used forbidden credential marker %q", marker)
+		}
+	}
+	for _, tc := range []struct {
+		name  string
+		extra string
+	}{
+		{name: "response_format", extra: `"response_format":{"type":"json_object"}`},
+		{name: "max_tokens", extra: `"max_tokens":1`},
+		{name: "temperature", extra: `"temperature":0.2`},
+		{name: "top_p", extra: `"top_p":0.9`},
+		{name: "stop", extra: `"stop":"x"`},
+	} {
+		upstreamModel := "codex-unsupported-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":"codex/%s","messages":[{"role":"user","content":"check"}],%s}`, upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, "/responses", upstreamModel, "codex "+tc.name); err != nil {
+			return err
 		}
 	}
 	if err := assertCodexChatMetadata(ctx, store, "gpt-5.5-codex", http.StatusOK, "", 3, 4, 7, 2, 1); err != nil {
@@ -3858,13 +3896,28 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 	if err := assertRecordedCredentialID(ctx, store); err != nil {
 		return err
 	}
-	toolsBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"tools":[]}`, model))
-	if status, err := postStatus(base+"/v1/chat/completions", token, toolsBody); err != nil || status != http.StatusBadRequest {
-		return fmt.Errorf("unsupported tools provider=%s status=%d err=%v", instance.ID, status, err)
+	jsonFormatBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"response_format":{"type":"json_object"}}`, instance.ID+"/json-format"))
+	if status, _, err := postJSON(base+"/v1/chat/completions", token, jsonFormatBody); err != nil || status != http.StatusOK {
+		return fmt.Errorf("json response_format provider=%s status=%d err=%v", instance.ID, status, err)
 	}
-	providerOptionsBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"provider_options":null}`, model))
-	if status, err := postStatus(base+"/v1/chat/completions", token, providerOptionsBody); err != nil || status != http.StatusBadRequest {
-		return fmt.Errorf("unsupported provider_options provider=%s status=%d err=%v", instance.ID, status, err)
+	if !fakeUpstream.sawExpected(expectedPath, "json-format") {
+		return fmt.Errorf("json response_format did not reach upstream provider=%s", instance.ID)
+	}
+	for _, tc := range []struct {
+		name  string
+		extra string
+	}{
+		{name: "tools", extra: `"tools":[]`},
+		{name: "tool_choice", extra: `"tool_choice":null`},
+		{name: "logprobs", extra: `"logprobs":null`},
+		{name: "top_logprobs", extra: `"top_logprobs":null`},
+		{name: "provider_options", extra: `"provider_options":null`},
+	} {
+		upstreamModel := "unsupported-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" "+tc.name); err != nil {
+			return err
+		}
 	}
 	invalidBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}]}`, instance.ID+"/invalid-json"))
 	if status, err := postStatus(base+"/v1/chat/completions", token, invalidBody); err != nil || status != http.StatusBadGateway {
@@ -3932,13 +3985,27 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 		`"stream_options":{}`,
 		`"stream_options":{"include_usage":true,"extra":false}`,
 		`"stream_options":{"include_usage":"true"}`,
-		`"stream":true,"stream_options":{"include_usage":true},"tools":[]`,
-		`"stream":true,"stream_options":{"include_usage":true},"provider_options":null`,
 	}
 	for _, extra := range invalidBodies {
 		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, model, extra))
 		if status, err := postStatus(base+"/v1/chat/completions", token, body); err != nil || status != http.StatusBadRequest {
 			return fmt.Errorf("invalid stream validation %s provider=%s status=%d err=%v", extra, instance.ID, status, err)
+		}
+	}
+	for _, tc := range []struct {
+		name  string
+		extra string
+	}{
+		{name: "tools", extra: `"tools":[]`},
+		{name: "tool_choice", extra: `"tool_choice":null`},
+		{name: "logprobs", extra: `"logprobs":null`},
+		{name: "top_logprobs", extra: `"top_logprobs":null`},
+		{name: "provider_options", extra: `"provider_options":null`},
+	} {
+		upstreamModel := "stream-unsupported-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" stream "+tc.name); err != nil {
+			return err
 		}
 	}
 	preErrorBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true}}`, instance.ID+"/stream-error-before"))
@@ -4208,7 +4275,7 @@ func exerciseCodexNoEligibleCacheCheck(ctx context.Context, registry provider.Re
 	if err := store.ReplaceModelCache(ctx, "codex", []provider.ModelMetadata{{
 		ProviderInstanceID: "codex",
 		ModelID:            "stale-codex-model",
-		CapabilityFlags:    "chat,reasoning,stream,tools",
+		CapabilityFlags:    "chat,reasoning,stream",
 		UpdatedAt:          checkNow,
 	}}); err != nil {
 		return err
@@ -4219,6 +4286,10 @@ func exerciseCodexNoEligibleCacheCheck(ctx context.Context, registry provider.Re
 	handler := server.NewWithClock(checkRegistry, tokenService, upstreams, upstreams, chatAdapters(fakeUpstream.server.Client()), modelDiscoverers(fakeUpstream.server.Client()), store, store, func() time.Time { return checkNow }).Handler()
 	testServer := httptest.NewServer(handler)
 	defer testServer.Close()
+	unsupportedBody := []byte(`{"model":"codex/codex-noeligible-tools","messages":[{"role":"user","content":"check"}],"tools":[]}`)
+	if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, unsupportedBody, fakeUpstream, "/responses", "codex-noeligible-tools", "codex noeligible tools"); err != nil {
+		return err
+	}
 	status, respBody, err := getJSON(testServer.URL+"/v1/models", created.Token)
 	if err != nil || status != http.StatusBadGateway {
 		return fmt.Errorf("codex no-eligible cache status=%d err=%v", status, err)
@@ -4581,7 +4652,7 @@ func assertModelCacheRows(ctx context.Context, store *sqlite.Store) error {
 	codexFound := false
 	for _, row := range rows {
 		if row.ModelID == "deepseek/deepseek-v4-pro" {
-			if row.DisplayName != "DeepSeek V4 Pro" || row.ContextLength != 1000000 || row.CapabilityFlags != "chat,json_object,logprobs,reasoning,tools" {
+			if row.DisplayName != "DeepSeek V4 Pro" || row.ContextLength != 1000000 || row.CapabilityFlags != "chat,json_object,reasoning" {
 				return fmt.Errorf("openrouter model cache metadata missing")
 			}
 			if strings.Contains(row.DisplayName, "raw description marker") || strings.Contains(row.CapabilityFlags, "pricing") {
@@ -4590,7 +4661,7 @@ func assertModelCacheRows(ctx context.Context, store *sqlite.Store) error {
 		}
 		if row.ProviderInstanceID == "codex" && row.ModelID == "gpt-5.5-codex" {
 			codexFound = true
-			if row.CapabilityFlags != "chat,reasoning,stream,tools" || row.DisplayName != "" || row.ContextLength != 0 {
+			if row.CapabilityFlags != "chat,reasoning,stream" || row.DisplayName != "" || row.ContextLength != 0 {
 				return fmt.Errorf("codex model cache metadata mismatch")
 			}
 		}

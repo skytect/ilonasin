@@ -93,6 +93,52 @@ func NewHTTPChatAdapter(client *http.Client) HTTPChatAdapter {
 	return HTTPChatAdapter{Client: client}
 }
 
+func (a HTTPChatAdapter) ValidateChatRequest(instance Instance, req openai.ChatCompletionRequest) error {
+	commonUnsupported := []string{"tools", "tool_choice", "logprobs", "top_logprobs", "provider_options"}
+	switch instance.Type {
+	case "deepseek", "openrouter":
+		if err := rejectPresentFields(req, commonUnsupported...); err != nil {
+			return err
+		}
+		return validateChatResponseFormat(req)
+	case "codex":
+		if err := rejectPresentFields(req, append(commonUnsupported, "max_tokens", "temperature", "top_p", "stop", "response_format")...); err != nil {
+			return err
+		}
+		return nil
+	default:
+		return fmt.Errorf("provider type %q does not support chat validation", instance.Type)
+	}
+}
+
+func rejectPresentFields(req openai.ChatCompletionRequest, fields ...string) error {
+	for _, field := range fields {
+		if req.HasField(field) {
+			return fmt.Errorf("%s is not supported", field)
+		}
+	}
+	return nil
+}
+
+func validateChatResponseFormat(req openai.ChatCompletionRequest) error {
+	if !req.HasField("response_format") {
+		return nil
+	}
+	if req.ResponseFormat == nil {
+		return errors.New("response_format must be an object")
+	}
+	if len(req.ResponseFormat) != 1 {
+		return errors.New("response_format only supports the type field")
+	}
+	typ, _ := req.ResponseFormat["type"].(string)
+	switch typ {
+	case "text", "json_object":
+		return nil
+	default:
+		return fmt.Errorf("response_format.type %q is unsupported", typ)
+	}
+}
+
 func (a HTTPChatAdapter) CompleteChat(ctx context.Context, req ChatRequest) (ChatResult, error) {
 	start := time.Now()
 	if req.Instance.Type == "codex" {
@@ -1073,9 +1119,9 @@ func normalizeModels(instance Instance, body []byte) ([]ModelMetadata, error) {
 			meta.ContextLength = safeInt(item["context_length"])
 			meta.CapabilityFlags = openRouterCapabilityFlags(item)
 		case "deepseek":
-			meta.CapabilityFlags = "chat,json_object,reasoning,stream,tools"
+			meta.CapabilityFlags = "chat,json_object,reasoning,stream"
 		case "codex":
-			meta.CapabilityFlags = "chat,reasoning,stream,tools"
+			meta.CapabilityFlags = "chat,reasoning,stream"
 		}
 		models = append(models, meta)
 	}
@@ -1144,12 +1190,8 @@ func openRouterCapabilityFlags(item map[string]any) string {
 			continue
 		}
 		switch param {
-		case "tools", "tool_choice":
-			flags["tools"] = true
 		case "response_format":
 			flags["json_object"] = true
-		case "logprobs", "top_logprobs":
-			flags["logprobs"] = true
 		case "reasoning":
 			flags["reasoning"] = true
 		case "stream":

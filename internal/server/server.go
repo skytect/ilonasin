@@ -336,6 +336,10 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 		writeError(w, http.StatusNotImplemented, "provider adapter is not implemented", "invalid_request_error", "provider_unimplemented")
 		return
 	}
+	if err := adapter.ValidateChatRequest(instance, req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "unsupported_request")
+		return
+	}
 	if instance.Type == "codex" {
 		credential, err := s.resolveModelCredential(r.Context(), instance)
 		if err != nil {

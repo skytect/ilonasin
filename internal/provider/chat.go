@@ -8,6 +8,7 @@ import (
 )
 
 type ChatAdapter interface {
+	ValidateChatRequest(instance Instance, req openai.ChatCompletionRequest) error
 	CompleteChat(ctx context.Context, req ChatRequest) (ChatResult, error)
 	StreamChat(ctx context.Context, req ChatRequest, sink ChatStreamSink) (ChatStreamSummary, error)
 }

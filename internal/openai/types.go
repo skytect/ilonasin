@@ -25,6 +25,7 @@ type ChatCompletionRequest struct {
 	Logprobs         *bool            `json:"logprobs,omitempty"`
 	TopLogprobs      *int             `json:"top_logprobs,omitempty"`
 	ReasoningOptions map[string]any   `json:"provider_options,omitempty"`
+	PresentFields    map[string]bool  `json:"-"`
 }
 
 type Message struct {
@@ -72,7 +73,15 @@ func DecodeChatCompletion(r io.Reader) (ChatCompletionRequest, error) {
 	if err := json.Unmarshal(body, &req); err != nil {
 		return ChatCompletionRequest{}, fmt.Errorf("invalid request JSON: %w", err)
 	}
+	req.PresentFields = map[string]bool{}
+	for key := range raw {
+		req.PresentFields[key] = true
+	}
 	return req, nil
+}
+
+func (r ChatCompletionRequest) HasField(key string) bool {
+	return r.PresentFields != nil && r.PresentFields[key]
 }
 
 func (r ChatCompletionRequest) Validate() error {
@@ -97,17 +106,6 @@ func (r ChatCompletionRequest) Validate() error {
 	}
 	if err := validateStop(r.Stop); err != nil {
 		return err
-	}
-	if rf := r.ResponseFormat; rf != nil {
-		if len(rf) != 1 {
-			return errors.New("response_format only supports the type field in this slice")
-		}
-		typ, _ := rf["type"].(string)
-		switch typ {
-		case "text", "json_object":
-		default:
-			return fmt.Errorf("response_format.type %q is unsupported", typ)
-		}
 	}
 	return nil
 }
@@ -329,17 +327,15 @@ func NormalizeStreamChunk(body []byte) (NormalizedStreamChunk, error) {
 
 func validateTopLevelKeys(raw map[string]json.RawMessage) error {
 	allowed := map[string]bool{
-		"model":           true,
-		"messages":        true,
-		"stream":          true,
-		"stream_options":  true,
-		"max_tokens":      true,
-		"temperature":     true,
-		"top_p":           true,
-		"stop":            true,
-		"response_format": true,
-	}
-	unsupported := map[string]bool{
+		"model":            true,
+		"messages":         true,
+		"stream":           true,
+		"stream_options":   true,
+		"max_tokens":       true,
+		"temperature":      true,
+		"top_p":            true,
+		"stop":             true,
+		"response_format":  true,
 		"tools":            true,
 		"tool_choice":      true,
 		"logprobs":         true,
@@ -352,9 +348,6 @@ func validateTopLevelKeys(raw map[string]json.RawMessage) error {
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
-		if unsupported[key] {
-			return fmt.Errorf("%s is not supported in this slice", key)
-		}
 		if !allowed[key] {
 			return fmt.Errorf("unknown field %q", key)
 		}
@@ -408,7 +401,7 @@ func validateRawMessages(raw json.RawMessage) error {
 	for i, msg := range messages {
 		for key := range msg {
 			if key != "role" && key != "content" {
-				return fmt.Errorf("messages[%d].%s is not supported in this slice", i, key)
+				return fmt.Errorf("messages[%d].%s is not supported", i, key)
 			}
 		}
 		if rawContent, ok := msg["content"]; ok && !isJSONString(rawContent) {

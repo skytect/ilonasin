@@ -19,7 +19,7 @@ const maxRequestBodyBytes = 1 << 20
 
 type Server struct {
 	cfg  config.Config
-	auth credentials.Authenticator
+	auth credentials.LocalTokenVerifier
 	meta MetadataRecorder
 }
 
@@ -27,7 +27,7 @@ type MetadataRecorder interface {
 	RecordRequestMetadata(context.Context, metadata.Request) error
 }
 
-func New(cfg config.Config, auth credentials.Authenticator, meta MetadataRecorder) *Server {
+func New(cfg config.Config, auth credentials.LocalTokenVerifier, meta MetadataRecorder) *Server {
 	return &Server{cfg: cfg, auth: auth, meta: meta}
 }
 
@@ -38,7 +38,7 @@ func (s *Server) Handler() http.Handler {
 	return mux
 }
 
-func (s *Server) withAuth(next func(http.ResponseWriter, *http.Request, credentials.ClientTokenRecord)) http.HandlerFunc {
+func (s *Server) withAuth(next func(http.ResponseWriter, *http.Request, credentials.VerifiedLocalToken)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		rec, err := s.auth.VerifyBearer(r.Context(), r.Header.Get("Authorization"))
 		if err != nil {
@@ -49,7 +49,7 @@ func (s *Server) withAuth(next func(http.ResponseWriter, *http.Request, credenti
 	}
 }
 
-func (s *Server) handleModels(w http.ResponseWriter, r *http.Request, _ credentials.ClientTokenRecord) {
+func (s *Server) handleModels(w http.ResponseWriter, r *http.Request, _ credentials.VerifiedLocalToken) {
 	type model struct {
 		ID      string `json:"id"`
 		Object  string `json:"object"`
@@ -62,7 +62,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request, _ credenti
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, token credentials.ClientTokenRecord) {
+func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, token credentials.VerifiedLocalToken) {
 	start := time.Now()
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	req, err := openai.DecodeChatCompletion(r.Body)

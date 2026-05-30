@@ -40,7 +40,7 @@ func Serve(opts Options) error {
 	}
 	defer rt.Store.Close()
 
-	auth := credentials.Authenticator{Store: rt.Store}
+	auth := credentials.Service{Repo: rt.Store}
 	srv := &http.Server{
 		Addr:              rt.Config.Server.Bind,
 		Handler:           server.New(rt.Config, auth, rt.Store).Handler(),
@@ -69,16 +69,13 @@ func ServeCheck(opts Options) error {
 	}
 	defer checkStore.Close()
 
-	token, err := credentials.GenerateToken()
+	tokenService := credentials.Service{Repo: checkStore}
+	created, err := tokenService.Create(context.Background(), "serve-check")
 	if err != nil {
 		return err
 	}
-	if err := checkStore.InsertClientToken(context.Background(), "serve-check", token); err != nil {
-		return err
-	}
 
-	auth := credentials.Authenticator{Store: checkStore}
-	handler := server.New(rt.Config, auth, checkStore).Handler()
+	handler := server.New(rt.Config, tokenService, checkStore).Handler()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return err
@@ -94,11 +91,21 @@ func ServeCheck(opts Options) error {
 	if status, err := getStatus(base+"/v1/models", ""); err != nil || status != http.StatusUnauthorized {
 		return fmt.Errorf("unauthenticated models status=%d err=%v", status, err)
 	}
-	if status, err := getStatus(base+"/v1/models", token); err != nil || status != http.StatusOK {
+	if status, err := getStatus(base+"/v1/models", created.Token); err != nil || status != http.StatusOK {
 		return fmt.Errorf("authenticated models status=%d err=%v", status, err)
 	}
+	if err := tokenService.Disable(context.Background(), created.Metadata.ID); err != nil {
+		return err
+	}
+	if status, err := getStatus(base+"/v1/models", created.Token); err != nil || status != http.StatusUnauthorized {
+		return fmt.Errorf("disabled token models status=%d err=%v", status, err)
+	}
 	body := []byte(`{"model":"deepseek/deepseek-v4-pro","messages":[{"role":"user","content":"check"}],"unsupported":true}`)
-	if status, err := postStatus(base+"/v1/chat/completions", token, body); err != nil || status != http.StatusBadRequest {
+	created2, err := tokenService.Create(context.Background(), "serve-check-chat")
+	if err != nil {
+		return err
+	}
+	if status, err := postStatus(base+"/v1/chat/completions", created2.Token, body); err != nil || status != http.StatusBadRequest {
 		return fmt.Errorf("unsupported chat status=%d err=%v", status, err)
 	}
 
@@ -120,7 +127,7 @@ func Manage(opts Options) error {
 		return err
 	}
 	defer rt.Store.Close()
-	return tui.Run(rt.Config)
+	return tui.Run(rt.Config, credentials.Service{Repo: rt.Store})
 }
 
 func ManageCheck(opts Options) error {
@@ -130,8 +137,12 @@ func ManageCheck(opts Options) error {
 	}
 	defer rt.cleanup()
 	defer rt.Store.Close()
+	tokenService := credentials.Service{Repo: rt.Store}
+	if err := tui.ExerciseTokenLifecycle(context.Background(), tokenService); err != nil {
+		return err
+	}
 	var buf bytes.Buffer
-	if err := tui.Check(rt.Config, &buf); err != nil {
+	if err := tui.Check(rt.Config, tokenService, &buf); err != nil {
 		return err
 	}
 	if opts.Stdout != nil {

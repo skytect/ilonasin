@@ -76,28 +76,109 @@ func (s *Store) Migrate(ctx context.Context) error {
 	return tx.Commit()
 }
 
-func (s *Store) InsertClientToken(ctx context.Context, label, token string) error {
-	_, err := s.DB.ExecContext(ctx, `
+func (s *Store) InsertLocalToken(ctx context.Context, meta credentials.NewLocalTokenMetadata) (credentials.LocalTokenMetadata, error) {
+	res, err := s.DB.ExecContext(ctx, `
 		INSERT INTO client_tokens(label, token_hash, token_prefix, token_last4, created_at)
 		VALUES(?, ?, ?, ?, ?)
-	`, label, credentials.HashToken(token), credentials.Prefix(token), credentials.Last4(token), time.Now().UTC().Format(time.RFC3339Nano))
-	return err
+	`, meta.Label, meta.TokenHash, meta.TokenPrefix, meta.TokenLast4, meta.CreatedAt.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return credentials.LocalTokenMetadata{}, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return credentials.LocalTokenMetadata{}, err
+	}
+	return credentials.LocalTokenMetadata{
+		ID:          id,
+		Label:       meta.Label,
+		TokenPrefix: meta.TokenPrefix,
+		TokenLast4:  meta.TokenLast4,
+		CreatedAt:   meta.CreatedAt.UTC(),
+	}, nil
 }
 
-func (s *Store) FindClientTokenByHash(ctx context.Context, hash string) (credentials.ClientTokenRecord, error) {
+func (s *Store) ListLocalTokens(ctx context.Context) ([]credentials.LocalTokenMetadata, error) {
+	rows, err := s.DB.QueryContext(ctx, `
+		SELECT id, label, token_prefix, token_last4, created_at, disabled_at
+		FROM client_tokens
+		ORDER BY id ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []credentials.LocalTokenMetadata
+	for rows.Next() {
+		meta, err := scanLocalTokenMetadata(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, meta)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) DisableLocalToken(ctx context.Context, id int64, disabledAt time.Time) error {
+	res, err := s.DB.ExecContext(ctx, `
+		UPDATE client_tokens
+		SET disabled_at = COALESCE(disabled_at, ?)
+		WHERE id = ?
+	`, disabledAt.UTC().Format(time.RFC3339Nano), id)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return fmt.Errorf("client token not found")
+	}
+	return nil
+}
+
+func (s *Store) FindLocalTokenByHash(ctx context.Context, hash string) (credentials.LocalTokenAuthRecord, error) {
 	row := s.DB.QueryRowContext(ctx, `
 		SELECT id, label, token_hash, token_prefix, token_last4, disabled_at IS NOT NULL
 		FROM client_tokens
 		WHERE token_hash = ?
 	`, hash)
-	var rec credentials.ClientTokenRecord
-	if err := row.Scan(&rec.ID, &rec.Label, &rec.TokenHash, &rec.TokenPrefix, &rec.TokenLast4, &rec.Disabled); err != nil {
+	var rec credentials.LocalTokenAuthRecord
+	var unusedPrefix, unusedLast4 string
+	if err := row.Scan(&rec.ID, &rec.Label, &rec.TokenHash, &unusedPrefix, &unusedLast4, &rec.Disabled); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return credentials.ClientTokenRecord{}, fmt.Errorf("client token not found")
+			return credentials.LocalTokenAuthRecord{}, fmt.Errorf("client token not found")
 		}
-		return credentials.ClientTokenRecord{}, err
+		return credentials.LocalTokenAuthRecord{}, err
 	}
 	return rec, nil
+}
+
+type localTokenScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanLocalTokenMetadata(row localTokenScanner) (credentials.LocalTokenMetadata, error) {
+	var meta credentials.LocalTokenMetadata
+	var created string
+	var disabled sql.NullString
+	if err := row.Scan(&meta.ID, &meta.Label, &meta.TokenPrefix, &meta.TokenLast4, &created, &disabled); err != nil {
+		return credentials.LocalTokenMetadata{}, err
+	}
+	createdAt, err := time.Parse(time.RFC3339Nano, created)
+	if err != nil {
+		return credentials.LocalTokenMetadata{}, err
+	}
+	meta.CreatedAt = createdAt
+	if disabled.Valid {
+		disabledAt, err := time.Parse(time.RFC3339Nano, disabled.String)
+		if err != nil {
+			return credentials.LocalTokenMetadata{}, err
+		}
+		meta.DisabledAt = &disabledAt
+		meta.Disabled = true
+	}
+	return meta, nil
 }
 
 func (s *Store) RecordRequestMetadata(ctx context.Context, m metadata.Request) error {

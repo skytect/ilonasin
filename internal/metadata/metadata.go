@@ -18,6 +18,7 @@ type Request struct {
 	CompletionTokens          int
 	TotalTokens               int
 	ReasoningTokens           int
+	CacheHitTokens            int
 	TotalLatencyMS            int64
 	TimeToFirstTokenMS        int64
 	OutputTokensPerSecond     float64

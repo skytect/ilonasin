@@ -48,6 +48,7 @@ var builtIns = map[string]Defaults{
 		Placeholder:    true,
 		OAuth:          true,
 		OAuthRefresh:   true,
+		Chat:           true,
 		ModelDiscovery: true,
 	},
 }

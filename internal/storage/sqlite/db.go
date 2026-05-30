@@ -799,13 +799,13 @@ func (s *Store) RecordRequestMetadata(ctx context.Context, m metadata.Request) (
 			started_at, client_token_id, credential_id, requested_provider_instance, requested_model,
 			resolved_provider_instance, resolved_model, http_status, error_class,
 			retry_count, fallback_count, prompt_tokens, completion_tokens,
-			total_tokens, reasoning_tokens, total_latency_ms, time_to_first_token_ms,
+			total_tokens, reasoning_tokens, cache_hit_tokens, total_latency_ms, time_to_first_token_ms,
 			output_tokens_per_second
-		) VALUES(?, NULLIF(?, 0), NULLIF(?, 0), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES(?, NULLIF(?, 0), NULLIF(?, 0), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, m.StartedAt.UTC().Format(time.RFC3339Nano), m.ClientTokenID, m.CredentialID, m.RequestedProviderInstance,
 		m.RequestedModel, m.ResolvedProviderInstance, m.ResolvedModel, m.HTTPStatus,
 		m.ErrorClass, m.RetryCount, m.FallbackCount, m.PromptTokens, m.CompletionTokens,
-		m.TotalTokens, m.ReasoningTokens, m.TotalLatencyMS, m.TimeToFirstTokenMS,
+		m.TotalTokens, m.ReasoningTokens, m.CacheHitTokens, m.TotalLatencyMS, m.TimeToFirstTokenMS,
 		m.OutputTokensPerSecond)
 	if err != nil {
 		return 0, err

@@ -218,9 +218,8 @@ func ServeCheck(opts Options) error {
 	if status, err := postStatus(base+"/v1/chat/completions", created2.Token, body); err != nil || status != http.StatusBadRequest {
 		return fmt.Errorf("unsupported chat status=%d err=%v", status, err)
 	}
-	codexBody := []byte(`{"model":"codex/gpt-5.5-codex","messages":[{"role":"user","content":"check"}]}`)
-	if status, err := postStatus(base+"/v1/chat/completions", created2.Token, codexBody); err != nil || status != http.StatusNotImplemented {
-		return fmt.Errorf("codex chat status=%d err=%v", status, err)
+	if err := exerciseCodexChatCheck(context.Background(), base, created2.Token, fakeUpstream, checkStore); err != nil {
+		return err
 	}
 	for _, instance := range instances {
 		if _, err := upstreamService.AddAPIKey(context.Background(), instance.ID, "serve-check-adapter", "sk-serve-check-adapter"); err != nil {
@@ -1683,10 +1682,12 @@ func chatAdapters(client *http.Client) provider.StaticChatAdapters {
 		adapter.MaxStreamLineBytes = 512
 		adapter.MaxStreamEventBytes = 512
 		adapter.MaxStreamEvents = 4
+		adapter.MaxCodexAggregateBytes = 512
 	}
 	return provider.StaticChatAdapters{
 		"deepseek":   adapter,
 		"openrouter": adapter,
+		"codex":      adapter,
 	}
 }
 
@@ -1743,6 +1744,10 @@ func newServeCheckUpstream() *serveCheckUpstream {
 			up.handleServeCheckModels(w, r)
 			return
 		}
+		if r.Method == http.MethodPost && r.URL.Path == "/responses" {
+			up.handleServeCheckCodexResponses(w, r)
+			return
+		}
 		if (r.URL.Path != "/chat/completions" && r.URL.Path != "/api/v1/chat/completions") || r.Method != http.MethodPost {
 			http.NotFound(w, r)
 			return
@@ -1794,6 +1799,143 @@ func newServeCheckUpstream() *serveCheckUpstream {
 		_, _ = w.Write([]byte(`{"id":"chatcmpl_check","object":"chat.completion","created":1,"model":"deepseek-v4-pro","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"completion_tokens_details":{"reasoning_tokens":0}}}`))
 	}))
 	return up
+}
+
+func (u *serveCheckUpstream) handleServeCheckCodexResponses(w http.ResponseWriter, r *http.Request) {
+	auth := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	u.recordObservedAuth("codex-chat", auth)
+	if auth != "oauth-access-secret-marker" {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if r.Header.Get("Content-Type") != "application/json" || r.Header.Get("Accept") != "text/event-stream" {
+		http.Error(w, "bad headers", http.StatusBadRequest)
+		return
+	}
+	var raw map[string]json.RawMessage
+	dec := json.NewDecoder(r.Body)
+	if err := dec.Decode(&raw); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if dec.Decode(&struct{}{}) != io.EOF {
+		http.Error(w, "trailing request", http.StatusBadRequest)
+		return
+	}
+	allowed := map[string]bool{"model": true, "instructions": true, "input": true, "store": true, "stream": true}
+	for key := range raw {
+		if !allowed[key] {
+			http.Error(w, "extra field", http.StatusBadRequest)
+			return
+		}
+	}
+	var body struct {
+		Model        string `json:"model"`
+		Instructions string `json:"instructions"`
+		Input        []struct {
+			Type    string `json:"type"`
+			Role    string `json:"role"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"input"`
+		Store  bool `json:"store"`
+		Stream bool `json:"stream"`
+	}
+	if err := json.Unmarshal(mustMarshalRaw(raw), &body); err != nil {
+		http.Error(w, "bad request shape", http.StatusBadRequest)
+		return
+	}
+	if body.Store || !body.Stream {
+		http.Error(w, "bad responses flags", http.StatusBadRequest)
+		return
+	}
+	if body.Model == "gpt-5.5-codex" {
+		if body.Instructions != "codex system marker" || len(body.Input) != 2 {
+			http.Error(w, "bad codex input", http.StatusBadRequest)
+			return
+		}
+		if body.Input[0].Type != "message" || body.Input[0].Role != "user" || len(body.Input[0].Content) != 1 || body.Input[0].Content[0].Type != "input_text" || body.Input[0].Content[0].Text != "check" {
+			http.Error(w, "bad user input", http.StatusBadRequest)
+			return
+		}
+		if body.Input[1].Type != "message" || body.Input[1].Role != "assistant" || len(body.Input[1].Content) != 1 || body.Input[1].Content[0].Type != "output_text" || body.Input[1].Content[0].Text != "prior" {
+			http.Error(w, "bad assistant input", http.StatusBadRequest)
+			return
+		}
+		u.mu.Lock()
+		u.observed["/responses "+body.Model] = true
+		u.mu.Unlock()
+	}
+	if body.Model == "codex-system-only" {
+		if body.Instructions != "system only" || len(body.Input) != 0 {
+			http.Error(w, "bad system-only input", http.StatusBadRequest)
+			return
+		}
+	}
+	if body.Model == "codex-http-error" {
+		http.Error(w, "raw codex http body", http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	flusher, _ := w.(http.Flusher)
+	write := func(s string) {
+		_, _ = w.Write([]byte(s))
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+	switch body.Model {
+	case "codex-malformed":
+		write(`data: {"type":"response.output_item.done"` + "\n\n")
+	case "codex-missing-completed":
+		write(`data: {"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"leak-completion-marker"}]}}` + "\n\n")
+	case "codex-failed":
+		write(`data: {"type":"response.failed","response":{"error":{"message":"raw failed marker"}}}` + "\n\n")
+	case "codex-incomplete":
+		write(`data: {"type":"response.incomplete","response":{"incomplete_details":{"reason":"raw incomplete marker"}}}` + "\n\n")
+	case "codex-invalid-usage":
+		write(`data: {"type":"response.completed","response":{"id":"raw-provider-response-id-marker","usage":{"input_tokens":1}}}` + "\n\n")
+	case "codex-too-large-event":
+		write("data: " + strings.Repeat("x", 600) + "\n\n")
+	case "codex-too-many-events":
+		for i := 0; i < 5; i++ {
+			write(`data: {"type":"response.output_text.delta","delta":"x"}` + "\n\n")
+		}
+	case "codex-too-large-output":
+		write(`data: {"type":"response.output_text.delta","delta":"` + strings.Repeat("x", 300) + `"}` + "\n\n")
+		write(`data: {"type":"response.output_text.delta","delta":"` + strings.Repeat("y", 300) + `"}` + "\n\n")
+	case "codex-idle":
+		write(": keep-alive\n")
+		time.Sleep(50 * time.Millisecond)
+	case "codex-completed-hung":
+		write(`data: {"type":"response.completed","response":{"id":"raw-provider-response-id-marker"}}` + "\n\n")
+		time.Sleep(200 * time.Millisecond)
+	case "codex-completed-late-delta":
+		write(`data: {"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"before complete"}]}}` + "\n\n")
+		write(`data: {"type":"response.completed","response":{"id":"raw-provider-response-id-marker"}}` + "\n\n")
+		write(`data: {"type":"response.output_text.delta","delta":"late leak"}` + "\n\n")
+	case "codex-empty-done":
+		write(`data: {"type":"response.output_text.delta","delta":"fallback leak"}` + "\n\n")
+		write(`data: {"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[]}}` + "\n\n")
+		write(`data: {"type":"response.completed","response":{"id":"raw-provider-response-id-marker"}}` + "\n\n")
+	case "codex-client-cancel":
+		write(`data: {"type":"response.output_text.delta","delta":"partial leak"}` + "\n\n")
+		time.Sleep(200 * time.Millisecond)
+	case "codex-mixed-text":
+		write(`data: {"type":"response.output_text.delta","delta":"duplicate "}` + "\n\n")
+		write(`data: {"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"codex done text"}]}}` + "\n\n")
+		write(`data: {"type":"response.completed","response":{"id":"raw-provider-response-id-marker","usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7,"output_tokens_details":{"reasoning_tokens":2}}}}` + "\n\n")
+	default:
+		write(`data: {"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"codex ok"}]}}` + "\n\n")
+		write(`data: {"type":"response.completed","response":{"id":"raw-provider-response-id-marker","usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7,"input_tokens_details":{"cached_tokens":1},"output_tokens_details":{"reasoning_tokens":2}}}}` + "\n\n")
+	}
+}
+
+func mustMarshalRaw(raw map[string]json.RawMessage) []byte {
+	body, _ := json.Marshal(raw)
+	return body
 }
 
 func (u *serveCheckUpstream) handleServeCheckFallbackChat(w http.ResponseWriter, model, auth string) {
@@ -2062,6 +2204,142 @@ func looksLikeChatCompletion(body []byte) bool {
 		return false
 	}
 	return resp.Object == "chat.completion" && len(resp.Choices) > 0 && resp.Usage != nil
+}
+
+func exerciseCodexChatCheck(ctx context.Context, base, token string, fakeUpstream *serveCheckUpstream, store *sqlite.Store) error {
+	fakeUpstream.clearObservedAuth()
+	successBody := []byte(`{"model":"codex/gpt-5.5-codex","messages":[{"role":"system","content":"codex system marker"},{"role":"user","content":"check"},{"role":"assistant","content":"prior"}]}`)
+	status, respBody, err := postJSON(base+"/v1/chat/completions", token, successBody)
+	if err != nil || status != http.StatusOK {
+		return fmt.Errorf("codex chat success status=%d err=%v", status, err)
+	}
+	if !looksLikeChatCompletion(respBody) || !chatCompletionHasContent(respBody, "codex ok") || bytes.Contains(respBody, []byte("raw-provider-response-id-marker")) {
+		return fmt.Errorf("codex chat response was not normalized")
+	}
+	if !fakeUpstream.sawExpected("/responses", "gpt-5.5-codex") {
+		return fmt.Errorf("codex chat did not call /responses")
+	}
+	if !fakeUpstream.sawAuth("codex-chat", "oauth-access-secret-marker") {
+		return fmt.Errorf("codex chat did not use oauth access token")
+	}
+	for _, marker := range []string{
+		"sk-serve-check-adapter",
+		"oauth-refresh-secret-marker",
+		"oauth-disabled-access-marker",
+		"oauth-disabled-refresh-marker",
+		"oauth-expired-access-marker",
+		"oauth-expired-refresh-marker",
+		"oauth-missing-access-marker",
+		"oauth-missing-refresh-marker",
+	} {
+		if fakeUpstream.sawAuth("codex-chat", marker) {
+			return fmt.Errorf("codex chat used forbidden credential marker %q", marker)
+		}
+	}
+	if err := assertCodexChatMetadata(ctx, store, "gpt-5.5-codex", http.StatusOK, "", 3, 4, 7, 2, 1); err != nil {
+		return err
+	}
+	systemOnlyBody := []byte(`{"model":"codex/codex-system-only","messages":[{"role":"system","content":"system only"}]}`)
+	status, respBody, err = postJSON(base+"/v1/chat/completions", token, systemOnlyBody)
+	if err != nil || status != http.StatusOK || !looksLikeChatCompletion(respBody) {
+		return fmt.Errorf("codex system-only status=%d err=%v", status, err)
+	}
+	mixedBody := []byte(`{"model":"codex/codex-mixed-text","messages":[{"role":"user","content":"check"}]}`)
+	status, respBody, err = postJSON(base+"/v1/chat/completions", token, mixedBody)
+	if err != nil || status != http.StatusOK || !chatCompletionHasContent(respBody, "codex done text") || bytes.Contains(respBody, []byte("duplicate")) || bytes.Contains(respBody, []byte("raw-provider-response-id-marker")) {
+		return fmt.Errorf("codex mixed text status=%d err=%v", status, err)
+	}
+	for _, tc := range []struct {
+		model   string
+		content string
+	}{
+		{"codex-completed-hung", ""},
+		{"codex-completed-late-delta", "before complete"},
+		{"codex-empty-done", ""},
+	} {
+		body := []byte(fmt.Sprintf(`{"model":"codex/%s","messages":[{"role":"user","content":"check"}]}`, tc.model))
+		status, respBody, err = postJSON(base+"/v1/chat/completions", token, body)
+		if err != nil || status != http.StatusOK || !chatCompletionHasContent(respBody, tc.content) || bytes.Contains(respBody, []byte("leak")) {
+			return fmt.Errorf("codex completed edge %s status=%d err=%v", tc.model, status, err)
+		}
+	}
+	streamBody := []byte(`{"model":"codex/gpt-5.5-codex","messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true}}`)
+	if status, err := postStatus(base+"/v1/chat/completions", token, streamBody); err != nil || status != http.StatusNotImplemented {
+		return fmt.Errorf("codex stream status=%d err=%v", status, err)
+	}
+	failureModels := map[string]string{
+		"codex-http-error":        "upstream_http_error",
+		"codex-malformed":         "upstream_invalid_response",
+		"codex-missing-completed": "upstream_invalid_response",
+		"codex-failed":            "upstream_response_failed",
+		"codex-incomplete":        "upstream_response_failed",
+		"codex-invalid-usage":     "upstream_invalid_response",
+		"codex-too-large-event":   "upstream_invalid_response",
+		"codex-too-large-output":  "upstream_invalid_response",
+		"codex-too-many-events":   "upstream_invalid_response",
+		"codex-idle":              "upstream_timeout",
+	}
+	for model, wantClass := range failureModels {
+		body := []byte(fmt.Sprintf(`{"model":"codex/%s","messages":[{"role":"user","content":"check"}]}`, model))
+		status, respBody, err = postJSON(base+"/v1/chat/completions", token, body)
+		if err != nil || status != http.StatusBadGateway || bytes.Contains(respBody, []byte("raw")) || bytes.Contains(respBody, []byte("leak-completion-marker")) || bytes.Contains(respBody, []byte("Bearer ")) {
+			return fmt.Errorf("codex failure %s status=%d err=%v", model, status, err)
+		}
+		if err := assertLatestCodexChatMetadata(ctx, store, model, http.StatusBadGateway, wantClass); err != nil {
+			return err
+		}
+	}
+	if err := exerciseCodexCancellationCheck(ctx, base, token, store); err != nil {
+		return err
+	}
+	if err := assertCodexChatNoLeak(ctx, store); err != nil {
+		return err
+	}
+	return nil
+}
+
+func chatCompletionHasContent(body []byte, want string) bool {
+	var resp struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil || len(resp.Choices) == 0 {
+		return false
+	}
+	return resp.Choices[0].Message.Content == want
+}
+
+func exerciseCodexCancellationCheck(ctx context.Context, base, token string, store *sqlite.Store) error {
+	reqCtx, cancel := context.WithCancel(ctx)
+	body := []byte(`{"model":"codex/codex-client-cancel","messages":[{"role":"user","content":"check"}]}`)
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, base+"/v1/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		cancel()
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	done := make(chan error, 1)
+	go func() {
+		resp, err := http.DefaultClient.Do(req)
+		if resp != nil {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+		}
+		done <- err
+	}()
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		return fmt.Errorf("codex cancellation request did not return")
+	}
+	time.Sleep(50 * time.Millisecond)
+	return assertLatestCodexChatMetadata(ctx, store, "codex-client-cancel", http.StatusBadGateway, "client_disconnected")
 }
 
 func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance provider.Instance, fakeUpstream *serveCheckUpstream, store *sqlite.Store) error {
@@ -2604,6 +2882,82 @@ func assertRecordedCredentialID(ctx context.Context, store *sqlite.Store) error 
 	}
 	if count == 0 {
 		return fmt.Errorf("chat adapter metadata did not record credential and usage")
+	}
+	return nil
+}
+
+func assertCodexChatMetadata(ctx context.Context, store *sqlite.Store, model string, status int, errorClass string, prompt, completion, total, reasoning, cached int) error {
+	var count int
+	err := store.DB.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM request_metadata
+		WHERE requested_provider_instance = 'codex'
+			AND requested_model = ?
+			AND http_status = ?
+			AND COALESCE(error_class, '') = ?
+			AND prompt_tokens = ?
+			AND completion_tokens = ?
+			AND total_tokens = ?
+			AND reasoning_tokens = ?
+			AND cache_hit_tokens = ?
+			AND credential_id IS NOT NULL
+	`, model, status, errorClass, prompt, completion, total, reasoning, cached).Scan(&count)
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return fmt.Errorf("codex chat metadata missing model=%s status=%d class=%s", model, status, errorClass)
+	}
+	return nil
+}
+
+func assertLatestCodexChatMetadata(ctx context.Context, store *sqlite.Store, model string, status int, errorClass string) error {
+	var gotStatus int
+	var gotClass string
+	err := store.DB.QueryRowContext(ctx, `
+		SELECT http_status, error_class
+		FROM request_metadata
+		WHERE requested_provider_instance = 'codex'
+			AND requested_model = ?
+		ORDER BY id DESC
+		LIMIT 1
+	`, model).Scan(&gotStatus, &gotClass)
+	if err != nil {
+		return err
+	}
+	if gotStatus != status || gotClass != errorClass {
+		return fmt.Errorf("codex metadata %s status=%d class=%s", model, gotStatus, gotClass)
+	}
+	return nil
+}
+
+func assertCodexChatNoLeak(ctx context.Context, store *sqlite.Store) error {
+	var text string
+	if err := store.DB.QueryRowContext(ctx, `
+		SELECT COALESCE(group_concat(requested_provider_instance || ' ' || requested_model || ' ' || resolved_provider_instance || ' ' || resolved_model || ' ' || COALESCE(error_class, ''), ' '), '')
+		FROM request_metadata
+	`).Scan(&text); err != nil {
+		return err
+	}
+	for _, forbidden := range []string{
+		"oauth-access-secret-marker",
+		"oauth-refresh-secret-marker",
+		"oauth-disabled",
+		"oauth-expired",
+		"oauth-missing",
+		"raw-provider-response-id-marker",
+		"raw codex",
+		"raw failed",
+		"raw incomplete",
+		"leak-completion-marker",
+		"codex ok",
+		"check",
+		"prior",
+		"Bearer ",
+	} {
+		if strings.Contains(text, forbidden) {
+			return fmt.Errorf("codex metadata leaked forbidden marker %q", forbidden)
+		}
 	}
 	return nil
 }

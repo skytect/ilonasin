@@ -28,7 +28,7 @@ type ChatRequest struct {
 	Instance      Instance
 	UpstreamModel string
 	Request       openai.ChatCompletionRequest
-	Credential    APIKeyCredential
+	Credential    ChatCredential
 }
 
 type ModelRequest struct {
@@ -65,6 +65,13 @@ const (
 )
 
 type BearerCredential struct {
+	ID                 int64
+	ProviderInstanceID string
+	Kind               CredentialKind
+	BearerToken        string
+}
+
+type ChatCredential struct {
 	ID                 int64
 	ProviderInstanceID string
 	Kind               CredentialKind

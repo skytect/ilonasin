@@ -221,7 +221,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 		writeError(w, http.StatusNotFound, "provider instance is not configured", "invalid_request_error", "provider_not_configured")
 		return
 	}
-	if !instance.Chat || !instance.APIKey || instance.Placeholder {
+	if !instance.Chat || (!instance.APIKey && !instance.OAuth) || (instance.Placeholder && instance.Type != "codex") {
 		_ = s.record(r.Context(), metadata.Request{
 			StartedAt:                 start,
 			ClientTokenID:             token.ID,
@@ -265,6 +265,49 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 			TotalLatencyMS:            time.Since(start).Milliseconds(),
 		})
 		writeError(w, http.StatusNotImplemented, "provider adapter is not implemented", "invalid_request_error", "provider_unimplemented")
+		return
+	}
+	if instance.Type == "codex" {
+		if req.Stream {
+			_ = s.record(r.Context(), metadata.Request{
+				StartedAt:                 start,
+				ClientTokenID:             token.ID,
+				RequestedProviderInstance: addr.ProviderInstanceID,
+				RequestedModel:            addr.ProviderModelID,
+				ResolvedProviderInstance:  addr.ProviderInstanceID,
+				ResolvedModel:             addr.ProviderModelID,
+				HTTPStatus:                http.StatusNotImplemented,
+				ErrorClass:                "provider_unimplemented",
+				TotalLatencyMS:            time.Since(start).Milliseconds(),
+			})
+			writeError(w, http.StatusNotImplemented, "codex streaming chat is not implemented", "invalid_request_error", "provider_unimplemented")
+			return
+		}
+		credential, err := s.resolveModelCredential(r.Context(), instance)
+		if err != nil {
+			_ = s.record(r.Context(), metadata.Request{
+				StartedAt:                 start,
+				ClientTokenID:             token.ID,
+				RequestedProviderInstance: addr.ProviderInstanceID,
+				RequestedModel:            addr.ProviderModelID,
+				ResolvedProviderInstance:  addr.ProviderInstanceID,
+				ResolvedModel:             addr.ProviderModelID,
+				HTTPStatus:                http.StatusUnauthorized,
+				ErrorClass:                "credential_unavailable",
+				TotalLatencyMS:            time.Since(start).Milliseconds(),
+			})
+			writeError(w, http.StatusUnauthorized, "no eligible upstream credential is available", "invalid_request_error", "credential_unavailable")
+			return
+		}
+		s.handleSingleCredentialChat(w, r, singleChatContext{
+			start:      start,
+			token:      token,
+			address:    addr,
+			instance:   instance,
+			credential: credential,
+			adapter:    adapter,
+			request:    req,
+		})
 		return
 	}
 	credentialsSet, err := s.upstreams.ResolveAPIKeys(r.Context(), addr.ProviderInstanceID)
@@ -322,6 +365,70 @@ type chatAttempt struct {
 	err        error
 }
 
+type singleChatContext struct {
+	start      time.Time
+	token      credentials.VerifiedLocalToken
+	address    routing.ModelAddress
+	instance   provider.Instance
+	credential provider.BearerCredential
+	adapter    provider.ChatAdapter
+	request    openai.ChatCompletionRequest
+}
+
+func (s *Server) handleSingleCredentialChat(w http.ResponseWriter, r *http.Request, sc singleChatContext) {
+	result, err := sc.adapter.CompleteChat(r.Context(), provider.ChatRequest{
+		Instance:      sc.instance,
+		UpstreamModel: sc.address.ProviderModelID,
+		Request:       sc.request,
+		Credential: provider.ChatCredential{
+			ID:                 sc.credential.ID,
+			ProviderInstanceID: sc.credential.ProviderInstanceID,
+			Kind:               sc.credential.Kind,
+			BearerToken:        sc.credential.BearerToken,
+		},
+	})
+	status := normalizedChatStatus(result)
+	errorClass := normalizedChatErrorClass(result, status)
+	if err != nil && errorClass == "" {
+		errorClass = "upstream_unavailable"
+	}
+	recordCtx := r.Context()
+	if errorClass == "client_disconnected" {
+		var cancel context.CancelFunc
+		recordCtx, cancel = context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
+		defer cancel()
+	}
+	_, _ = s.recordWithID(recordCtx, metadata.Request{
+		StartedAt:                 sc.start,
+		ClientTokenID:             sc.token.ID,
+		CredentialID:              sc.credential.ID,
+		RequestedProviderInstance: sc.address.ProviderInstanceID,
+		RequestedModel:            sc.address.ProviderModelID,
+		ResolvedProviderInstance:  sc.address.ProviderInstanceID,
+		ResolvedModel:             sc.address.ProviderModelID,
+		HTTPStatus:                status,
+		ErrorClass:                errorClass,
+		PromptTokens:              result.Usage.PromptTokens,
+		CompletionTokens:          result.Usage.CompletionTokens,
+		TotalTokens:               result.Usage.TotalTokens,
+		ReasoningTokens:           result.Usage.ReasoningTokens,
+		CacheHitTokens:            result.Usage.CachedTokens,
+		TotalLatencyMS:            time.Since(sc.start).Milliseconds(),
+	})
+	if errorClass == "client_disconnected" {
+		return
+	}
+	if status < 200 || status >= 300 {
+		writeError(w, status, "upstream request failed", "api_error", errorClass)
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "upstream request failed", "api_error", errorClass)
+		return
+	}
+	writeRaw(w, status, result.ContentType, result.Body)
+}
+
 func (s *Server) handleNonStreamingChat(w http.ResponseWriter, r *http.Request, nc nonStreamContext) {
 	var final chatAttempt
 	var fallbackEvents []metadata.FallbackEvent
@@ -368,6 +475,7 @@ func (s *Server) handleNonStreamingChat(w http.ResponseWriter, r *http.Request, 
 		CompletionTokens:          final.result.Usage.CompletionTokens,
 		TotalTokens:               final.result.Usage.TotalTokens,
 		ReasoningTokens:           final.result.Usage.ReasoningTokens,
+		CacheHitTokens:            final.result.Usage.CachedTokens,
 		TotalLatencyMS:            time.Since(nc.start).Milliseconds(),
 	})
 	s.recordFallbacks(r.Context(), requestID, fallbackEvents)
@@ -410,12 +518,12 @@ type streamAttempt struct {
 	err        error
 }
 
-func providerAPIKey(credential credentials.ResolvedAPIKeyCredential) provider.APIKeyCredential {
-	return provider.APIKeyCredential{
+func providerAPIKey(credential credentials.ResolvedAPIKeyCredential) provider.ChatCredential {
+	return provider.ChatCredential{
 		ID:                 credential.ID,
 		ProviderInstanceID: credential.ProviderInstanceID,
-		Label:              credential.Label,
-		APIKey:             credential.APIKey,
+		Kind:               provider.CredentialKindAPIKey,
+		BearerToken:        credential.APIKey,
 	}
 }
 
@@ -620,6 +728,7 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 		CompletionTokens:          summary.Usage.CompletionTokens,
 		TotalTokens:               summary.Usage.TotalTokens,
 		ReasoningTokens:           summary.Usage.ReasoningTokens,
+		CacheHitTokens:            summary.Usage.CachedTokens,
 		TotalLatencyMS:            time.Since(sc.start).Milliseconds(),
 		TimeToFirstTokenMS:        summary.TimeToFirstTokenMS,
 		OutputTokensPerSecond:     summary.OutputTokensPerSecond,

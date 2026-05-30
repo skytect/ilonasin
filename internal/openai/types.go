@@ -121,6 +121,50 @@ type Usage struct {
 	CompletionTokens int
 	TotalTokens      int
 	ReasoningTokens  int
+	CachedTokens     int
+}
+
+func MessageContentString(msg Message) (string, error) {
+	var text string
+	if err := json.Unmarshal(msg.Content, &text); err != nil {
+		return "", err
+	}
+	return text, nil
+}
+
+func MarshalChatCompletionResponse(id, model, content string, usage Usage) ([]byte, error) {
+	body := map[string]any{
+		"id":      id,
+		"object":  "chat.completion",
+		"created": 0,
+		"model":   model,
+		"choices": []any{
+			map[string]any{
+				"index": 0,
+				"message": map[string]any{
+					"role":    "assistant",
+					"content": content,
+				},
+				"finish_reason": "stop",
+			},
+		},
+		"usage": map[string]any{
+			"prompt_tokens":     usage.PromptTokens,
+			"completion_tokens": usage.CompletionTokens,
+			"total_tokens":      usage.TotalTokens,
+		},
+	}
+	if usage.CachedTokens != 0 {
+		body["usage"].(map[string]any)["prompt_tokens_details"] = map[string]any{
+			"cached_tokens": usage.CachedTokens,
+		}
+	}
+	if usage.ReasoningTokens != 0 {
+		body["usage"].(map[string]any)["completion_tokens_details"] = map[string]any{
+			"reasoning_tokens": usage.ReasoningTokens,
+		}
+	}
+	return json.Marshal(body)
 }
 
 func MarshalUpstreamChatRequest(req ChatCompletionRequest, upstreamModel string) ([]byte, error) {
@@ -163,6 +207,9 @@ func ExtractUsage(body []byte) (Usage, error) {
 			CompletionTokensDetails struct {
 				ReasoningTokens int `json:"reasoning_tokens"`
 			} `json:"completion_tokens_details"`
+			PromptTokensDetails struct {
+				CachedTokens int `json:"cached_tokens"`
+			} `json:"prompt_tokens_details"`
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
@@ -190,6 +237,7 @@ func ExtractUsage(body []byte) (Usage, error) {
 		CompletionTokens: *resp.Usage.CompletionTokens,
 		TotalTokens:      *resp.Usage.TotalTokens,
 		ReasoningTokens:  resp.Usage.CompletionTokensDetails.ReasoningTokens,
+		CachedTokens:     resp.Usage.PromptTokensDetails.CachedTokens,
 	}, nil
 }
 
@@ -410,6 +458,9 @@ func streamUsageFromMap(raw map[string]json.RawMessage) (Usage, bool, error) {
 		CompletionTokensDetails struct {
 			ReasoningTokens int `json:"reasoning_tokens"`
 		} `json:"completion_tokens_details"`
+		PromptTokensDetails struct {
+			CachedTokens int `json:"cached_tokens"`
+		} `json:"prompt_tokens_details"`
 	}
 	if err := json.Unmarshal(rawUsage, &usage); err != nil {
 		return Usage{}, false, fmt.Errorf("upstream stream usage is invalid: %w", err)
@@ -422,6 +473,7 @@ func streamUsageFromMap(raw map[string]json.RawMessage) (Usage, bool, error) {
 		CompletionTokens: *usage.CompletionTokens,
 		TotalTokens:      *usage.TotalTokens,
 		ReasoningTokens:  usage.CompletionTokensDetails.ReasoningTokens,
+		CachedTokens:     usage.PromptTokensDetails.CachedTokens,
 	}, true, nil
 }
 

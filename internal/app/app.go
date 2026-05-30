@@ -207,7 +207,7 @@ func Manage(opts Options) error {
 	}
 	defer rt.Store.Close()
 	upstreams := credentials.UpstreamService{Registry: rt.Registry, Repo: rt.Store}
-	return tui.Run(rt.Config, rt.Registry, credentials.Service{Repo: rt.Store}, upstreams, upstreams, rt.Store, rt.Store)
+	return tui.Run(rt.Config, rt.Registry, credentials.Service{Repo: rt.Store}, upstreams, upstreams, rt.Store, rt.Store, rt.Store)
 }
 
 func ManageCheck(opts Options) error {
@@ -236,10 +236,13 @@ func ManageCheck(opts Options) error {
 	if err := exerciseOAuthCheck(context.Background(), rt.Registry, rt.Config); err != nil {
 		return err
 	}
+	if err := exerciseTelemetryPruneCheck(context.Background(), rt.Registry, rt.Config); err != nil {
+		return err
+	}
 	var buf bytes.Buffer
 	tokenService := credentials.Service{Repo: rt.Store}
 	upstreams := credentials.UpstreamService{Registry: rt.Registry, Repo: rt.Store}
-	if err := tui.Check(rt.Config, rt.Registry, tokenService, upstreams, upstreams, rt.Store, rt.Store, &buf); err != nil {
+	if err := tui.Check(rt.Config, rt.Registry, tokenService, upstreams, upstreams, rt.Store, rt.Store, rt.Store, &buf); err != nil {
 		return err
 	}
 	afterSnapshot, err := selectedHomeSnapshot(context.Background(), rt.Store, rt.ConfigPath)
@@ -543,6 +546,190 @@ func exerciseOAuthCheck(ctx context.Context, registry provider.Registry, cfg con
 	return tui.ExerciseOAuthSummary(ctx, cfg, registry, service)
 }
 
+func exerciseTelemetryPruneCheck(ctx context.Context, registry provider.Registry, cfg config.Config) error {
+	checkDBDir, err := os.MkdirTemp("", "ilonasin-manage-check-prune-db-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(checkDBDir)
+	configPath := filepath.Join(checkDBDir, "config.toml")
+	if err := os.WriteFile(configPath, []byte("server_bind = \"127.0.0.1:0\"\n"), 0o600); err != nil {
+		return err
+	}
+	store, err := sqlite.Open(ctx, filepath.Join(checkDBDir, "ilonasin.sqlite"))
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+
+	upstreams := credentials.UpstreamService{Registry: registry, Repo: store}
+	first, err := upstreams.AddAPIKey(ctx, "deepseek", "prune-check-primary", "sk-prune-secret-primary")
+	if err != nil {
+		return fmt.Errorf("seed prune primary credential: %w", err)
+	}
+	second, err := upstreams.AddAPIKey(ctx, "deepseek", "prune-check-secondary", "sk-prune-secret-secondary")
+	if err != nil {
+		return fmt.Errorf("seed prune secondary credential: %w", err)
+	}
+	if err := upstreams.EnableFallbackGroup(ctx, "deepseek", credentials.DefaultFallbackGroup); err != nil {
+		return fmt.Errorf("seed prune fallback policy: %w", err)
+	}
+	expiresAt := time.Date(2026, 5, 30, 13, 0, 0, 0, time.UTC)
+	if _, err := upstreams.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID:  "codex",
+		Label:               "prune oauth",
+		AccessToken:         "oauth-prune-access-secret",
+		RefreshToken:        "oauth-prune-refresh-secret",
+		AccountID:           "acct_prune_protected",
+		AccountDisplayLabel: "Prune Account",
+		PlanLabel:           "team",
+		Scopes:              "openid profile email",
+		ExpiresAt:           &expiresAt,
+	}); err != nil {
+		return fmt.Errorf("seed prune oauth credential: %w", err)
+	}
+	if err := store.ReplaceModelCache(ctx, "deepseek", []provider.ModelMetadata{{
+		ProviderInstanceID: "deepseek",
+		ModelID:            "deepseek-v4-pro",
+		DisplayName:        "DeepSeek V4 Pro",
+		CapabilityFlags:    "chat,stream",
+		ContextLength:      1000000,
+		UpdatedAt:          time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC),
+	}}); err != nil {
+		return fmt.Errorf("seed prune model cache: %w", err)
+	}
+	beforeProtected, err := protectedStateSnapshot(ctx, store, configPath)
+	if err != nil {
+		return err
+	}
+
+	now := time.Date(2026, 5, 30, 12, 0, 0, 123456789, time.UTC)
+	cutoff := now.Add(-30 * 24 * time.Hour).UTC()
+	oldAt := cutoff.Add(-time.Nanosecond)
+	recentAt := cutoff.Add(time.Nanosecond)
+	oldRequestID, err := store.RecordRequestMetadata(ctx, metadata.Request{
+		StartedAt:                 oldAt,
+		CredentialID:              first.ID,
+		RequestedProviderInstance: "deepseek",
+		RequestedModel:            "old raw-provider-payload prompt marker sk-prune-secret req_old",
+		ResolvedProviderInstance:  "deepseek",
+		ResolvedModel:             "deepseek-v4-pro",
+		HTTPStatus:                http.StatusBadGateway,
+		ErrorClass:                "body marker balance credit",
+		RetryCount:                1,
+		FallbackCount:             1,
+		TotalLatencyMS:            300,
+	})
+	if err != nil {
+		return fmt.Errorf("seed prune old request: %w", err)
+	}
+	recentRequestID, err := store.RecordRequestMetadata(ctx, metadata.Request{
+		StartedAt:                 recentAt,
+		CredentialID:              second.ID,
+		RequestedProviderInstance: "deepseek",
+		RequestedModel:            "recent raw-provider-payload prompt marker sk-prune-secret acct_recent",
+		ResolvedProviderInstance:  "deepseek",
+		ResolvedModel:             "deepseek-v4-pro",
+		HTTPStatus:                http.StatusOK,
+		PromptTokens:              2,
+		CompletionTokens:          3,
+		TotalTokens:               5,
+	})
+	if err != nil {
+		return fmt.Errorf("seed prune recent request: %w", err)
+	}
+	exactRequestID, err := store.RecordRequestMetadata(ctx, metadata.Request{
+		StartedAt:                 cutoff,
+		CredentialID:              second.ID,
+		RequestedProviderInstance: "deepseek",
+		RequestedModel:            "exact-cutoff",
+		ResolvedProviderInstance:  "deepseek",
+		ResolvedModel:             "deepseek-v4-pro",
+		HTTPStatus:                http.StatusOK,
+	})
+	if err != nil {
+		return fmt.Errorf("seed prune exact request: %w", err)
+	}
+	for _, stream := range []metadata.Stream{
+		{RequestMetadataID: oldRequestID, CompletionStatus: "old raw-provider-payload", ChunkCount: 1},
+		{RequestMetadataID: recentRequestID, CompletionStatus: "completed", ChunkCount: 2},
+		{RequestMetadataID: exactRequestID, CompletionStatus: "completed", ChunkCount: 3},
+	} {
+		if err := store.RecordStreamMetrics(ctx, stream); err != nil {
+			return fmt.Errorf("seed prune stream: %w", err)
+		}
+	}
+	for _, fallback := range []metadata.FallbackEvent{
+		{RequestMetadataID: oldRequestID, OccurredAt: recentAt, ProviderInstanceID: "deepseek", ModelID: "recent-attached-old", FromCredentialID: first.ID, ToCredentialID: second.ID, Reason: "availability_retry", AllowedByPolicy: true},
+		{RequestMetadataID: recentRequestID, OccurredAt: oldAt, ProviderInstanceID: "deepseek", ModelID: "old-attached-recent", FromCredentialID: first.ID, ToCredentialID: second.ID, Reason: "old raw-provider-payload", AllowedByPolicy: true},
+		{RequestMetadataID: recentRequestID, OccurredAt: recentAt, ProviderInstanceID: "deepseek", ModelID: "recent raw-provider-payload", FromCredentialID: first.ID, ToCredentialID: second.ID, Reason: "recent balance credit", AllowedByPolicy: true},
+		{RequestMetadataID: exactRequestID, OccurredAt: cutoff, ProviderInstanceID: "deepseek", ModelID: "exact-cutoff", FromCredentialID: first.ID, ToCredentialID: second.ID, Reason: "availability_retry", AllowedByPolicy: true},
+	} {
+		if err := store.RecordFallbackEvent(ctx, fallback); err != nil {
+			return fmt.Errorf("seed prune fallback: %w", err)
+		}
+	}
+	if _, err := store.DB.ExecContext(ctx, `
+		INSERT INTO fallback_events(
+			request_metadata_id, occurred_at, provider_instance_id, model_id,
+			from_credential_id, to_credential_id, reason, allowed_by_policy
+		) VALUES(NULL, ?, ?, ?, ?, ?, ?, ?)
+	`, oldAt.Format(time.RFC3339Nano), "deepseek", "old-null-request", first.ID, second.ID, "old prompt marker", 1); err != nil {
+		return fmt.Errorf("seed prune null fallback: %w", err)
+	}
+	for _, health := range []metadata.HealthEvent{
+		{OccurredAt: oldAt, ProviderInstanceID: "deepseek", CredentialID: first.ID, ModelID: "old raw-provider-payload", EventClass: "upstream_failure", HTTPStatus: http.StatusBadGateway, ErrorClass: "old sk-prune-secret"},
+		{OccurredAt: recentAt, ProviderInstanceID: "deepseek", CredentialID: second.ID, ModelID: "recent raw-provider-payload", EventClass: "upstream_success", HTTPStatus: http.StatusOK, ErrorClass: "recent prompt marker"},
+		{OccurredAt: cutoff, ProviderInstanceID: "deepseek", CredentialID: second.ID, ModelID: "exact-cutoff", EventClass: "upstream_success", HTTPStatus: http.StatusOK},
+	} {
+		if err := store.RecordHealthEvent(ctx, health); err != nil {
+			return fmt.Errorf("seed prune health: %w", err)
+		}
+	}
+
+	expected := metadata.PruneResult{Cutoff: cutoff, Requests: 1, Streams: 1, Fallbacks: 3, Health: 1}
+	if err := tui.ExerciseTelemetryPrune(ctx, cfg, registry, store, store, func() time.Time { return now }, expected); err != nil {
+		return err
+	}
+	afterProtected, err := protectedStateSnapshot(ctx, store, configPath)
+	if err != nil {
+		return err
+	}
+	if afterProtected != beforeProtected {
+		return fmt.Errorf("telemetry prune mutated protected state")
+	}
+	for _, check := range []struct {
+		name  string
+		query string
+		args  []any
+		want  int
+	}{
+		{"old request", `SELECT COUNT(*) FROM request_metadata WHERE id = ?`, []any{oldRequestID}, 0},
+		{"recent request", `SELECT COUNT(*) FROM request_metadata WHERE id = ?`, []any{recentRequestID}, 1},
+		{"exact request", `SELECT COUNT(*) FROM request_metadata WHERE id = ?`, []any{exactRequestID}, 1},
+		{"old stream", `SELECT COUNT(*) FROM stream_metrics WHERE request_metadata_id = ?`, []any{oldRequestID}, 0},
+		{"recent stream", `SELECT COUNT(*) FROM stream_metrics WHERE request_metadata_id = ?`, []any{recentRequestID}, 1},
+		{"exact stream", `SELECT COUNT(*) FROM stream_metrics WHERE request_metadata_id = ?`, []any{exactRequestID}, 1},
+		{"old fallback", `SELECT COUNT(*) FROM fallback_events WHERE occurred_at < ?`, []any{cutoff.Format(time.RFC3339Nano)}, 0},
+		{"old request fallback", `SELECT COUNT(*) FROM fallback_events WHERE request_metadata_id = ?`, []any{oldRequestID}, 0},
+		{"recent fallback", `SELECT COUNT(*) FROM fallback_events WHERE request_metadata_id = ? AND occurred_at > ?`, []any{recentRequestID, cutoff.Format(time.RFC3339Nano)}, 1},
+		{"exact fallback", `SELECT COUNT(*) FROM fallback_events WHERE request_metadata_id = ?`, []any{exactRequestID}, 1},
+		{"old health", `SELECT COUNT(*) FROM health_events WHERE occurred_at < ?`, []any{cutoff.Format(time.RFC3339Nano)}, 0},
+		{"recent health", `SELECT COUNT(*) FROM health_events WHERE occurred_at > ?`, []any{cutoff.Format(time.RFC3339Nano)}, 1},
+		{"exact health", `SELECT COUNT(*) FROM health_events WHERE occurred_at = ?`, []any{cutoff.Format(time.RFC3339Nano)}, 1},
+		{"recent marker", `SELECT COUNT(*) FROM request_metadata WHERE requested_model LIKE '%raw-provider-payload%'`, nil, 1},
+	} {
+		var got int
+		if err := store.DB.QueryRowContext(ctx, check.query, check.args...).Scan(&got); err != nil {
+			return fmt.Errorf("check prune %s: %w", check.name, err)
+		}
+		if got != check.want {
+			return fmt.Errorf("check prune %s count=%d want=%d", check.name, got, check.want)
+		}
+	}
+	return nil
+}
+
 func assertOAuthStorageSafety(ctx context.Context, store *sqlite.Store) error {
 	for _, marker := range []string{"oauth-access-secret-marker", "oauth-refresh-secret-marker"} {
 		var count int
@@ -637,11 +824,51 @@ func selectedHomeSnapshot(ctx context.Context, store *sqlite.Store, configPath s
 		`SELECT 'provider_credentials:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || provider_instance_id || ':' || kind || ':' || label || ':' || fallback_group || ':' || COALESCE(disabled_at, '') AS part FROM provider_credentials ORDER BY id)), '')`,
 		`SELECT 'oauth_tokens:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || credential_id || ':' || COALESCE(access_token_secret_id, 0) || ':' || COALESCE(refresh_token_secret_id, 0) || ':' || COALESCE(expires_at, '') || ':' || scopes || ':' || COALESCE(last_refresh_at, '') || ':' || COALESCE(refresh_failure_class, '') AS part FROM oauth_tokens ORDER BY id)), '')`,
 		`SELECT 'provider_accounts:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || provider_instance_id || ':' || COALESCE(credential_id, 0) || ':' || account_hash || ':' || display_label || ':' || plan_label AS part FROM provider_accounts ORDER BY id)), '')`,
+		`SELECT 'credential_fallback_policies:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || provider_instance_id || ':' || group_label || ':' || enabled AS part FROM credential_fallback_policies ORDER BY id)), '')`,
 		`SELECT 'request_metadata:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || requested_provider_instance || ':' || requested_model || ':' || http_status || ':' || error_class || ':' || retry_count || ':' || fallback_count AS part FROM request_metadata ORDER BY id)), '')`,
 		`SELECT 'stream_metrics:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || request_metadata_id || ':' || completion_status || ':' || chunk_count AS part FROM stream_metrics ORDER BY id)), '')`,
 		`SELECT 'health_events:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || provider_instance_id || ':' || COALESCE(credential_id, 0) || ':' || model_id || ':' || event_class || ':' || COALESCE(http_status, 0) || ':' || normalized_error_class AS part FROM health_events ORDER BY id)), '')`,
 		`SELECT 'fallback_events:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || COALESCE(request_metadata_id, 0) || ':' || provider_instance_id || ':' || model_id || ':' || COALESCE(from_credential_id, 0) || ':' || COALESCE(to_credential_id, 0) || ':' || reason || ':' || allowed_by_policy AS part FROM fallback_events ORDER BY id)), '')`,
 		`SELECT 'model_cache:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || provider_instance_id || ':' || model_id || ':' || display_name || ':' || capability_flags || ':' || COALESCE(context_length, 0) AS part FROM model_cache ORDER BY id)), '')`,
+		`SELECT 'migrations:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT version || ':' || name AS part FROM migrations ORDER BY version)), '')`,
+	}
+	var b strings.Builder
+	for _, query := range queries {
+		var part string
+		if err := store.DB.QueryRowContext(ctx, query).Scan(&part); err != nil {
+			return "", err
+		}
+		b.WriteString(part)
+		b.WriteByte('\n')
+	}
+	secretSnapshot, err := credentialSecretSnapshot(ctx, store)
+	if err != nil {
+		return "", err
+	}
+	b.WriteString(secretSnapshot)
+	if configPath != "" {
+		info, err := os.Stat(configPath)
+		if err != nil {
+			return "", err
+		}
+		body, err := os.ReadFile(configPath)
+		if err != nil {
+			return "", err
+		}
+		b.WriteString(fmt.Sprintf("config:%d:%s:%x\n", info.Size(), info.ModTime().UTC().Format(time.RFC3339Nano), body))
+	}
+	return b.String(), nil
+}
+
+func protectedStateSnapshot(ctx context.Context, store *sqlite.Store, configPath string) (string, error) {
+	queries := []string{
+		`SELECT 'client_tokens:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || label || ':' || token_prefix || ':' || token_last4 || ':' || COALESCE(disabled_at, '') AS part FROM client_tokens ORDER BY id)), '')`,
+		`SELECT 'provider_credentials:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || provider_instance_id || ':' || kind || ':' || label || ':' || fallback_group || ':' || COALESCE(disabled_at, '') AS part FROM provider_credentials ORDER BY id)), '')`,
+		`SELECT 'oauth_tokens:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || credential_id || ':' || COALESCE(access_token_secret_id, 0) || ':' || COALESCE(refresh_token_secret_id, 0) || ':' || COALESCE(expires_at, '') || ':' || scopes || ':' || COALESCE(last_refresh_at, '') || ':' || COALESCE(refresh_failure_class, '') AS part FROM oauth_tokens ORDER BY id)), '')`,
+		`SELECT 'provider_accounts:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || provider_instance_id || ':' || COALESCE(credential_id, 0) || ':' || account_hash || ':' || display_label || ':' || plan_label AS part FROM provider_accounts ORDER BY id)), '')`,
+		`SELECT 'credential_fallback_policies:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || provider_instance_id || ':' || group_label || ':' || enabled AS part FROM credential_fallback_policies ORDER BY id)), '')`,
+		`SELECT 'model_cache:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || provider_instance_id || ':' || model_id || ':' || display_name || ':' || capability_flags || ':' || COALESCE(context_length, 0) AS part FROM model_cache ORDER BY id)), '')`,
+		`SELECT 'migrations:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT version || ':' || name AS part FROM migrations ORDER BY version)), '')`,
 	}
 	var b strings.Builder
 	for _, query := range queries {

@@ -120,3 +120,11 @@ type FallbackSummary struct {
 	ToCredentialLabel   string
 	Reason              string
 }
+
+type PruneResult struct {
+	Cutoff    time.Time
+	Requests  int
+	Streams   int
+	Fallbacks int
+	Health    int
+}

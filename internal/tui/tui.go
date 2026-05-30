@@ -29,6 +29,8 @@ type Model struct {
 	oauth          credentials.OAuthMetadataReader
 	modelCache     ModelCacheReader
 	observability  ObservabilityReader
+	pruner         TelemetryPruner
+	now            func() time.Time
 	tokenRows      []credentials.LocalTokenMetadata
 	providers      []provider.Instance
 	credentials    []credentials.UpstreamCredentialMetadata
@@ -41,6 +43,7 @@ type Model struct {
 	streamRows     []metadata.StreamSummary
 	healthRows     []metadata.HealthSummary
 	fallbackRows   []metadata.FallbackSummary
+	pruneResult    *metadata.PruneResult
 	selected       int
 	reveal         string
 	revealTokenID  int64
@@ -65,12 +68,16 @@ type ObservabilityReader interface {
 	RecentFallbacks(ctx context.Context, limit int) ([]metadata.FallbackSummary, error)
 }
 
-func NewModel(cfg config.Config, registry provider.Registry, tokens credentials.LocalTokenManager, upstreams credentials.UpstreamCredentialManager, oauth credentials.OAuthMetadataReader, modelCache ModelCacheReader, observability ObservabilityReader) Model {
-	return Model{cfg: cfg, registry: registry, tokens: tokens, upstreams: upstreams, oauth: oauth, modelCache: modelCache, observability: observability}
+type TelemetryPruner interface {
+	PruneTelemetryBefore(ctx context.Context, cutoff time.Time) (metadata.PruneResult, error)
 }
 
-func newCheckModel(cfg config.Config, registry provider.Registry, tokens credentials.LocalTokenManager, upstreams credentials.UpstreamCredentialManager, oauth credentials.OAuthMetadataReader, modelCache ModelCacheReader, observability ObservabilityReader) Model {
-	return Model{cfg: cfg, registry: registry, tokens: tokens, upstreams: upstreams, oauth: oauth, modelCache: modelCache, observability: observability, quitOnInit: true, checkMode: true}
+func NewModel(cfg config.Config, registry provider.Registry, tokens credentials.LocalTokenManager, upstreams credentials.UpstreamCredentialManager, oauth credentials.OAuthMetadataReader, modelCache ModelCacheReader, observability ObservabilityReader, pruner TelemetryPruner, now func() time.Time) Model {
+	return Model{cfg: cfg, registry: registry, tokens: tokens, upstreams: upstreams, oauth: oauth, modelCache: modelCache, observability: observability, pruner: pruner, now: now}
+}
+
+func newCheckModel(cfg config.Config, registry provider.Registry, tokens credentials.LocalTokenManager, upstreams credentials.UpstreamCredentialManager, oauth credentials.OAuthMetadataReader, modelCache ModelCacheReader, observability ObservabilityReader, pruner TelemetryPruner, now func() time.Time) Model {
+	return Model{cfg: cfg, registry: registry, tokens: tokens, upstreams: upstreams, oauth: oauth, modelCache: modelCache, observability: observability, pruner: pruner, now: now, quitOnInit: true, checkMode: true}
 }
 
 func (m Model) Init() tea.Cmd {
@@ -131,6 +138,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if err := m.addCheckUpstreamCredential(); err != nil {
 				m.err = err.Error()
+				return m, nil
+			}
+			_ = m.reload()
+		case "p":
+			m.clearReveal()
+			if err := m.pruneTelemetry(); err != nil {
+				m.err = "telemetry prune failed"
 				return m, nil
 			}
 			_ = m.reload()
@@ -211,19 +225,20 @@ func (m Model) View() string {
 		fmt.Fprintf(&b, "- %s %d models updated %s\n", summary.ProviderInstanceID, summary.Count, summary.UpdatedAt)
 	}
 	m.writeObservability(&b)
-	b.WriteString("\nPress n to create local token, a to add API key, d to disable local token, x to disable API key, q to quit.\n")
+	m.writePruning(&b)
+	b.WriteString("\nPress n to create local token, a to add API key, d to disable local token, x to disable API key, p to prune telemetry, q to quit.\n")
 	return b.String()
 }
 
-func Run(cfg config.Config, registry provider.Registry, tokens credentials.LocalTokenManager, upstreams credentials.UpstreamCredentialManager, oauth credentials.OAuthMetadataReader, modelCache ModelCacheReader, observability ObservabilityReader) error {
-	model := NewModel(cfg, registry, tokens, upstreams, oauth, modelCache, observability)
+func Run(cfg config.Config, registry provider.Registry, tokens credentials.LocalTokenManager, upstreams credentials.UpstreamCredentialManager, oauth credentials.OAuthMetadataReader, modelCache ModelCacheReader, observability ObservabilityReader, pruner TelemetryPruner) error {
+	model := NewModel(cfg, registry, tokens, upstreams, oauth, modelCache, observability, pruner, nil)
 	_ = model.reload()
 	_, err := tea.NewProgram(model).Run()
 	return err
 }
 
-func Check(cfg config.Config, registry provider.Registry, tokens credentials.LocalTokenManager, upstreams credentials.UpstreamCredentialManager, oauth credentials.OAuthMetadataReader, modelCache ModelCacheReader, observability ObservabilityReader, out io.Writer) error {
-	model := newCheckModel(cfg, registry, tokens, upstreams, oauth, modelCache, observability)
+func Check(cfg config.Config, registry provider.Registry, tokens credentials.LocalTokenManager, upstreams credentials.UpstreamCredentialManager, oauth credentials.OAuthMetadataReader, modelCache ModelCacheReader, observability ObservabilityReader, pruner TelemetryPruner, out io.Writer) error {
+	model := newCheckModel(cfg, registry, tokens, upstreams, oauth, modelCache, observability, pruner, nil)
 	_ = model.reload()
 	program := tea.NewProgram(model, tea.WithoutRenderer(), tea.WithInput(nil), tea.WithOutput(io.Discard))
 	if _, err := program.Run(); err != nil {
@@ -234,7 +249,7 @@ func Check(cfg config.Config, registry provider.Registry, tokens credentials.Loc
 }
 
 func ExerciseTokenLifecycle(ctx context.Context, tokens credentials.LocalTokenManager) error {
-	model := NewModel(config.Config{}, provider.Registry{}, tokens, nil, nil, nil, nil)
+	model := NewModel(config.Config{}, provider.Registry{}, tokens, nil, nil, nil, nil, nil, nil)
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
 	m := updated.(Model)
 	if m.reveal == "" || m.revealTokenID == 0 {
@@ -274,7 +289,7 @@ func ExerciseUpstreamCredentialLifecycle(ctx context.Context, cfg config.Config,
 	if !ok {
 		return nil
 	}
-	model := newCheckModel(cfg, registry, nil, upstreams, nil, nil, nil)
+	model := newCheckModel(cfg, registry, nil, upstreams, nil, nil, nil, nil, nil)
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
 	m := updated.(Model)
 	_ = m.reload()
@@ -301,7 +316,7 @@ func ExerciseUpstreamCredentialLifecycle(ctx context.Context, cfg config.Config,
 }
 
 func ExerciseModelCacheSummary(ctx context.Context, cfg config.Config, registry provider.Registry, cache ModelCacheReader) error {
-	model := newCheckModel(cfg, registry, nil, nil, nil, cache, nil)
+	model := newCheckModel(cfg, registry, nil, nil, nil, cache, nil, nil, nil)
 	_ = model.reload()
 	view := model.View()
 	if !strings.Contains(view, "Model cache") || !strings.Contains(view, "deepseek 1 models") || !strings.Contains(view, "2026-05-30T12:00:00Z") {
@@ -316,7 +331,7 @@ func ExerciseModelCacheSummary(ctx context.Context, cfg config.Config, registry 
 }
 
 func ExerciseObservabilitySummary(ctx context.Context, cfg config.Config, registry provider.Registry, observability ObservabilityReader) error {
-	model := newCheckModel(cfg, registry, nil, nil, nil, nil, observability)
+	model := newCheckModel(cfg, registry, nil, nil, nil, nil, observability, nil, nil)
 	_ = model.reload()
 	view := model.View()
 	required := []string{
@@ -354,8 +369,69 @@ func ExerciseObservabilitySummary(ctx context.Context, cfg config.Config, regist
 	return nil
 }
 
+func ExerciseTelemetryPrune(ctx context.Context, cfg config.Config, registry provider.Registry, observability ObservabilityReader, pruner TelemetryPruner, now func() time.Time, expected metadata.PruneResult) error {
+	model := newCheckModel(cfg, registry, nil, nil, nil, nil, observability, pruner, now)
+	_ = model.reload()
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	m := updated.(Model)
+	if m.pruneResult == nil {
+		return fmt.Errorf("telemetry prune result missing")
+	}
+	got := *m.pruneResult
+	if !got.Cutoff.Equal(expected.Cutoff) || got.Requests != expected.Requests ||
+		got.Streams != expected.Streams || got.Fallbacks != expected.Fallbacks ||
+		got.Health != expected.Health {
+		return fmt.Errorf("telemetry prune result mismatch got=%+v want=%+v", got, expected)
+	}
+	view := m.View()
+	for _, text := range []string{
+		"Telemetry pruning",
+		"Retention keep forever until pruned.",
+		"Manual prune cutoff older than 30 days.",
+		fmt.Sprintf("Last prune before %s: requests %d streams %d fallbacks %d health %d",
+			formatPreciseTime(expected.Cutoff), expected.Requests, expected.Streams, expected.Fallbacks, expected.Health),
+	} {
+		if !strings.Contains(view, text) {
+			return fmt.Errorf("telemetry prune summary missing %q", text)
+		}
+	}
+	for _, forbidden := range []string{
+		"sk-prune-secret",
+		"Bearer ",
+		"raw-provider-payload",
+		"prompt marker",
+		"completion marker",
+		"body marker",
+		"acct_",
+		"req_",
+		"balance",
+		"credit",
+	} {
+		if strings.Contains(view, forbidden) {
+			return fmt.Errorf("telemetry prune summary leaked forbidden marker")
+		}
+	}
+	failing := newCheckModel(cfg, registry, nil, nil, nil, nil, observability, failingTelemetryPruner{}, now)
+	updated, _ = failing.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	failed := updated.(Model)
+	failedView := failed.View()
+	if !strings.Contains(failedView, "Error: telemetry prune failed") {
+		return fmt.Errorf("telemetry prune failure message missing")
+	}
+	if strings.Contains(failedView, "sk-prune-secret") || strings.Contains(failedView, "raw-provider-payload") {
+		return fmt.Errorf("telemetry prune failure leaked forbidden marker")
+	}
+	return nil
+}
+
+type failingTelemetryPruner struct{}
+
+func (failingTelemetryPruner) PruneTelemetryBefore(context.Context, time.Time) (metadata.PruneResult, error) {
+	return metadata.PruneResult{}, fmt.Errorf("sk-prune-secret raw-provider-payload")
+}
+
 func ExerciseOAuthSummary(ctx context.Context, cfg config.Config, registry provider.Registry, oauth credentials.OAuthMetadataReader) error {
-	model := newCheckModel(cfg, registry, nil, nil, oauth, nil, nil)
+	model := newCheckModel(cfg, registry, nil, nil, oauth, nil, nil, nil, nil)
 	_ = model.reload()
 	view := model.View()
 	for _, text := range []string{
@@ -575,6 +651,40 @@ func (m Model) writeObservability(b *strings.Builder) {
 	}
 }
 
+func (m Model) writePruning(b *strings.Builder) {
+	if m.pruner == nil {
+		return
+	}
+	b.WriteString("\nTelemetry pruning\n")
+	b.WriteString("Retention keep forever until pruned.\n")
+	b.WriteString("Manual prune cutoff older than 30 days.\n")
+	if m.pruneResult != nil {
+		fmt.Fprintf(b, "Last prune before %s: requests %d streams %d fallbacks %d health %d\n",
+			formatPreciseTime(m.pruneResult.Cutoff), m.pruneResult.Requests, m.pruneResult.Streams,
+			m.pruneResult.Fallbacks, m.pruneResult.Health)
+	}
+}
+
+func (m *Model) pruneTelemetry() error {
+	if m.pruner == nil {
+		return nil
+	}
+	cutoff := m.nowTime().Add(-30 * 24 * time.Hour).UTC()
+	result, err := m.pruner.PruneTelemetryBefore(context.Background(), cutoff)
+	if err != nil {
+		return err
+	}
+	m.pruneResult = &result
+	return nil
+}
+
+func (m Model) nowTime() time.Time {
+	if m.now != nil {
+		return m.now().UTC()
+	}
+	return time.Now().UTC()
+}
+
 func credentialDisplay(id int64, label string) string {
 	if id == 0 {
 		return "credential none"
@@ -591,6 +701,13 @@ func formatTime(t time.Time) string {
 		return ""
 	}
 	return t.UTC().Format("2006-01-02T15:04:05Z")
+}
+
+func formatPreciseTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339Nano)
 }
 
 var unsafeDisplayPattern = regexp.MustCompile(`(?i)(bearer|sk-|iln_|oauth|token|secret|authorization|raw|payload|prompt|completion|body|account|acct_|request[_ -]?id|req_|balance|credit|eyj[a-z0-9_-]*\.[a-z0-9_-]*\.)`)

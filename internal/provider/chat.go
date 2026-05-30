@@ -41,6 +41,7 @@ type ModelResult struct {
 	Models     []ModelMetadata
 	ErrorClass string
 	StatusCode int
+	RetryAfter *time.Time
 }
 
 type ModelMetadata struct {
@@ -87,6 +88,7 @@ type ChatResult struct {
 	Usage         openai.Usage
 	ErrorClass    string
 	Latency       time.Duration
+	RetryAfter    *time.Time
 	InvalidBody   bool
 	BodyTruncated bool
 }
@@ -108,6 +110,7 @@ type ChatStreamSummary struct {
 	ChunkCount            int
 	TimeToFirstTokenMS    int64
 	OutputTokensPerSecond float64
+	RetryAfter            *time.Time
 	Started               bool
 	Done                  bool
 	PreStreamError        bool

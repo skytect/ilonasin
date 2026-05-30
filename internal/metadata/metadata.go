@@ -43,6 +43,7 @@ type HealthEvent struct {
 	EventClass         string
 	HTTPStatus         int
 	ErrorClass         string
+	RetryAfter         *time.Time
 }
 
 type FallbackEvent struct {
@@ -117,6 +118,7 @@ type HealthSummary struct {
 	HTTPStatus         int
 	ErrorClass         string
 	OccurredAt         time.Time
+	RetryAfter         *time.Time
 }
 
 type FallbackSummary struct {

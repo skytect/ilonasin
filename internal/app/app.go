@@ -669,6 +669,19 @@ func exerciseObservabilityCheck(ctx context.Context, registry provider.Registry,
 	}); err != nil {
 		return fmt.Errorf("seed observability health: %w", err)
 	}
+	retryAfter := started.Add(10 * time.Minute)
+	if err := store.RecordHealthEvent(ctx, metadata.HealthEvent{
+		OccurredAt:         started.Add(5 * time.Minute),
+		ProviderInstanceID: "deepseek",
+		CredentialID:       first.ID,
+		ModelID:            "retry-after-model",
+		EventClass:         "upstream_failure",
+		HTTPStatus:         http.StatusTooManyRequests,
+		ErrorClass:         "upstream_http_error",
+		RetryAfter:         &retryAfter,
+	}); err != nil {
+		return fmt.Errorf("seed observability retry-after health: %w", err)
+	}
 	if err := store.RecordFallbackEvent(ctx, metadata.FallbackEvent{
 		RequestMetadataID:  streamRequestID,
 		OccurredAt:         started.Add(3 * time.Minute),
@@ -2588,6 +2601,7 @@ func (u *serveCheckUpstream) handleServeCheckCodexResponses(w http.ResponseWrite
 		return
 	}
 	if body.Model == "codex-429" {
+		w.Header().Set("Retry-After", "2")
 		http.Error(w, "raw codex rate limit body", http.StatusTooManyRequests)
 		return
 	}
@@ -2678,12 +2692,32 @@ func (u *serveCheckUpstream) handleServeCheckFallbackChat(w http.ResponseWriter,
 		}
 	case "fallback-429":
 		if auth == "sk-fallback-first" {
+			w.Header().Set("Retry-After", "2")
 			http.Error(w, "raw fallback 429 body", http.StatusTooManyRequests)
 			return
 		}
 	case "fallback-401":
 		if auth == "sk-fallback-first" {
+			w.Header().Set("Retry-After", "raw-provider-payload")
 			http.Error(w, "raw fallback 401 body", http.StatusUnauthorized)
+			return
+		}
+	case "fallback-retry-after-negative":
+		if auth == "sk-fallback-first" {
+			w.Header().Set("Retry-After", "-1")
+			http.Error(w, "raw fallback retry-after body", http.StatusTooManyRequests)
+			return
+		}
+	case "fallback-retry-after-past":
+		if auth == "sk-fallback-first" {
+			w.Header().Set("Retry-After", "Wed, 21 Oct 2015 07:28:00 GMT")
+			http.Error(w, "raw fallback retry-after body", http.StatusTooManyRequests)
+			return
+		}
+	case "fallback-retry-after-too-far":
+		if auth == "sk-fallback-first" {
+			w.Header().Set("Retry-After", "31557601")
+			http.Error(w, "raw fallback retry-after body", http.StatusTooManyRequests)
 			return
 		}
 	case "fallback-malformed":
@@ -2827,6 +2861,11 @@ func (u *serveCheckUpstream) handleServeCheckStream(w http.ResponseWriter, r *ht
 	}
 	if model == "stream-fallback-success" && auth == "sk-fallback-first" {
 		http.Error(w, "raw stream fallback 503 body", http.StatusServiceUnavailable)
+		return
+	}
+	if model == "stream-fallback-429" && auth == "sk-fallback-first" {
+		w.Header().Set("Retry-After", "2")
+		http.Error(w, "raw stream fallback 429 body", http.StatusTooManyRequests)
 		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -3811,6 +3850,9 @@ func exerciseServeOAuthRefreshFailureSemantics(ctx context.Context, base, token 
 	if fakeRefresh.requestCountFor("oauth-serve-no-refresh-429") != 0 {
 		return fmt.Errorf("429 triggered refresh")
 	}
+	if err := assertRetryAfterHealth(ctx, store, "codex", "codex-429"); err != nil {
+		return err
+	}
 	fakeUpstream.setModelsMode("models-429")
 	if status, err := getStatus(base+"/v1/models", token); err != nil || status != http.StatusOK {
 		return fmt.Errorf("429 no refresh models status=%d err=%v", status, err)
@@ -4365,6 +4407,9 @@ func exerciseCredentialFallbackCheck(ctx context.Context, base, token string, in
 	}{
 		{"fallback-429", http.StatusTooManyRequests},
 		{"fallback-401", http.StatusUnauthorized},
+		{"fallback-retry-after-negative", http.StatusTooManyRequests},
+		{"fallback-retry-after-past", http.StatusTooManyRequests},
+		{"fallback-retry-after-too-far", http.StatusTooManyRequests},
 		{"fallback-malformed", http.StatusBadGateway},
 		{"fallback-too-large", http.StatusBadGateway},
 	}
@@ -4378,6 +4423,14 @@ func exerciseCredentialFallbackCheck(ctx context.Context, base, token string, in
 			return fmt.Errorf("%s incorrectly attempted fallback credential", tc.model)
 		}
 	}
+	if err := assertRetryAfterHealth(ctx, store, instance.ID, "fallback-429"); err != nil {
+		return err
+	}
+	for _, modelID := range []string{"fallback-401", "fallback-retry-after-negative", "fallback-retry-after-past", "fallback-retry-after-too-far"} {
+		if err := assertNoRetryAfterHealth(ctx, store, instance.ID, modelID); err != nil {
+			return err
+		}
+	}
 	streamBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true}}`, instance.ID+"/stream-fallback-success"))
 	status, _, _, respBody, err = postStream(base+"/v1/chat/completions", token, streamBody)
 	if err != nil || status != http.StatusOK || !bytes.Contains(respBody, []byte("data: [DONE]")) || bytes.Contains(respBody, []byte("raw stream fallback 503 body")) {
@@ -4387,6 +4440,17 @@ func exerciseCredentialFallbackCheck(ctx context.Context, base, token string, in
 		return fmt.Errorf("stream pre-start fallback did not try second credential")
 	}
 	if err := assertRequestFallbackMetadata(ctx, store, instance.ID, "stream-fallback-success"); err != nil {
+		return err
+	}
+	stream429Body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true}}`, instance.ID+"/stream-fallback-429"))
+	status, _, _, respBody, err = postStream(base+"/v1/chat/completions", token, stream429Body)
+	if err != nil || status != http.StatusTooManyRequests || bytes.Contains(respBody, []byte("raw stream fallback 429 body")) {
+		return fmt.Errorf("stream 429 fallback status=%d err=%v body_len=%d", status, err, len(respBody))
+	}
+	if fakeUpstream.sawAuth("stream-fallback-429", "sk-fallback-second") {
+		return fmt.Errorf("stream 429 incorrectly attempted fallback credential")
+	}
+	if err := assertRetryAfterHealth(ctx, store, instance.ID, "stream-fallback-429"); err != nil {
 		return err
 	}
 	errorBeforeBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true}}`, instance.ID+"/stream-fallback-error-before"))
@@ -4644,9 +4708,50 @@ func assertHealthEvents(ctx context.Context, store *sqlite.Store, providerInstan
 	return nil
 }
 
+func assertRetryAfterHealth(ctx context.Context, store *sqlite.Store, providerInstanceID, modelID string) error {
+	var retryAfter string
+	err := store.DB.QueryRowContext(ctx, `
+		SELECT COALESCE(retry_after, '')
+		FROM health_events
+		WHERE provider_instance_id = ?
+			AND model_id = ?
+			AND event_class = 'upstream_failure'
+		ORDER BY id DESC
+		LIMIT 1
+	`, providerInstanceID, modelID).Scan(&retryAfter)
+	if err != nil {
+		return err
+	}
+	if retryAfter == "" {
+		return fmt.Errorf("retry-after health missing for %s/%s", providerInstanceID, modelID)
+	}
+	if _, err := time.Parse(time.RFC3339Nano, retryAfter); err != nil {
+		return fmt.Errorf("retry-after health invalid for %s/%s: %w", providerInstanceID, modelID, err)
+	}
+	return nil
+}
+
+func assertNoRetryAfterHealth(ctx context.Context, store *sqlite.Store, providerInstanceID, modelID string) error {
+	var count int
+	err := store.DB.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM health_events
+		WHERE provider_instance_id = ?
+			AND model_id = ?
+			AND retry_after IS NOT NULL
+	`, providerInstanceID, modelID).Scan(&count)
+	if err != nil {
+		return err
+	}
+	if count != 0 {
+		return fmt.Errorf("unexpected retry-after health for %s/%s", providerInstanceID, modelID)
+	}
+	return nil
+}
+
 func assertFallbackMetadataNoLeak(ctx context.Context, store *sqlite.Store) error {
 	queries := []string{
-		`SELECT COALESCE(group_concat(provider_instance_id || ' ' || model_id || ' ' || event_class || ' ' || normalized_error_class, ' '), '') FROM health_events`,
+		`SELECT COALESCE(group_concat(provider_instance_id || ' ' || model_id || ' ' || event_class || ' ' || normalized_error_class || ' ' || COALESCE(retry_after, ''), ' '), '') FROM health_events`,
 		`SELECT COALESCE(group_concat(provider_instance_id || ' ' || model_id || ' ' || reason, ' '), '') FROM fallback_events`,
 		`SELECT COALESCE(group_concat(requested_provider_instance || ' ' || requested_model || ' ' || error_class, ' '), '') FROM request_metadata`,
 	}

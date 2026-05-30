@@ -538,6 +538,7 @@ func ExerciseObservabilitySummary(ctx context.Context, cfg config.Config, regist
 		"deepseek 2 req prompt 11 completion 7 total 18 reasoning 3 cache_hit 5 cache_write 3 cost_microunits 126",
 		"avg latency 125ms ttft 50ms tps 9.00",
 		"completed 1 streams 3 chunks",
+		"retry_after 2026-05-30T12:10:00Z",
 		"availability_retry",
 	}
 	for _, text := range required {
@@ -1042,10 +1043,14 @@ func (m Model) writeObservability(b *strings.Builder) {
 		b.WriteString("No health metadata.\n")
 	}
 	for _, row := range m.healthRows {
-		fmt.Fprintf(b, "- %s/%s %s status %d %s %s at %s\n",
+		retryAfter := ""
+		if row.RetryAfter != nil {
+			retryAfter = " retry_after " + formatTime(*row.RetryAfter)
+		}
+		fmt.Fprintf(b, "- %s/%s %s status %d %s %s at %s%s\n",
 			safeDisplay(row.ProviderInstanceID), safeDisplay(row.ModelID),
 			safeDisplay(row.EventClass), row.HTTPStatus, safeDisplay(row.ErrorClass),
-			credentialDisplay(row.CredentialID, row.CredentialLabel), formatTime(row.OccurredAt))
+			credentialDisplay(row.CredentialID, row.CredentialLabel), formatTime(row.OccurredAt), retryAfter)
 	}
 	b.WriteString("\nFallbacks\n")
 	if len(m.fallbackRows) == 0 {

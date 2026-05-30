@@ -935,10 +935,11 @@ func (s *Store) RecordHealthEvent(ctx context.Context, m metadata.HealthEvent) e
 	_, err := s.DB.ExecContext(ctx, `
 		INSERT INTO health_events(
 			occurred_at, provider_instance_id, credential_id, model_id,
-			event_class, http_status, normalized_error_class
-		) VALUES(?, ?, ?, ?, ?, ?, ?)
+			event_class, http_status, normalized_error_class, retry_after
+		) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
 	`, m.OccurredAt.UTC().Format(time.RFC3339Nano), m.ProviderInstanceID,
-		nullableInt64(m.CredentialID), m.ModelID, m.EventClass, nullableInt(m.HTTPStatus), m.ErrorClass)
+		nullableInt64(m.CredentialID), m.ModelID, m.EventClass, nullableInt(m.HTTPStatus), m.ErrorClass,
+		nullableTime(m.RetryAfter))
 	return err
 }
 
@@ -1265,7 +1266,7 @@ func (s *Store) LatestHealth(ctx context.Context) ([]metadata.HealthSummary, err
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT he.provider_instance_id, he.model_id, COALESCE(he.credential_id, 0),
 			COALESCE(pc.label, ''), he.event_class, COALESCE(he.http_status, 0),
-			he.normalized_error_class, he.occurred_at
+			he.normalized_error_class, he.occurred_at, he.retry_after
 		FROM health_events he
 		LEFT JOIN provider_credentials pc ON pc.id = he.credential_id
 		WHERE he.id IN (
@@ -1283,9 +1284,10 @@ func (s *Store) LatestHealth(ctx context.Context) ([]metadata.HealthSummary, err
 	for rows.Next() {
 		var row metadata.HealthSummary
 		var occurred string
+		var retryAfter sql.NullString
 		if err := rows.Scan(&row.ProviderInstanceID, &row.ModelID, &row.CredentialID,
 			&row.CredentialLabel, &row.EventClass, &row.HTTPStatus, &row.ErrorClass,
-			&occurred); err != nil {
+			&occurred, &retryAfter); err != nil {
 			return nil, err
 		}
 		occurredAt, err := time.Parse(time.RFC3339Nano, occurred)
@@ -1293,6 +1295,13 @@ func (s *Store) LatestHealth(ctx context.Context) ([]metadata.HealthSummary, err
 			return nil, err
 		}
 		row.OccurredAt = occurredAt
+		if retryAfter.Valid && retryAfter.String != "" {
+			parsed, err := time.Parse(time.RFC3339Nano, retryAfter.String)
+			if err != nil {
+				return nil, err
+			}
+			row.RetryAfter = &parsed
+		}
 		out = append(out, row)
 	}
 	return out, rows.Err()

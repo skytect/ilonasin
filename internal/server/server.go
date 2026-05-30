@@ -483,6 +483,9 @@ func (s *Server) handleSingleCredentialChat(w http.ResponseWriter, r *http.Reque
 			}
 		}
 	}
+	if shouldRecordChatHealth(result) {
+		s.recordHealth(r.Context(), healthFromSingleChatAttempt(sc.address, singleChatAttempt{credential: sc.credential, result: result, err: err}))
+	}
 	status := normalizedChatStatus(result)
 	errorClass := normalizedChatErrorClass(result, status)
 	if err != nil && errorClass == "" {
@@ -636,6 +639,12 @@ type singleStreamAttempt struct {
 	err        error
 }
 
+type singleChatAttempt struct {
+	credential provider.BearerCredential
+	result     provider.ChatResult
+	err        error
+}
+
 func providerAPIKey(credential credentials.ResolvedAPIKeyCredential) provider.ChatCredential {
 	return provider.ChatCredential{
 		ID:                 credential.ID,
@@ -722,6 +731,10 @@ func healthFromChatAttempt(addr routing.ModelAddress, attempt chatAttempt) metad
 		eventClass = "upstream_success"
 		errorClass = ""
 	}
+	retryAfter := attempt.result.RetryAfter
+	if eventClass == "upstream_success" {
+		retryAfter = nil
+	}
 	return metadata.HealthEvent{
 		OccurredAt:         time.Now(),
 		ProviderInstanceID: addr.ProviderInstanceID,
@@ -730,6 +743,7 @@ func healthFromChatAttempt(addr routing.ModelAddress, attempt chatAttempt) metad
 		EventClass:         eventClass,
 		HTTPStatus:         status,
 		ErrorClass:         errorClass,
+		RetryAfter:         retryAfter,
 	}
 }
 
@@ -747,6 +761,10 @@ func healthFromStreamAttempt(addr routing.ModelAddress, attempt streamAttempt) m
 		eventClass = "upstream_success"
 		errorClass = ""
 	}
+	retryAfter := attempt.summary.RetryAfter
+	if eventClass == "upstream_success" {
+		retryAfter = nil
+	}
 	return metadata.HealthEvent{
 		OccurredAt:         time.Now(),
 		ProviderInstanceID: addr.ProviderInstanceID,
@@ -755,6 +773,31 @@ func healthFromStreamAttempt(addr routing.ModelAddress, attempt streamAttempt) m
 		EventClass:         eventClass,
 		HTTPStatus:         status,
 		ErrorClass:         errorClass,
+		RetryAfter:         retryAfter,
+	}
+}
+
+func healthFromSingleChatAttempt(addr routing.ModelAddress, attempt singleChatAttempt) metadata.HealthEvent {
+	status := normalizedChatStatus(attempt.result)
+	errorClass := normalizedChatErrorClass(attempt.result, status)
+	eventClass := "upstream_failure"
+	if attempt.err == nil && status >= 200 && status < 300 {
+		eventClass = "upstream_success"
+		errorClass = ""
+	}
+	retryAfter := attempt.result.RetryAfter
+	if eventClass == "upstream_success" {
+		retryAfter = nil
+	}
+	return metadata.HealthEvent{
+		OccurredAt:         time.Now(),
+		ProviderInstanceID: addr.ProviderInstanceID,
+		CredentialID:       attempt.credential.ID,
+		ModelID:            addr.ProviderModelID,
+		EventClass:         eventClass,
+		HTTPStatus:         status,
+		ErrorClass:         errorClass,
+		RetryAfter:         retryAfter,
 	}
 }
 
@@ -772,6 +815,10 @@ func healthFromSingleStreamAttempt(addr routing.ModelAddress, attempt singleStre
 		eventClass = "upstream_success"
 		errorClass = ""
 	}
+	retryAfter := attempt.summary.RetryAfter
+	if eventClass == "upstream_success" {
+		retryAfter = nil
+	}
 	return metadata.HealthEvent{
 		OccurredAt:         time.Now(),
 		ProviderInstanceID: addr.ProviderInstanceID,
@@ -780,6 +827,7 @@ func healthFromSingleStreamAttempt(addr routing.ModelAddress, attempt singleStre
 		EventClass:         eventClass,
 		HTTPStatus:         status,
 		ErrorClass:         errorClass,
+		RetryAfter:         retryAfter,
 	}
 }
 

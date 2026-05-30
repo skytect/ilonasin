@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,6 +29,7 @@ const DefaultMaxStreamEvents = 1_000_000
 const DefaultStreamIdleTimeout = 120 * time.Second
 const DefaultStreamHeaderTimeout = 30 * time.Second
 const MaxCodexAggregateAssistantBytes = 16 << 20
+const maxRetryAfter = 365 * 24 * time.Hour
 
 type HTTPChatAdapter struct {
 	Client                 *http.Client
@@ -63,7 +65,7 @@ func (a HTTPChatAdapter) ListModels(ctx context.Context, req ModelRequest) (Mode
 		if resp.StatusCode == http.StatusUnauthorized {
 			errorClass = "upstream_auth_failed"
 		}
-		return ModelResult{ErrorClass: errorClass, StatusCode: resp.StatusCode}, fmt.Errorf("upstream models status %d", resp.StatusCode)
+		return ModelResult{ErrorClass: errorClass, StatusCode: resp.StatusCode, RetryAfter: retryAfterFromHeader(resp.Header, time.Now())}, fmt.Errorf("upstream models status %d", resp.StatusCode)
 	}
 	limited := http.MaxBytesReader(nil, resp.Body, MaxUpstreamModelsBodyBytes)
 	body, readErr := io.ReadAll(limited)
@@ -182,6 +184,7 @@ func (a HTTPChatAdapter) CompleteChat(ctx context.Context, req ChatRequest) (Cha
 			ContentType:   "application/json",
 			ErrorClass:    errorClass,
 			Latency:       latency,
+			RetryAfter:    retryAfterFromHeader(resp.Header, time.Now()),
 			BodyTruncated: truncated,
 		}, readErr
 	}
@@ -195,6 +198,7 @@ func (a HTTPChatAdapter) CompleteChat(ctx context.Context, req ChatRequest) (Cha
 		ContentType: contentType,
 		Body:        respBody,
 		Latency:     latency,
+		RetryAfter:  retryAfterFromHeader(resp.Header, time.Now()),
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		result.ErrorClass = "upstream_http_error"
@@ -242,10 +246,11 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		retryAfter := retryAfterFromHeader(resp.Header, time.Now())
 		if resp.StatusCode == http.StatusUnauthorized {
-			return ChatResult{StatusCode: http.StatusUnauthorized, ContentType: "application/json", ErrorClass: "upstream_auth_failed", Latency: time.Since(start)}, fmt.Errorf("codex responses status %d", resp.StatusCode)
+			return ChatResult{StatusCode: http.StatusUnauthorized, ContentType: "application/json", ErrorClass: "upstream_auth_failed", Latency: time.Since(start), RetryAfter: retryAfter}, fmt.Errorf("codex responses status %d", resp.StatusCode)
 		}
-		return ChatResult{StatusCode: http.StatusBadGateway, ContentType: "application/json", ErrorClass: "upstream_http_error", Latency: time.Since(start)}, fmt.Errorf("codex responses status %d", resp.StatusCode)
+		return ChatResult{StatusCode: http.StatusBadGateway, ContentType: "application/json", ErrorClass: "upstream_http_error", Latency: time.Since(start), RetryAfter: retryAfter}, fmt.Errorf("codex responses status %d", resp.StatusCode)
 	}
 	parsed, err := a.readCodexResponses(streamCtx, resp.Body)
 	if err != nil {
@@ -564,6 +569,7 @@ func (a HTTPChatAdapter) StreamChat(ctx context.Context, req ChatRequest, sink C
 			StatusCode:       resp.StatusCode,
 			ErrorClass:       "upstream_http_error",
 			CompletionStatus: "upstream_error",
+			RetryAfter:       retryAfterFromHeader(resp.Header, time.Now()),
 			PreStreamError:   true,
 		}, fmt.Errorf("upstream stream status %d", resp.StatusCode)
 	}
@@ -632,6 +638,7 @@ func (a HTTPChatAdapter) streamCodexChat(ctx context.Context, req ChatRequest, s
 			StatusCode:       resp.StatusCode,
 			ErrorClass:       errorClass,
 			CompletionStatus: "upstream_error",
+			RetryAfter:       retryAfterFromHeader(resp.Header, time.Now()),
 			PreStreamError:   true,
 		}, fmt.Errorf("codex responses stream status %d", resp.StatusCode)
 	}
@@ -1218,6 +1225,35 @@ func classifyTransportError(err error) string {
 		return "upstream_timeout"
 	}
 	return "upstream_network_error"
+}
+
+func retryAfterFromHeader(header http.Header, now time.Time) *time.Time {
+	values := header.Values("Retry-After")
+	if len(values) != 1 {
+		return nil
+	}
+	value := strings.TrimSpace(values[0])
+	if value == "" {
+		return nil
+	}
+	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil {
+		if seconds < 0 || seconds > int64(maxRetryAfter/time.Second) {
+			return nil
+		}
+		delay := time.Duration(seconds) * time.Second
+		out := now.UTC().Add(delay)
+		return &out
+	}
+	parsed, err := http.ParseTime(value)
+	if err != nil {
+		return nil
+	}
+	parsed = parsed.UTC()
+	now = now.UTC()
+	if !parsed.After(now) || parsed.Sub(now) > maxRetryAfter {
+		return nil
+	}
+	return &parsed
 }
 
 func (a HTTPChatAdapter) streamingClient() *http.Client {

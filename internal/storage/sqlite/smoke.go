@@ -481,16 +481,25 @@ func exerciseMigratedStore(ctx context.Context, store *Store, suffix string) err
 	}); err != nil {
 		return err
 	}
+	retryAfter := now.Add(2 * time.Minute)
 	if err := store.RecordHealthEvent(ctx, metadata.HealthEvent{
 		OccurredAt:         now,
 		ProviderInstanceID: "deepseek",
 		CredentialID:       api.ID,
 		ModelID:            "deepseek-chat",
-		EventClass:         "ok",
-		HTTPStatus:         200,
-		ErrorClass:         "",
+		EventClass:         "upstream_failure",
+		HTTPStatus:         429,
+		ErrorClass:         "upstream_http_error",
+		RetryAfter:         &retryAfter,
 	}); err != nil {
 		return err
+	}
+	healthRows, err := store.LatestHealth(ctx)
+	if err != nil {
+		return err
+	}
+	if len(healthRows) == 0 || healthRows[0].RetryAfter == nil || !healthRows[0].RetryAfter.Equal(retryAfter.UTC()) {
+		return fmt.Errorf("retry-after health metadata missing")
 	}
 	if err := store.RecordFallbackEvent(ctx, metadata.FallbackEvent{
 		RequestMetadataID:  requestID,

@@ -3,13 +3,17 @@ package app
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 
 	"ilonasin/internal/config"
@@ -47,7 +51,7 @@ func Serve(opts Options) error {
 	upstreams := credentials.UpstreamService{Registry: rt.Registry, Repo: rt.Store}
 	srv := &http.Server{
 		Addr:              rt.Config.Server.Bind,
-		Handler:           server.New(rt.Registry, auth, upstreams, rt.Store).Handler(),
+		Handler:           server.New(rt.Registry, auth, upstreams, chatAdapters(nil), rt.Store).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	fmt.Fprintf(opts.Stdout, "ilonasin serving on %s\n", rt.Config.Server.Bind)
@@ -80,7 +84,9 @@ func ServeCheck(opts Options) error {
 		return err
 	}
 
-	if instance, ok := firstAPIKeyProvider(rt.Registry); ok {
+	instances := apiKeyProviders(rt.Registry)
+	if len(instances) > 0 {
+		instance := instances[0]
 		if _, err := upstreamService.AddAPIKey(context.Background(), instance.ID, "serve-check-upstream", "sk-serve-check-upstream"); err != nil {
 			return err
 		}
@@ -99,7 +105,10 @@ func ServeCheck(opts Options) error {
 		}
 	}
 
-	handler := server.New(rt.Registry, tokenService, upstreamService, checkStore).Handler()
+	fakeUpstream := newServeCheckUpstream()
+	defer fakeUpstream.server.Close()
+	checkRegistry := baseURLOverrideRegistry{Registry: rt.Registry, baseURL: fakeUpstream.server.URL}
+	handler := server.New(checkRegistry, tokenService, upstreamService, chatAdapters(fakeUpstream.server.Client()), checkStore).Handler()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return err
@@ -131,6 +140,19 @@ func ServeCheck(opts Options) error {
 	}
 	if status, err := postStatus(base+"/v1/chat/completions", created2.Token, body); err != nil || status != http.StatusBadRequest {
 		return fmt.Errorf("unsupported chat status=%d err=%v", status, err)
+	}
+	for _, instance := range instances {
+		if _, err := upstreamService.AddAPIKey(context.Background(), instance.ID, "serve-check-adapter", "sk-serve-check-adapter"); err != nil {
+			return err
+		}
+		if err := exerciseChatAdapterCheck(context.Background(), base, created2.Token, instance, fakeUpstream, checkStore); err != nil {
+			return err
+		}
+	}
+	if len(instances) > 0 {
+		if err := assertHomeCredentialCountsZero(context.Background(), rt.Store); err != nil {
+			return err
+		}
 	}
 
 	_ = srv.Shutdown(context.Background())
@@ -264,12 +286,200 @@ func exerciseLocalTokenCheck(ctx context.Context) error {
 }
 
 func firstAPIKeyProvider(registry provider.Registry) (provider.Instance, bool) {
+	instances := apiKeyProviders(registry)
+	if len(instances) == 0 {
+		return provider.Instance{}, false
+	}
+	return instances[0], true
+}
+
+func apiKeyProviders(registry provider.Registry) []provider.Instance {
+	var out []provider.Instance
 	for _, instance := range registry.List() {
 		if instance.APIKey && !instance.Placeholder {
-			return instance, true
+			out = append(out, instance)
 		}
 	}
-	return provider.Instance{}, false
+	return out
+}
+
+func chatAdapters(client *http.Client) provider.StaticChatAdapters {
+	adapter := provider.NewHTTPChatAdapter(client)
+	return provider.StaticChatAdapters{
+		"deepseek":   adapter,
+		"openrouter": adapter,
+	}
+}
+
+type baseURLOverrideRegistry struct {
+	provider.Registry
+	baseURL string
+}
+
+func (r baseURLOverrideRegistry) Get(id string) (provider.Instance, bool) {
+	instance, ok := r.Registry.Get(id)
+	if ok && r.baseURL != "" {
+		instance.BaseURL = r.baseURL
+		if instance.Type == "openrouter" {
+			instance.BaseURL += "/api/v1"
+		}
+	}
+	return instance, ok
+}
+
+type serveCheckUpstream struct {
+	server   *httptest.Server
+	mu       sync.Mutex
+	observed map[string]bool
+}
+
+func newServeCheckUpstream() *serveCheckUpstream {
+	up := &serveCheckUpstream{observed: map[string]bool{}}
+	up.server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if (r.URL.Path != "/chat/completions" && r.URL.Path != "/api/v1/chat/completions") || r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer sk-serve-check-adapter" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if r.Header.Get("Content-Type") != "application/json" {
+			http.Error(w, "bad content type", http.StatusBadRequest)
+			return
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		model, _ := body["model"].(string)
+		if model == "invalid-json" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"object":"not-chat"}`))
+			return
+		}
+		if model == "malformed-chat" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"object":"chat.completion"}`))
+			return
+		}
+		if model == "too-large" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(strings.Repeat("x", int(provider.MaxUpstreamChatBodyBytes)+1)))
+			return
+		}
+		if body["stream"] == nil && (model == "deepseek-v4-pro" || model == "deepseek/deepseek-v4-pro") {
+			up.mu.Lock()
+			up.observed[r.URL.Path+" "+model] = true
+			up.mu.Unlock()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl_check","object":"chat.completion","created":1,"model":"deepseek-v4-pro","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"completion_tokens_details":{"reasoning_tokens":0}}}`))
+	}))
+	return up
+}
+
+func (u *serveCheckUpstream) sawExpected(path, model string) bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.observed[path+" "+model]
+}
+
+func looksLikeChatCompletion(body []byte) bool {
+	var resp struct {
+		Object  string `json:"object"`
+		Choices []any  `json:"choices"`
+		Usage   any    `json:"usage"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return false
+	}
+	return resp.Object == "chat.completion" && len(resp.Choices) > 0 && resp.Usage != nil
+}
+
+func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance provider.Instance, fakeUpstream *serveCheckUpstream, store *sqlite.Store) error {
+	modelID := "deepseek-v4-pro"
+	if instance.Type == "openrouter" {
+		modelID = "deepseek/deepseek-v4-pro"
+	}
+	model := instance.ID + "/" + modelID
+	successBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"max_tokens":1}`, model))
+	status, respBody, err := postJSON(base+"/v1/chat/completions", token, successBody)
+	if err != nil || status != http.StatusOK {
+		return fmt.Errorf("chat adapter success provider=%s status=%d err=%v", instance.ID, status, err)
+	}
+	if !looksLikeChatCompletion(respBody) {
+		return fmt.Errorf("chat adapter success response was not OpenAI-compatible")
+	}
+	expectedPath := "/chat/completions"
+	if instance.Type == "openrouter" {
+		expectedPath = "/api/v1/chat/completions"
+	}
+	if !fakeUpstream.sawExpected(expectedPath, modelID) {
+		return fmt.Errorf("chat adapter did not send expected upstream request for provider=%s", instance.ID)
+	}
+	if err := assertRecordedCredentialID(ctx, store); err != nil {
+		return err
+	}
+	streamBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true}`, model))
+	if status, err := postStatus(base+"/v1/chat/completions", token, streamBody); err != nil || status != http.StatusBadRequest {
+		return fmt.Errorf("stream chat provider=%s status=%d err=%v", instance.ID, status, err)
+	}
+	toolsBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"tools":[]}`, model))
+	if status, err := postStatus(base+"/v1/chat/completions", token, toolsBody); err != nil || status != http.StatusBadRequest {
+		return fmt.Errorf("unsupported tools provider=%s status=%d err=%v", instance.ID, status, err)
+	}
+	providerOptionsBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"provider_options":null}`, model))
+	if status, err := postStatus(base+"/v1/chat/completions", token, providerOptionsBody); err != nil || status != http.StatusBadRequest {
+		return fmt.Errorf("unsupported provider_options provider=%s status=%d err=%v", instance.ID, status, err)
+	}
+	invalidBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}]}`, instance.ID+"/invalid-json"))
+	if status, err := postStatus(base+"/v1/chat/completions", token, invalidBody); err != nil || status != http.StatusBadGateway {
+		return fmt.Errorf("invalid upstream provider=%s status=%d err=%v", instance.ID, status, err)
+	}
+	malformedBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}]}`, instance.ID+"/malformed-chat"))
+	if status, err := postStatus(base+"/v1/chat/completions", token, malformedBody); err != nil || status != http.StatusBadGateway {
+		return fmt.Errorf("malformed upstream provider=%s status=%d err=%v", instance.ID, status, err)
+	}
+	tooLargeBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}]}`, instance.ID+"/too-large"))
+	if status, err := postStatus(base+"/v1/chat/completions", token, tooLargeBody); err != nil || status != http.StatusBadGateway {
+		return fmt.Errorf("too-large upstream provider=%s status=%d err=%v", instance.ID, status, err)
+	}
+	return nil
+}
+
+func assertHomeCredentialCountsZero(ctx context.Context, store *sqlite.Store) error {
+	for _, table := range []string{"client_tokens", "provider_credentials", "credential_secrets"} {
+		var count int
+		if err := store.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table).Scan(&count); err != nil {
+			return err
+		}
+		if count != 0 {
+			return fmt.Errorf("selected home table %s has %d check-created rows", table, count)
+		}
+	}
+	return nil
+}
+
+func assertRecordedCredentialID(ctx context.Context, store *sqlite.Store) error {
+	var count int
+	err := store.DB.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM request_metadata
+		WHERE http_status = 200
+			AND credential_id IS NOT NULL
+			AND prompt_tokens = 1
+			AND completion_tokens = 1
+			AND total_tokens = 2
+	`).Scan(&count)
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return fmt.Errorf("chat adapter metadata did not record credential and usage")
+	}
+	return nil
 }
 
 func getStatus(url, token string) (int, error) {
@@ -301,4 +511,23 @@ func postStatus(url, token string, body []byte) (int, error) {
 	}
 	defer resp.Body.Close()
 	return resp.StatusCode, nil
+}
+
+func postJSON(url, token string, body []byte) (int, []byte, error) {
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, nil, err
+	}
+	return resp.StatusCode, respBody, nil
 }

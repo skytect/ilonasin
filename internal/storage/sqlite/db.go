@@ -341,14 +341,21 @@ func isUniqueConstraint(err error) bool {
 func (s *Store) RecordRequestMetadata(ctx context.Context, m metadata.Request) error {
 	_, err := s.DB.ExecContext(ctx, `
 		INSERT INTO request_metadata(
-			started_at, client_token_id, requested_provider_instance, requested_model,
+			started_at, client_token_id, credential_id, requested_provider_instance, requested_model,
 			resolved_provider_instance, resolved_model, http_status, error_class,
 			retry_count, fallback_count, prompt_tokens, completion_tokens,
 			total_tokens, reasoning_tokens, total_latency_ms
-		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, m.StartedAt.UTC().Format(time.RFC3339Nano), m.ClientTokenID, m.RequestedProviderInstance,
+		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, m.StartedAt.UTC().Format(time.RFC3339Nano), m.ClientTokenID, nullableInt64(m.CredentialID), m.RequestedProviderInstance,
 		m.RequestedModel, m.ResolvedProviderInstance, m.ResolvedModel, m.HTTPStatus,
 		m.ErrorClass, m.RetryCount, m.FallbackCount, m.PromptTokens, m.CompletionTokens,
 		m.TotalTokens, m.ReasoningTokens, m.TotalLatencyMS)
 	return err
+}
+
+func nullableInt64(v int64) any {
+	if v == 0 {
+		return nil
+	}
+	return v
 }

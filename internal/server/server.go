@@ -20,6 +20,7 @@ type Server struct {
 	registry  ProviderRegistry
 	auth      credentials.LocalTokenVerifier
 	upstreams credentials.UpstreamCredentialResolver
+	adapters  provider.ChatAdapters
 	meta      MetadataRecorder
 }
 
@@ -31,8 +32,8 @@ type ProviderRegistry interface {
 	Get(id string) (provider.Instance, bool)
 }
 
-func New(registry ProviderRegistry, auth credentials.LocalTokenVerifier, upstreams credentials.UpstreamCredentialResolver, meta MetadataRecorder) *Server {
-	return &Server{registry: registry, auth: auth, upstreams: upstreams, meta: meta}
+func New(registry ProviderRegistry, auth credentials.LocalTokenVerifier, upstreams credentials.UpstreamCredentialResolver, adapters provider.ChatAdapters, meta MetadataRecorder) *Server {
+	return &Server{registry: registry, auth: auth, upstreams: upstreams, adapters: adapters, meta: meta}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -89,21 +90,115 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 		return
 	}
 	if !instance.APIKey || instance.Placeholder {
+		_ = s.record(r.Context(), metadata.Request{
+			StartedAt:                 start,
+			ClientTokenID:             token.ID,
+			RequestedProviderInstance: addr.ProviderInstanceID,
+			RequestedModel:            addr.ProviderModelID,
+			ResolvedProviderInstance:  addr.ProviderInstanceID,
+			ResolvedModel:             addr.ProviderModelID,
+			HTTPStatus:                http.StatusNotImplemented,
+			ErrorClass:                "provider_unimplemented",
+			TotalLatencyMS:            time.Since(start).Milliseconds(),
+		})
 		writeError(w, http.StatusNotImplemented, "provider credential type is not implemented in this slice", "invalid_request_error", "provider_unimplemented")
 		return
+	}
+	if s.adapters == nil {
+		_ = s.record(r.Context(), metadata.Request{
+			StartedAt:                 start,
+			ClientTokenID:             token.ID,
+			RequestedProviderInstance: addr.ProviderInstanceID,
+			RequestedModel:            addr.ProviderModelID,
+			ResolvedProviderInstance:  addr.ProviderInstanceID,
+			ResolvedModel:             addr.ProviderModelID,
+			HTTPStatus:                http.StatusNotImplemented,
+			ErrorClass:                "provider_unimplemented",
+			TotalLatencyMS:            time.Since(start).Milliseconds(),
+		})
+		writeError(w, http.StatusNotImplemented, "provider adapter is not implemented", "invalid_request_error", "provider_unimplemented")
+		return
+	}
+	adapter, ok := s.adapters.ForProvider(instance.Type)
+	if !ok {
+		_ = s.record(r.Context(), metadata.Request{
+			StartedAt:                 start,
+			ClientTokenID:             token.ID,
+			RequestedProviderInstance: addr.ProviderInstanceID,
+			RequestedModel:            addr.ProviderModelID,
+			ResolvedProviderInstance:  addr.ProviderInstanceID,
+			ResolvedModel:             addr.ProviderModelID,
+			HTTPStatus:                http.StatusNotImplemented,
+			ErrorClass:                "provider_unimplemented",
+			TotalLatencyMS:            time.Since(start).Milliseconds(),
+		})
+		writeError(w, http.StatusNotImplemented, "provider adapter is not implemented", "invalid_request_error", "provider_unimplemented")
+		return
+	}
+	credential, err := s.upstreams.ResolveAPIKey(r.Context(), addr.ProviderInstanceID)
+	if err != nil {
+		_ = s.record(r.Context(), metadata.Request{
+			StartedAt:                 start,
+			ClientTokenID:             token.ID,
+			RequestedProviderInstance: addr.ProviderInstanceID,
+			RequestedModel:            addr.ProviderModelID,
+			ResolvedProviderInstance:  addr.ProviderInstanceID,
+			ResolvedModel:             addr.ProviderModelID,
+			HTTPStatus:                http.StatusUnauthorized,
+			ErrorClass:                "credential_unavailable",
+			TotalLatencyMS:            time.Since(start).Milliseconds(),
+		})
+		writeError(w, http.StatusUnauthorized, "no eligible upstream credential is available", "invalid_request_error", "credential_unavailable")
+		return
+	}
+	result, err := adapter.CompleteChat(r.Context(), provider.ChatRequest{
+		Instance:      instance,
+		UpstreamModel: addr.ProviderModelID,
+		Request:       req,
+		Credential: provider.APIKeyCredential{
+			ID:                 credential.ID,
+			ProviderInstanceID: credential.ProviderInstanceID,
+			Label:              credential.Label,
+			APIKey:             credential.APIKey,
+		},
+	})
+	status := result.StatusCode
+	if status == 0 {
+		status = http.StatusBadGateway
+	}
+	errorClass := result.ErrorClass
+	if errorClass == "" && status >= 400 {
+		errorClass = "upstream_http_error"
 	}
 	_ = s.record(r.Context(), metadata.Request{
 		StartedAt:                 start,
 		ClientTokenID:             token.ID,
+		CredentialID:              credential.ID,
 		RequestedProviderInstance: addr.ProviderInstanceID,
 		RequestedModel:            addr.ProviderModelID,
 		ResolvedProviderInstance:  addr.ProviderInstanceID,
 		ResolvedModel:             addr.ProviderModelID,
-		HTTPStatus:                http.StatusNotImplemented,
-		ErrorClass:                "provider_unimplemented",
+		HTTPStatus:                status,
+		ErrorClass:                errorClass,
+		PromptTokens:              result.Usage.PromptTokens,
+		CompletionTokens:          result.Usage.CompletionTokens,
+		TotalTokens:               result.Usage.TotalTokens,
+		ReasoningTokens:           result.Usage.ReasoningTokens,
 		TotalLatencyMS:            time.Since(start).Milliseconds(),
 	})
-	writeError(w, http.StatusNotImplemented, "provider adapter is not implemented in this slice", "invalid_request_error", "provider_unimplemented")
+	if err != nil && result.InvalidBody {
+		writeError(w, http.StatusBadGateway, "upstream returned an invalid chat completion response", "api_error", "upstream_invalid_response")
+		return
+	}
+	if err != nil && result.BodyTruncated {
+		writeError(w, http.StatusBadGateway, "upstream response body exceeded the configured limit", "api_error", "upstream_body_too_large")
+		return
+	}
+	if err != nil && result.Body == nil {
+		writeError(w, http.StatusBadGateway, "upstream request failed", "api_error", errorClass)
+		return
+	}
+	writeRaw(w, status, result.ContentType, result.Body)
 }
 
 func (s *Server) record(ctx context.Context, m metadata.Request) error {
@@ -111,6 +206,15 @@ func (s *Server) record(ctx context.Context, m metadata.Request) error {
 		return nil
 	}
 	return s.meta.RecordRequestMetadata(ctx, m)
+}
+
+func writeRaw(w http.ResponseWriter, status int, contentType string, body []byte) {
+	if contentType == "" {
+		contentType = "application/json"
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.WriteHeader(status)
+	_, _ = w.Write(body)
 }
 
 func writeError(w http.ResponseWriter, status int, message, typ, code string) {

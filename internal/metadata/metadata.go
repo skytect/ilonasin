@@ -5,6 +5,7 @@ import "time"
 type Request struct {
 	StartedAt                 time.Time
 	ClientTokenID             int64
+	CredentialID              int64
 	RequestedProviderInstance string
 	RequestedModel            string
 	ResolvedProviderInstance  string

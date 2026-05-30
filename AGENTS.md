@@ -8,6 +8,9 @@
 - Read all markdown files in `docs/**` before making architecture-sensitive
   changes.
 - Refer to `docs/ilonasin-architecture.md` as the target architecture.
+- Refer to `docs/deepseek-api.md`, `docs/openrouter-api.md`,
+  `docs/deepseek-openrouter-comparison.md`, `docs/codex-auth.md`, and
+  `docs/codex-endpoints.md` when touching provider behavior.
 - Only if explicitly told to save an implementation plan, add it to
   `docs/plans/`.
 
@@ -15,7 +18,8 @@
 
 - Do not write tests by yourself unless explicitly told to. Tests are not fixes,
   they are false assurances.
-- Use direct compile, vet, and CLI smoke checks instead of keeping test files.
+- Do not keep permanent test files. Use direct compile, vet, and CLI smoke
+  checks instead.
 - Never implement more than necessary. Every piece of code you write adds to
   maintenance burden.
 - Never hardcode or bodge, always start with the proper interfaces with stubs,
@@ -40,6 +44,7 @@
 ## Smoke Checks
 
 - Prefer direct command checks:
+  - `find . -name '*_test.go' -type f -print`
   - `go test ./...` as a compile/package check only; do not add permanent tests.
   - `go vet ./...`
   - `go build -o "$tmpbin/ilonasin" ./cmd/ilonasin`

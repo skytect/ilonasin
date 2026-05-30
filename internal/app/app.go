@@ -154,6 +154,11 @@ func ServeCheck(opts Options) error {
 			return err
 		}
 	}
+	for _, instance := range instances {
+		if err := exerciseCredentialFallbackCheck(context.Background(), base, created2.Token, instance, fakeUpstream, checkStore, upstreamService); err != nil {
+			return err
+		}
+	}
 	if len(instances) > 0 {
 		if err := assertHomeCredentialCountsZero(context.Background(), rt.Store); err != nil {
 			return err
@@ -407,7 +412,8 @@ func newServeCheckUpstream() *serveCheckUpstream {
 			http.NotFound(w, r)
 			return
 		}
-		if r.Header.Get("Authorization") != "Bearer sk-serve-check-adapter" {
+		auth := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if auth != "sk-serve-check-adapter" && !strings.HasPrefix(auth, "sk-fallback-") {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -421,8 +427,12 @@ func newServeCheckUpstream() *serveCheckUpstream {
 			return
 		}
 		model, _ := body["model"].(string)
+		if strings.HasPrefix(model, "fallback-") {
+			up.handleServeCheckFallbackChat(w, model, auth)
+			return
+		}
 		if body["stream"] == true {
-			up.handleServeCheckStream(w, r, body, model)
+			up.handleServeCheckStream(w, r, body, model, auth)
 			return
 		}
 		if model == "invalid-json" {
@@ -449,6 +459,41 @@ func newServeCheckUpstream() *serveCheckUpstream {
 		_, _ = w.Write([]byte(`{"id":"chatcmpl_check","object":"chat.completion","created":1,"model":"deepseek-v4-pro","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"completion_tokens_details":{"reasoning_tokens":0}}}`))
 	}))
 	return up
+}
+
+func (u *serveCheckUpstream) handleServeCheckFallbackChat(w http.ResponseWriter, model, auth string) {
+	u.recordObservedAuth(model, auth)
+	switch model {
+	case "fallback-success":
+		if auth == "sk-fallback-first" {
+			http.Error(w, "raw fallback 503 body", http.StatusServiceUnavailable)
+			return
+		}
+	case "fallback-429":
+		if auth == "sk-fallback-first" {
+			http.Error(w, "raw fallback 429 body", http.StatusTooManyRequests)
+			return
+		}
+	case "fallback-401":
+		if auth == "sk-fallback-first" {
+			http.Error(w, "raw fallback 401 body", http.StatusUnauthorized)
+			return
+		}
+	case "fallback-malformed":
+		if auth == "sk-fallback-first" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"object":"chat.completion"}`))
+			return
+		}
+	case "fallback-too-large":
+		if auth == "sk-fallback-first" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(strings.Repeat("x", int(provider.MaxUpstreamChatBodyBytes)+1)))
+			return
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"id":"chatcmpl_fallback","object":"chat.completion","created":1,"model":"fallback-success","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
 }
 
 func (u *serveCheckUpstream) handleServeCheckModels(w http.ResponseWriter, r *http.Request) {
@@ -515,13 +560,20 @@ func (u *serveCheckUpstream) setModelsMode(mode string) {
 	}
 }
 
-func (u *serveCheckUpstream) handleServeCheckStream(w http.ResponseWriter, r *http.Request, body map[string]any, model string) {
+func (u *serveCheckUpstream) handleServeCheckStream(w http.ResponseWriter, r *http.Request, body map[string]any, model, auth string) {
 	if r.Header.Get("Accept") != "text/event-stream" {
 		http.Error(w, "bad accept", http.StatusBadRequest)
 		return
 	}
+	if strings.HasPrefix(model, "stream-fallback") {
+		u.recordObservedAuth(model, auth)
+	}
 	if model == "stream-http-error" {
 		http.Error(w, "upstream unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if model == "stream-fallback-success" && auth == "sk-fallback-first" {
+		http.Error(w, "raw stream fallback 503 body", http.StatusServiceUnavailable)
 		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -556,9 +608,18 @@ func (u *serveCheckUpstream) handleServeCheckStream(w http.ResponseWriter, r *ht
 		write(`data: {"error":{"message":"raw-provider-secret","metadata":{"id":"raw-id"}}}` + "\n\n")
 		return
 	}
+	if model == "stream-fallback-error-before" && auth == "sk-fallback-first" {
+		write(`data: {"error":{"message":"raw stream fallback secret","metadata":{"id":"raw-id"}}}` + "\n\n")
+		return
+	}
 	if model == "stream-error" {
 		write(`data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"ok"}}],"usage":null}` + "\n\n")
 		write(`data: {"error":{"message":"raw-provider-secret","metadata":{"id":"raw-id"}}}` + "\n\n")
+		return
+	}
+	if model == "stream-fallback-after-start" && auth == "sk-fallback-first" {
+		write(`data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"ok"}}],"usage":null}` + "\n\n")
+		write(`data: {"error":{"message":"raw stream fallback secret","metadata":{"id":"raw-id"}}}` + "\n\n")
 		return
 	}
 	if model == "stream-malformed" {
@@ -593,6 +654,28 @@ func (u *serveCheckUpstream) handleServeCheckStream(w http.ResponseWriter, r *ht
 	write(`data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"ok","reasoning_content":"r"}}],"usage":null}` + "\n\n")
 	write(`data: {"object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"completion_tokens_details":{"reasoning_tokens":0}}}` + "\n\n")
 	write("data: [DONE]\n\n")
+}
+
+func (u *serveCheckUpstream) recordObservedAuth(model, auth string) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.observed["auth "+model+" "+auth] = true
+}
+
+func (u *serveCheckUpstream) sawAuth(model, auth string) bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.observed["auth "+model+" "+auth]
+}
+
+func (u *serveCheckUpstream) clearObservedAuth() {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	for key := range u.observed {
+		if strings.HasPrefix(key, "auth ") {
+			delete(u.observed, key)
+		}
+	}
 }
 
 func (u *serveCheckUpstream) sawExpected(path, model string) bool {
@@ -883,6 +966,122 @@ func exerciseModelDiscoveryCheck(ctx context.Context, base, token string, instan
 	return nil
 }
 
+func exerciseCredentialFallbackCheck(ctx context.Context, base, token string, instance provider.Instance, fakeUpstream *serveCheckUpstream, store *sqlite.Store, upstreams credentials.UpstreamCredentialManager) error {
+	fakeUpstream.clearObservedAuth()
+	if err := disableProviderCredentials(ctx, upstreams, instance.ID); err != nil {
+		return err
+	}
+	first, err := upstreams.AddAPIKey(ctx, instance.ID, "fallback-first-"+instance.ID, "sk-fallback-first")
+	if err != nil {
+		return err
+	}
+	second, err := upstreams.AddAPIKey(ctx, instance.ID, "fallback-second-"+instance.ID, "sk-fallback-second")
+	if err != nil {
+		return err
+	}
+	model := instance.ID + "/fallback-success"
+	body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"max_tokens":1}`, model))
+	beforeFallbacks, err := fallbackEventCount(ctx, store, instance.ID, "fallback-success")
+	if err != nil {
+		return err
+	}
+	status, respBody, err := postJSON(base+"/v1/chat/completions", token, body)
+	if err != nil || status != http.StatusBadGateway || bytes.Contains(respBody, []byte("raw fallback 503 body")) {
+		return fmt.Errorf("fallback disabled status=%d err=%v body_len=%d", status, err, len(respBody))
+	}
+	if fakeUpstream.sawAuth("fallback-success", "sk-fallback-second") {
+		return fmt.Errorf("fallback used second credential while policy disabled")
+	}
+	afterFallbacks, err := fallbackEventCount(ctx, store, instance.ID, "fallback-success")
+	if err != nil {
+		return err
+	}
+	if afterFallbacks != beforeFallbacks {
+		return fmt.Errorf("fallback event recorded while policy disabled")
+	}
+	if err := upstreams.EnableFallbackGroup(ctx, instance.ID, credentials.DefaultFallbackGroup); err != nil {
+		return err
+	}
+	status, respBody, err = postJSON(base+"/v1/chat/completions", token, body)
+	if err != nil || status != http.StatusOK || !looksLikeChatCompletion(respBody) || bytes.Contains(respBody, []byte("raw fallback 503 body")) {
+		return fmt.Errorf("fallback enabled status=%d err=%v body_len=%d", status, err, len(respBody))
+	}
+	if !fakeUpstream.sawAuth("fallback-success", "sk-fallback-first") || !fakeUpstream.sawAuth("fallback-success", "sk-fallback-second") {
+		return fmt.Errorf("fallback did not attempt both credentials")
+	}
+	if err := assertRequestFallbackMetadata(ctx, store, instance.ID, "fallback-success"); err != nil {
+		return err
+	}
+	if err := assertFallbackEvent(ctx, store, instance.ID, "fallback-success", first.ID, second.ID); err != nil {
+		return err
+	}
+	if err := assertHealthEvents(ctx, store, instance.ID, "fallback-success"); err != nil {
+		return err
+	}
+	nonRetryCases := []struct {
+		model  string
+		status int
+	}{
+		{"fallback-429", http.StatusTooManyRequests},
+		{"fallback-401", http.StatusUnauthorized},
+		{"fallback-malformed", http.StatusBadGateway},
+		{"fallback-too-large", http.StatusBadGateway},
+	}
+	for _, tc := range nonRetryCases {
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"max_tokens":1}`, instance.ID+"/"+tc.model))
+		status, respBody, err = postJSON(base+"/v1/chat/completions", token, body)
+		if err != nil || status != tc.status || bytes.Contains(respBody, []byte("raw fallback")) {
+			return fmt.Errorf("%s status=%d err=%v body_len=%d", tc.model, status, err, len(respBody))
+		}
+		if fakeUpstream.sawAuth(tc.model, "sk-fallback-second") {
+			return fmt.Errorf("%s incorrectly attempted fallback credential", tc.model)
+		}
+	}
+	streamBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true}}`, instance.ID+"/stream-fallback-success"))
+	status, _, _, respBody, err = postStream(base+"/v1/chat/completions", token, streamBody)
+	if err != nil || status != http.StatusOK || !bytes.Contains(respBody, []byte("data: [DONE]")) || bytes.Contains(respBody, []byte("raw stream fallback 503 body")) {
+		return fmt.Errorf("stream pre-start fallback status=%d err=%v body_len=%d", status, err, len(respBody))
+	}
+	if !fakeUpstream.sawAuth("stream-fallback-success", "sk-fallback-second") {
+		return fmt.Errorf("stream pre-start fallback did not try second credential")
+	}
+	errorBeforeBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true}}`, instance.ID+"/stream-fallback-error-before"))
+	status, _, _, respBody, err = postStream(base+"/v1/chat/completions", token, errorBeforeBody)
+	if err != nil || status != http.StatusBadGateway || !hasStreamErrorEnvelope(respBody) || bytes.Contains(respBody, []byte("raw stream fallback secret")) {
+		return fmt.Errorf("stream pre-start SSE error status=%d err=%v body_len=%d", status, err, len(respBody))
+	}
+	if fakeUpstream.sawAuth("stream-fallback-error-before", "sk-fallback-second") {
+		return fmt.Errorf("stream fallback occurred for pre-start SSE error")
+	}
+	afterStartBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true}}`, instance.ID+"/stream-fallback-after-start"))
+	status, _, _, respBody, err = postStream(base+"/v1/chat/completions", token, afterStartBody)
+	if err != nil || status != http.StatusOK || !bytes.Contains(respBody, []byte("upstream_stream_error")) || bytes.Contains(respBody, []byte("[DONE]")) || bytes.Contains(respBody, []byte("raw stream fallback secret")) {
+		return fmt.Errorf("stream after-start fallback status=%d err=%v body_len=%d", status, err, len(respBody))
+	}
+	if fakeUpstream.sawAuth("stream-fallback-after-start", "sk-fallback-second") {
+		return fmt.Errorf("stream fallback occurred after local stream started")
+	}
+	if err := assertFallbackMetadataNoLeak(ctx, store); err != nil {
+		return err
+	}
+	return nil
+}
+
+func disableProviderCredentials(ctx context.Context, upstreams credentials.UpstreamCredentialManager, providerInstanceID string) error {
+	rows, err := upstreams.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if row.ProviderInstanceID == providerInstanceID && !row.Disabled {
+			if err := upstreams.Disable(ctx, row.ID); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func assertHomeCredentialCountsZero(ctx context.Context, store *sqlite.Store) error {
 	for _, table := range []string{"client_tokens", "provider_credentials", "credential_secrets"} {
 		var count int
@@ -912,6 +1111,122 @@ func assertRecordedCredentialID(ctx context.Context, store *sqlite.Store) error 
 	}
 	if count == 0 {
 		return fmt.Errorf("chat adapter metadata did not record credential and usage")
+	}
+	return nil
+}
+
+func fallbackEventCount(ctx context.Context, store *sqlite.Store, providerInstanceID, modelID string) (int, error) {
+	var count int
+	err := store.DB.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM fallback_events
+		WHERE provider_instance_id = ?
+			AND model_id = ?
+	`, providerInstanceID, modelID).Scan(&count)
+	return count, err
+}
+
+func assertRequestFallbackMetadata(ctx context.Context, store *sqlite.Store, providerInstanceID, modelID string) error {
+	var retryCount, fallbackCount int
+	err := store.DB.QueryRowContext(ctx, `
+		SELECT retry_count, fallback_count
+		FROM request_metadata
+		WHERE requested_provider_instance = ?
+			AND requested_model = ?
+			AND http_status = 200
+		ORDER BY id DESC
+		LIMIT 1
+	`, providerInstanceID, modelID).Scan(&retryCount, &fallbackCount)
+	if err != nil {
+		return err
+	}
+	if retryCount != 1 || fallbackCount != 1 {
+		return fmt.Errorf("fallback metadata retry=%d fallback=%d", retryCount, fallbackCount)
+	}
+	return nil
+}
+
+func assertFallbackEvent(ctx context.Context, store *sqlite.Store, providerInstanceID, modelID string, fromID, toID int64) error {
+	var count int
+	err := store.DB.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM fallback_events
+		WHERE request_metadata_id IS NOT NULL
+			AND provider_instance_id = ?
+			AND model_id = ?
+			AND from_credential_id = ?
+			AND to_credential_id = ?
+			AND reason = 'availability_retry'
+			AND allowed_by_policy = 1
+	`, providerInstanceID, modelID, fromID, toID).Scan(&count)
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return fmt.Errorf("fallback event was not recorded")
+	}
+	return nil
+}
+
+func assertHealthEvents(ctx context.Context, store *sqlite.Store, providerInstanceID, modelID string) error {
+	var failures, successes, invalid int
+	if err := store.DB.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM health_events
+		WHERE provider_instance_id = ?
+			AND model_id = ?
+			AND event_class = 'upstream_failure'
+	`, providerInstanceID, modelID).Scan(&failures); err != nil {
+		return err
+	}
+	if err := store.DB.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM health_events
+		WHERE provider_instance_id = ?
+			AND model_id = ?
+			AND event_class = 'upstream_success'
+	`, providerInstanceID, modelID).Scan(&successes); err != nil {
+		return err
+	}
+	if err := store.DB.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM health_events
+		WHERE event_class NOT IN ('upstream_success', 'upstream_failure')
+	`).Scan(&invalid); err != nil {
+		return err
+	}
+	if failures == 0 || successes == 0 || invalid != 0 {
+		return fmt.Errorf("health events failures=%d successes=%d invalid=%d", failures, successes, invalid)
+	}
+	return nil
+}
+
+func assertFallbackMetadataNoLeak(ctx context.Context, store *sqlite.Store) error {
+	queries := []string{
+		`SELECT COALESCE(group_concat(provider_instance_id || ' ' || model_id || ' ' || event_class || ' ' || normalized_error_class, ' '), '') FROM health_events`,
+		`SELECT COALESCE(group_concat(provider_instance_id || ' ' || model_id || ' ' || reason, ' '), '') FROM fallback_events`,
+		`SELECT COALESCE(group_concat(requested_provider_instance || ' ' || requested_model || ' ' || error_class, ' '), '') FROM request_metadata`,
+	}
+	for _, query := range queries {
+		var text string
+		if err := store.DB.QueryRowContext(ctx, query).Scan(&text); err != nil {
+			return err
+		}
+		for _, forbidden := range []string{
+			"sk-fallback",
+			"raw fallback",
+			"raw stream fallback",
+			"raw-provider-secret",
+			"raw-id",
+			"account",
+			"Bearer ",
+			"check",
+			"ok",
+		} {
+			if strings.Contains(text, forbidden) {
+				return fmt.Errorf("metadata leaked forbidden marker %q", forbidden)
+			}
+		}
 	}
 	return nil
 }

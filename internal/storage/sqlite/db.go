@@ -217,9 +217,9 @@ func (s *Store) InsertAPIKeyCredential(ctx context.Context, meta credentials.New
 	defer tx.Rollback()
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO provider_credentials(
-			provider_instance_id, kind, label, secret_prefix, secret_last4, created_at, updated_at
-		) VALUES(?, ?, ?, ?, ?, ?, ?)
-	`, meta.ProviderInstanceID, meta.Kind, meta.Label, meta.SecretPrefix, meta.SecretLast4,
+			provider_instance_id, kind, label, secret_prefix, secret_last4, fallback_group, created_at, updated_at
+		) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+	`, meta.ProviderInstanceID, meta.Kind, meta.Label, meta.SecretPrefix, meta.SecretLast4, meta.FallbackGroup,
 		meta.CreatedAt.UTC().Format(time.RFC3339Nano), meta.CreatedAt.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		if isUniqueConstraint(err) {
@@ -247,13 +247,14 @@ func (s *Store) InsertAPIKeyCredential(ctx context.Context, meta credentials.New
 		Label:              meta.Label,
 		SecretPrefix:       meta.SecretPrefix,
 		SecretLast4:        meta.SecretLast4,
+		FallbackGroup:      meta.FallbackGroup,
 		CreatedAt:          meta.CreatedAt.UTC(),
 	}, nil
 }
 
 func (s *Store) ListUpstreamCredentials(ctx context.Context) ([]credentials.UpstreamCredentialMetadata, error) {
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT id, provider_instance_id, kind, label, secret_prefix, secret_last4, created_at, disabled_at
+		SELECT id, provider_instance_id, kind, label, secret_prefix, secret_last4, fallback_group, created_at, disabled_at
 		FROM provider_credentials
 		ORDER BY id ASC
 	`)
@@ -293,7 +294,7 @@ func (s *Store) DisableUpstreamCredential(ctx context.Context, id int64, disable
 
 func (s *Store) ResolveAPIKeyCredential(ctx context.Context, providerInstanceID string) (credentials.ResolvedAPIKeyCredential, error) {
 	row := s.DB.QueryRowContext(ctx, `
-		SELECT pc.id, pc.provider_instance_id, pc.label, cs.secret_material
+		SELECT pc.id, pc.provider_instance_id, pc.label, pc.fallback_group, cs.secret_material
 		FROM provider_credentials pc
 		JOIN credential_secrets cs ON cs.credential_id = pc.id AND cs.secret_kind = 'api_key'
 		WHERE pc.provider_instance_id = ?
@@ -303,7 +304,7 @@ func (s *Store) ResolveAPIKeyCredential(ctx context.Context, providerInstanceID 
 		LIMIT 1
 	`, providerInstanceID)
 	var out credentials.ResolvedAPIKeyCredential
-	if err := row.Scan(&out.ID, &out.ProviderInstanceID, &out.Label, &out.APIKey); err != nil {
+	if err := row.Scan(&out.ID, &out.ProviderInstanceID, &out.Label, &out.FallbackGroup, &out.APIKey); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return credentials.ResolvedAPIKeyCredential{}, credentials.ErrNoEligibleCredential
 		}
@@ -312,11 +313,90 @@ func (s *Store) ResolveAPIKeyCredential(ctx context.Context, providerInstanceID 
 	return out, nil
 }
 
+func (s *Store) ResolveAPIKeyCredentials(ctx context.Context, providerInstanceID string) ([]credentials.ResolvedAPIKeyCredential, error) {
+	rows, err := s.DB.QueryContext(ctx, `
+		SELECT pc.id, pc.provider_instance_id, pc.label, pc.fallback_group, cs.secret_material
+		FROM provider_credentials pc
+		JOIN credential_secrets cs ON cs.credential_id = pc.id AND cs.secret_kind = 'api_key'
+		WHERE pc.provider_instance_id = ?
+			AND pc.kind = 'api_key'
+			AND pc.disabled_at IS NULL
+		ORDER BY pc.id ASC
+	`, providerInstanceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var all []credentials.ResolvedAPIKeyCredential
+	for rows.Next() {
+		var out credentials.ResolvedAPIKeyCredential
+		if err := rows.Scan(&out.ID, &out.ProviderInstanceID, &out.Label, &out.FallbackGroup, &out.APIKey); err != nil {
+			return nil, err
+		}
+		all = append(all, out)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(all) == 0 {
+		return nil, credentials.ErrNoEligibleCredential
+	}
+	group := all[0].FallbackGroup
+	enabled, err := s.fallbackGroupEnabled(ctx, providerInstanceID, group)
+	if err != nil {
+		return nil, err
+	}
+	if !enabled {
+		return all[:1], nil
+	}
+	out := all[:0]
+	for _, cred := range all {
+		if cred.FallbackGroup == group {
+			out = append(out, cred)
+		}
+	}
+	if len(out) == 0 {
+		return nil, credentials.ErrNoEligibleCredential
+	}
+	return out, nil
+}
+
+func (s *Store) SetFallbackGroupEnabled(ctx context.Context, providerInstanceID, groupLabel string, enabled bool, now time.Time) error {
+	enabledInt := 0
+	if enabled {
+		enabledInt = 1
+	}
+	ts := now.UTC().Format(time.RFC3339Nano)
+	_, err := s.DB.ExecContext(ctx, `
+		INSERT INTO credential_fallback_policies(provider_instance_id, group_label, enabled, created_at, updated_at)
+		VALUES(?, ?, ?, ?, ?)
+		ON CONFLICT(provider_instance_id, group_label)
+		DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at
+	`, providerInstanceID, groupLabel, enabledInt, ts, ts)
+	return err
+}
+
+func (s *Store) fallbackGroupEnabled(ctx context.Context, providerInstanceID, groupLabel string) (bool, error) {
+	var enabled int
+	err := s.DB.QueryRowContext(ctx, `
+		SELECT enabled
+		FROM credential_fallback_policies
+		WHERE provider_instance_id = ? AND group_label = ?
+	`, providerInstanceID, groupLabel).Scan(&enabled)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return enabled == 1, nil
+}
+
 func scanUpstreamCredentialMetadata(row localTokenScanner) (credentials.UpstreamCredentialMetadata, error) {
 	var meta credentials.UpstreamCredentialMetadata
 	var created string
 	var disabled sql.NullString
-	if err := row.Scan(&meta.ID, &meta.ProviderInstanceID, &meta.Kind, &meta.Label, &meta.SecretPrefix, &meta.SecretLast4, &created, &disabled); err != nil {
+	if err := row.Scan(&meta.ID, &meta.ProviderInstanceID, &meta.Kind, &meta.Label, &meta.SecretPrefix, &meta.SecretLast4, &meta.FallbackGroup, &created, &disabled); err != nil {
 		return credentials.UpstreamCredentialMetadata{}, err
 	}
 	createdAt, err := time.Parse(time.RFC3339Nano, created)
@@ -370,6 +450,33 @@ func (s *Store) RecordStreamMetrics(ctx context.Context, m metadata.Stream) erro
 			completion_status, chunk_count
 		) VALUES(?, ?, ?, ?, ?)
 	`, m.RequestMetadataID, m.TimeToFirstTokenMS, m.OutputTokensPerSecond, m.CompletionStatus, m.ChunkCount)
+	return err
+}
+
+func (s *Store) RecordHealthEvent(ctx context.Context, m metadata.HealthEvent) error {
+	_, err := s.DB.ExecContext(ctx, `
+		INSERT INTO health_events(
+			occurred_at, provider_instance_id, credential_id, model_id,
+			event_class, http_status, normalized_error_class
+		) VALUES(?, ?, ?, ?, ?, ?, ?)
+	`, m.OccurredAt.UTC().Format(time.RFC3339Nano), m.ProviderInstanceID,
+		nullableInt64(m.CredentialID), m.ModelID, m.EventClass, nullableInt(m.HTTPStatus), m.ErrorClass)
+	return err
+}
+
+func (s *Store) RecordFallbackEvent(ctx context.Context, m metadata.FallbackEvent) error {
+	allowed := 0
+	if m.AllowedByPolicy {
+		allowed = 1
+	}
+	_, err := s.DB.ExecContext(ctx, `
+		INSERT INTO fallback_events(
+			request_metadata_id, occurred_at, provider_instance_id, model_id,
+			from_credential_id, to_credential_id, reason, allowed_by_policy
+		) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+	`, m.RequestMetadataID, m.OccurredAt.UTC().Format(time.RFC3339Nano),
+		m.ProviderInstanceID, m.ModelID, nullableInt64(m.FromCredentialID),
+		nullableInt64(m.ToCredentialID), m.Reason, allowed)
 	return err
 }
 

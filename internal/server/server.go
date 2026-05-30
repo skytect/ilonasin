@@ -30,6 +30,8 @@ type Server struct {
 type MetadataRecorder interface {
 	RecordRequestMetadata(context.Context, metadata.Request) (int64, error)
 	RecordStreamMetrics(context.Context, metadata.Stream) error
+	RecordHealthEvent(context.Context, metadata.HealthEvent) error
+	RecordFallbackEvent(context.Context, metadata.FallbackEvent) error
 }
 
 type ProviderRegistry interface {
@@ -230,7 +232,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 		writeError(w, http.StatusNotImplemented, "provider adapter is not implemented", "invalid_request_error", "provider_unimplemented")
 		return
 	}
-	credential, err := s.upstreams.ResolveAPIKey(r.Context(), addr.ProviderInstanceID)
+	credentialsSet, err := s.upstreams.ResolveAPIKeys(r.Context(), addr.ProviderInstanceID)
 	if err != nil {
 		_ = s.record(r.Context(), metadata.Request{
 			StartedAt:                 start,
@@ -248,74 +250,255 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 	}
 	if req.Stream {
 		s.handleStreamingChat(w, r, streamContext{
-			start:      start,
-			token:      token,
-			address:    addr,
-			instance:   instance,
-			credential: credential,
-			adapter:    adapter,
-			request:    req,
+			start:       start,
+			token:       token,
+			address:     addr,
+			instance:    instance,
+			credentials: credentialsSet,
+			adapter:     adapter,
+			request:     req,
 		})
 		return
 	}
-	result, err := adapter.CompleteChat(r.Context(), provider.ChatRequest{
-		Instance:      instance,
-		UpstreamModel: addr.ProviderModelID,
-		Request:       req,
-		Credential: provider.APIKeyCredential{
-			ID:                 credential.ID,
-			ProviderInstanceID: credential.ProviderInstanceID,
-			Label:              credential.Label,
-			APIKey:             credential.APIKey,
-		},
+	s.handleNonStreamingChat(w, r, nonStreamContext{
+		start:       start,
+		token:       token,
+		address:     addr,
+		instance:    instance,
+		credentials: credentialsSet,
+		adapter:     adapter,
+		request:     req,
 	})
-	status := result.StatusCode
-	if status == 0 {
-		status = http.StatusBadGateway
+}
+
+type nonStreamContext struct {
+	start       time.Time
+	token       credentials.VerifiedLocalToken
+	address     routing.ModelAddress
+	instance    provider.Instance
+	credentials []credentials.ResolvedAPIKeyCredential
+	adapter     provider.ChatAdapter
+	request     openai.ChatCompletionRequest
+}
+
+type chatAttempt struct {
+	credential credentials.ResolvedAPIKeyCredential
+	result     provider.ChatResult
+	err        error
+}
+
+func (s *Server) handleNonStreamingChat(w http.ResponseWriter, r *http.Request, nc nonStreamContext) {
+	var final chatAttempt
+	var fallbackEvents []metadata.FallbackEvent
+	for i, credential := range nc.credentials {
+		result, err := nc.adapter.CompleteChat(r.Context(), provider.ChatRequest{
+			Instance:      nc.instance,
+			UpstreamModel: nc.address.ProviderModelID,
+			Request:       nc.request,
+			Credential:    providerAPIKey(credential),
+		})
+		final = chatAttempt{credential: credential, result: result, err: err}
+		if shouldRecordChatHealth(result) {
+			s.recordHealth(r.Context(), healthFromChatAttempt(nc.address, final))
+		}
+		if !retryableChatAttempt(result, err) || i == len(nc.credentials)-1 {
+			break
+		}
+		next := nc.credentials[i+1]
+		fallbackEvents = append(fallbackEvents, metadata.FallbackEvent{
+			OccurredAt:         time.Now(),
+			ProviderInstanceID: nc.address.ProviderInstanceID,
+			ModelID:            nc.address.ProviderModelID,
+			FromCredentialID:   credential.ID,
+			ToCredentialID:     next.ID,
+			Reason:             "availability_retry",
+			AllowedByPolicy:    true,
+		})
 	}
-	errorClass := result.ErrorClass
-	if errorClass == "" && status >= 400 {
-		errorClass = "upstream_http_error"
-	}
-	_ = s.record(r.Context(), metadata.Request{
-		StartedAt:                 start,
-		ClientTokenID:             token.ID,
-		CredentialID:              credential.ID,
-		RequestedProviderInstance: addr.ProviderInstanceID,
-		RequestedModel:            addr.ProviderModelID,
-		ResolvedProviderInstance:  addr.ProviderInstanceID,
-		ResolvedModel:             addr.ProviderModelID,
+	status := localChatStatus(final.result, final.err)
+	errorClass := localChatErrorClass(final.result, final.err, status)
+	requestID, _ := s.recordWithID(r.Context(), metadata.Request{
+		StartedAt:                 nc.start,
+		ClientTokenID:             nc.token.ID,
+		CredentialID:              final.credential.ID,
+		RequestedProviderInstance: nc.address.ProviderInstanceID,
+		RequestedModel:            nc.address.ProviderModelID,
+		ResolvedProviderInstance:  nc.address.ProviderInstanceID,
+		ResolvedModel:             nc.address.ProviderModelID,
 		HTTPStatus:                status,
 		ErrorClass:                errorClass,
-		PromptTokens:              result.Usage.PromptTokens,
-		CompletionTokens:          result.Usage.CompletionTokens,
-		TotalTokens:               result.Usage.TotalTokens,
-		ReasoningTokens:           result.Usage.ReasoningTokens,
-		TotalLatencyMS:            time.Since(start).Milliseconds(),
+		RetryCount:                len(fallbackEvents),
+		FallbackCount:             len(fallbackEvents),
+		PromptTokens:              final.result.Usage.PromptTokens,
+		CompletionTokens:          final.result.Usage.CompletionTokens,
+		TotalTokens:               final.result.Usage.TotalTokens,
+		ReasoningTokens:           final.result.Usage.ReasoningTokens,
+		TotalLatencyMS:            time.Since(nc.start).Milliseconds(),
 	})
-	if err != nil && result.InvalidBody {
+	s.recordFallbacks(r.Context(), requestID, fallbackEvents)
+	if final.err != nil && final.result.InvalidBody {
 		writeError(w, http.StatusBadGateway, "upstream returned an invalid chat completion response", "api_error", "upstream_invalid_response")
 		return
 	}
-	if err != nil && result.BodyTruncated {
+	if final.err != nil && final.result.BodyTruncated {
 		writeError(w, http.StatusBadGateway, "upstream response body exceeded the configured limit", "api_error", "upstream_body_too_large")
 		return
 	}
-	if err != nil && result.Body == nil {
+	if retryableChatAttempt(final.result, final.err) {
+		writeError(w, http.StatusBadGateway, "upstream request failed", "api_error", "upstream_unavailable")
+		return
+	}
+	if final.err != nil && final.result.Body == nil {
 		writeError(w, http.StatusBadGateway, "upstream request failed", "api_error", errorClass)
 		return
 	}
-	writeRaw(w, status, result.ContentType, result.Body)
+	if status < 200 || status >= 300 {
+		writeError(w, status, "upstream request failed", "api_error", errorClass)
+		return
+	}
+	writeRaw(w, status, final.result.ContentType, final.result.Body)
 }
 
 type streamContext struct {
-	start      time.Time
-	token      credentials.VerifiedLocalToken
-	address    routing.ModelAddress
-	instance   provider.Instance
+	start       time.Time
+	token       credentials.VerifiedLocalToken
+	address     routing.ModelAddress
+	instance    provider.Instance
+	credentials []credentials.ResolvedAPIKeyCredential
+	adapter     provider.ChatAdapter
+	request     openai.ChatCompletionRequest
+}
+
+type streamAttempt struct {
 	credential credentials.ResolvedAPIKeyCredential
-	adapter    provider.ChatAdapter
-	request    openai.ChatCompletionRequest
+	summary    provider.ChatStreamSummary
+	err        error
+}
+
+func providerAPIKey(credential credentials.ResolvedAPIKeyCredential) provider.APIKeyCredential {
+	return provider.APIKeyCredential{
+		ID:                 credential.ID,
+		ProviderInstanceID: credential.ProviderInstanceID,
+		Label:              credential.Label,
+		APIKey:             credential.APIKey,
+	}
+}
+
+func normalizedChatStatus(result provider.ChatResult) int {
+	if result.StatusCode != 0 {
+		return result.StatusCode
+	}
+	return http.StatusBadGateway
+}
+
+func localChatStatus(result provider.ChatResult, err error) int {
+	if retryableChatAttempt(result, err) {
+		return http.StatusBadGateway
+	}
+	return normalizedChatStatus(result)
+}
+
+func normalizedChatErrorClass(result provider.ChatResult, status int) string {
+	if result.ErrorClass != "" {
+		return result.ErrorClass
+	}
+	if status >= 400 {
+		return "upstream_http_error"
+	}
+	return ""
+}
+
+func localChatErrorClass(result provider.ChatResult, err error, status int) string {
+	if retryableChatAttempt(result, err) {
+		return "upstream_unavailable"
+	}
+	return normalizedChatErrorClass(result, status)
+}
+
+func retryableChatAttempt(result provider.ChatResult, err error) bool {
+	if result.InvalidBody || result.BodyTruncated {
+		return false
+	}
+	errorClass := normalizedChatErrorClass(result, normalizedChatStatus(result))
+	if errorClass == "upstream_network_error" || errorClass == "upstream_timeout" {
+		return true
+	}
+	return retryableHTTPStatus(result.StatusCode)
+}
+
+func shouldRecordChatHealth(result provider.ChatResult) bool {
+	return result.ErrorClass != "client_disconnected"
+}
+
+func retryableStreamAttempt(summary provider.ChatStreamSummary, err error, sinkStarted bool) bool {
+	if err == nil || sinkStarted || summary.Started {
+		return false
+	}
+	switch summary.ErrorClass {
+	case "upstream_network_error", "upstream_timeout":
+		return true
+	case "upstream_http_error":
+		return retryableHTTPStatus(summary.StatusCode)
+	default:
+		return false
+	}
+}
+
+func retryableHTTPStatus(status int) bool {
+	switch status {
+	case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+func healthFromChatAttempt(addr routing.ModelAddress, attempt chatAttempt) metadata.HealthEvent {
+	status := normalizedChatStatus(attempt.result)
+	errorClass := normalizedChatErrorClass(attempt.result, status)
+	eventClass := "upstream_failure"
+	if attempt.err == nil && status >= 200 && status < 300 {
+		eventClass = "upstream_success"
+		errorClass = ""
+	}
+	return metadata.HealthEvent{
+		OccurredAt:         time.Now(),
+		ProviderInstanceID: addr.ProviderInstanceID,
+		CredentialID:       attempt.credential.ID,
+		ModelID:            addr.ProviderModelID,
+		EventClass:         eventClass,
+		HTTPStatus:         status,
+		ErrorClass:         errorClass,
+	}
+}
+
+func healthFromStreamAttempt(addr routing.ModelAddress, attempt streamAttempt) metadata.HealthEvent {
+	status := attempt.summary.StatusCode
+	if status == 0 {
+		status = http.StatusBadGateway
+	}
+	errorClass := attempt.summary.ErrorClass
+	if errorClass == "" && status >= 400 {
+		errorClass = "upstream_http_error"
+	}
+	eventClass := "upstream_failure"
+	if attempt.err == nil && status >= 200 && status < 300 {
+		eventClass = "upstream_success"
+		errorClass = ""
+	}
+	return metadata.HealthEvent{
+		OccurredAt:         time.Now(),
+		ProviderInstanceID: addr.ProviderInstanceID,
+		CredentialID:       attempt.credential.ID,
+		ModelID:            addr.ProviderModelID,
+		EventClass:         eventClass,
+		HTTPStatus:         status,
+		ErrorClass:         errorClass,
+	}
+}
+
+func shouldRecordStreamHealth(summary provider.ChatStreamSummary) bool {
+	return summary.ErrorClass != "client_disconnected" && summary.CompletionStatus != "client_disconnected"
 }
 
 func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc streamContext) {
@@ -324,7 +507,6 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 		_ = s.record(r.Context(), metadata.Request{
 			StartedAt:                 sc.start,
 			ClientTokenID:             sc.token.ID,
-			CredentialID:              sc.credential.ID,
 			RequestedProviderInstance: sc.address.ProviderInstanceID,
 			RequestedModel:            sc.address.ProviderModelID,
 			ResolvedProviderInstance:  sc.address.ProviderInstanceID,
@@ -337,18 +519,35 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 		return
 	}
 	sink := &streamSink{w: w, flusher: flusher}
-	summary, err := sc.adapter.StreamChat(r.Context(), provider.ChatRequest{
-		Instance:      sc.instance,
-		UpstreamModel: sc.address.ProviderModelID,
-		Request:       sc.request,
-		Credential: provider.APIKeyCredential{
-			ID:                 sc.credential.ID,
-			ProviderInstanceID: sc.credential.ProviderInstanceID,
-			Label:              sc.credential.Label,
-			APIKey:             sc.credential.APIKey,
-		},
-	}, sink)
-	if err != nil && !sink.started {
+	var final streamAttempt
+	var fallbackEvents []metadata.FallbackEvent
+	for i, credential := range sc.credentials {
+		summary, err := sc.adapter.StreamChat(r.Context(), provider.ChatRequest{
+			Instance:      sc.instance,
+			UpstreamModel: sc.address.ProviderModelID,
+			Request:       sc.request,
+			Credential:    providerAPIKey(credential),
+		}, sink)
+		final = streamAttempt{credential: credential, summary: summary, err: err}
+		if shouldRecordStreamHealth(summary) {
+			s.recordHealth(r.Context(), healthFromStreamAttempt(sc.address, final))
+		}
+		if !retryableStreamAttempt(summary, err, sink.started) || i == len(sc.credentials)-1 {
+			break
+		}
+		next := sc.credentials[i+1]
+		fallbackEvents = append(fallbackEvents, metadata.FallbackEvent{
+			OccurredAt:         time.Now(),
+			ProviderInstanceID: sc.address.ProviderInstanceID,
+			ModelID:            sc.address.ProviderModelID,
+			FromCredentialID:   credential.ID,
+			ToCredentialID:     next.ID,
+			Reason:             "availability_retry",
+			AllowedByPolicy:    true,
+		})
+	}
+	summary := final.summary
+	if final.err != nil && !sink.started {
 		localStatus := summary.StatusCode
 		if localStatus < 400 || localStatus >= 500 {
 			localStatus = http.StatusBadGateway
@@ -373,13 +572,15 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 	requestID, _ := s.recordWithID(recordCtx, metadata.Request{
 		StartedAt:                 sc.start,
 		ClientTokenID:             sc.token.ID,
-		CredentialID:              sc.credential.ID,
+		CredentialID:              final.credential.ID,
 		RequestedProviderInstance: sc.address.ProviderInstanceID,
 		RequestedModel:            sc.address.ProviderModelID,
 		ResolvedProviderInstance:  sc.address.ProviderInstanceID,
 		ResolvedModel:             sc.address.ProviderModelID,
 		HTTPStatus:                status,
 		ErrorClass:                errorClass,
+		RetryCount:                len(fallbackEvents),
+		FallbackCount:             len(fallbackEvents),
 		PromptTokens:              summary.Usage.PromptTokens,
 		CompletionTokens:          summary.Usage.CompletionTokens,
 		TotalTokens:               summary.Usage.TotalTokens,
@@ -399,6 +600,7 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 		CompletionStatus:      completionStatus,
 		ChunkCount:            summary.ChunkCount,
 	})
+	s.recordFallbacks(recordCtx, requestID, fallbackEvents)
 }
 
 type streamSink struct {
@@ -463,6 +665,23 @@ func (s *Server) recordStream(ctx context.Context, m metadata.Stream) error {
 		return nil
 	}
 	return s.meta.RecordStreamMetrics(ctx, m)
+}
+
+func (s *Server) recordHealth(ctx context.Context, m metadata.HealthEvent) error {
+	if s.meta == nil {
+		return nil
+	}
+	return s.meta.RecordHealthEvent(ctx, m)
+}
+
+func (s *Server) recordFallbacks(ctx context.Context, requestID int64, events []metadata.FallbackEvent) {
+	if s.meta == nil || requestID == 0 {
+		return
+	}
+	for _, event := range events {
+		event.RequestMetadataID = requestID
+		_ = s.meta.RecordFallbackEvent(ctx, event)
+	}
 }
 
 func writeRaw(w http.ResponseWriter, status int, contentType string, body []byte) {

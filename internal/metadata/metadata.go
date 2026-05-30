@@ -30,3 +30,24 @@ type Stream struct {
 	CompletionStatus      string
 	ChunkCount            int
 }
+
+type HealthEvent struct {
+	OccurredAt         time.Time
+	ProviderInstanceID string
+	CredentialID       int64
+	ModelID            string
+	EventClass         string
+	HTTPStatus         int
+	ErrorClass         string
+}
+
+type FallbackEvent struct {
+	RequestMetadataID  int64
+	OccurredAt         time.Time
+	ProviderInstanceID string
+	ModelID            string
+	FromCredentialID   int64
+	ToCredentialID     int64
+	Reason             string
+	AllowedByPolicy    bool
+}

@@ -138,4 +138,16 @@ var migrations = []migration{
 		`ALTER TABLE provider_credentials ADD COLUMN secret_prefix TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE provider_credentials ADD COLUMN secret_last4 TEXT NOT NULL DEFAULT ''`,
 	}},
+	{version: 3, name: "credential_fallback_policy", stmts: []string{
+		`ALTER TABLE provider_credentials ADD COLUMN fallback_group TEXT NOT NULL DEFAULT 'default'`,
+		`CREATE TABLE IF NOT EXISTS credential_fallback_policies (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			provider_instance_id TEXT NOT NULL,
+			group_label TEXT NOT NULL,
+			enabled INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			UNIQUE(provider_instance_id, group_label)
+		)`,
+	}},
 }

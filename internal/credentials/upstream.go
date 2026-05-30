@@ -17,14 +17,19 @@ var (
 	ErrInvalidSecretDomain   = errors.New("invalid secret domain")
 )
 
+const DefaultFallbackGroup = "default"
+
 type UpstreamCredentialManager interface {
 	AddAPIKey(ctx context.Context, providerInstanceID, label, apiKey string) (UpstreamCredentialMetadata, error)
 	List(ctx context.Context) ([]UpstreamCredentialMetadata, error)
 	Disable(ctx context.Context, id int64) error
+	EnableFallbackGroup(ctx context.Context, providerInstanceID, groupLabel string) error
+	DisableFallbackGroup(ctx context.Context, providerInstanceID, groupLabel string) error
 }
 
 type UpstreamCredentialResolver interface {
 	ResolveAPIKey(ctx context.Context, providerInstanceID string) (ResolvedAPIKeyCredential, error)
+	ResolveAPIKeys(ctx context.Context, providerInstanceID string) ([]ResolvedAPIKeyCredential, error)
 }
 
 type UpstreamCredentialRepository interface {
@@ -32,6 +37,8 @@ type UpstreamCredentialRepository interface {
 	ListUpstreamCredentials(ctx context.Context) ([]UpstreamCredentialMetadata, error)
 	DisableUpstreamCredential(ctx context.Context, id int64, disabledAt time.Time) error
 	ResolveAPIKeyCredential(ctx context.Context, providerInstanceID string) (ResolvedAPIKeyCredential, error)
+	ResolveAPIKeyCredentials(ctx context.Context, providerInstanceID string) ([]ResolvedAPIKeyCredential, error)
+	SetFallbackGroupEnabled(ctx context.Context, providerInstanceID, groupLabel string, enabled bool, now time.Time) error
 }
 
 type UpstreamService struct {
@@ -46,6 +53,7 @@ type NewUpstreamCredential struct {
 	Label              string
 	SecretPrefix       string
 	SecretLast4        string
+	FallbackGroup      string
 	CreatedAt          time.Time
 }
 
@@ -56,6 +64,7 @@ type UpstreamCredentialMetadata struct {
 	Label              string
 	SecretPrefix       string
 	SecretLast4        string
+	FallbackGroup      string
 	CreatedAt          time.Time
 	DisabledAt         *time.Time
 	Disabled           bool
@@ -65,6 +74,7 @@ type ResolvedAPIKeyCredential struct {
 	ID                 int64
 	ProviderInstanceID string
 	Label              string
+	FallbackGroup      string
 	APIKey             string
 }
 
@@ -99,6 +109,7 @@ func (s UpstreamService) AddAPIKey(ctx context.Context, providerInstanceID, labe
 		Label:              label,
 		SecretPrefix:       Prefix(apiKey),
 		SecretLast4:        Last4(apiKey),
+		FallbackGroup:      DefaultFallbackGroup,
 		CreatedAt:          s.now(),
 	}, apiKey)
 }
@@ -109,6 +120,14 @@ func (s UpstreamService) List(ctx context.Context) ([]UpstreamCredentialMetadata
 
 func (s UpstreamService) Disable(ctx context.Context, id int64) error {
 	return s.Repo.DisableUpstreamCredential(ctx, id, s.now())
+}
+
+func (s UpstreamService) EnableFallbackGroup(ctx context.Context, providerInstanceID, groupLabel string) error {
+	return s.setFallbackGroup(ctx, providerInstanceID, groupLabel, true)
+}
+
+func (s UpstreamService) DisableFallbackGroup(ctx context.Context, providerInstanceID, groupLabel string) error {
+	return s.setFallbackGroup(ctx, providerInstanceID, groupLabel, false)
 }
 
 func (s UpstreamService) ResolveAPIKey(ctx context.Context, providerInstanceID string) (ResolvedAPIKeyCredential, error) {
@@ -122,8 +141,33 @@ func (s UpstreamService) ResolveAPIKey(ctx context.Context, providerInstanceID s
 	return s.Repo.ResolveAPIKeyCredential(ctx, providerInstanceID)
 }
 
+func (s UpstreamService) ResolveAPIKeys(ctx context.Context, providerInstanceID string) ([]ResolvedAPIKeyCredential, error) {
+	instance, ok := s.Registry.Get(providerInstanceID)
+	if !ok {
+		return nil, ErrCredentialNotFound
+	}
+	if !instance.APIKey || instance.Placeholder {
+		return nil, fmt.Errorf("%w: provider %q does not support api-key credentials", ErrUnsupportedCredential, providerInstanceID)
+	}
+	return s.Repo.ResolveAPIKeyCredentials(ctx, providerInstanceID)
+}
+
 func LooksLikeLocalToken(value string) bool {
 	return len(value) > 4 && value[:4] == "iln_"
+}
+
+func (s UpstreamService) setFallbackGroup(ctx context.Context, providerInstanceID, groupLabel string, enabled bool) error {
+	if groupLabel == "" {
+		groupLabel = DefaultFallbackGroup
+	}
+	instance, ok := s.Registry.Get(providerInstanceID)
+	if !ok {
+		return ErrCredentialNotFound
+	}
+	if !instance.APIKey || instance.Placeholder {
+		return fmt.Errorf("%w: provider %q does not support api-key credentials", ErrUnsupportedCredential, providerInstanceID)
+	}
+	return s.Repo.SetFallbackGroupEnabled(ctx, providerInstanceID, groupLabel, enabled, s.now())
 }
 
 func (s UpstreamService) now() time.Time {

@@ -11,33 +11,40 @@ import (
 )
 
 type Defaults struct {
-	Type        string
-	BaseURL     string
-	AuthStyle   string
-	Placeholder bool
-	APIKey      bool
-	OAuth       bool
+	Type           string
+	BaseURL        string
+	AuthStyle      string
+	Placeholder    bool
+	APIKey         bool
+	OAuth          bool
+	Chat           bool
+	ModelDiscovery bool
 }
 
 var builtIns = map[string]Defaults{
 	"deepseek": {
-		Type:      "deepseek",
-		BaseURL:   "https://api.deepseek.com",
-		AuthStyle: "bearer_api_key",
-		APIKey:    true,
+		Type:           "deepseek",
+		BaseURL:        "https://api.deepseek.com",
+		AuthStyle:      "bearer_api_key",
+		APIKey:         true,
+		Chat:           true,
+		ModelDiscovery: true,
 	},
 	"openrouter": {
-		Type:      "openrouter",
-		BaseURL:   "https://openrouter.ai/api/v1",
-		AuthStyle: "bearer_api_key",
-		APIKey:    true,
+		Type:           "openrouter",
+		BaseURL:        "https://openrouter.ai/api/v1",
+		AuthStyle:      "bearer_api_key",
+		APIKey:         true,
+		Chat:           true,
+		ModelDiscovery: true,
 	},
 	"codex": {
-		Type:        "codex",
-		BaseURL:     "https://chatgpt.com/backend-api/codex",
-		AuthStyle:   "deferred",
-		Placeholder: true,
-		OAuth:       true,
+		Type:           "codex",
+		BaseURL:        "https://chatgpt.com/backend-api/codex",
+		AuthStyle:      "deferred",
+		Placeholder:    true,
+		OAuth:          true,
+		ModelDiscovery: true,
 	},
 }
 
@@ -55,13 +62,15 @@ type Registry struct {
 }
 
 type Instance struct {
-	ID          string
-	Type        string
-	BaseURL     string
-	AuthStyle   string
-	Placeholder bool
-	APIKey      bool
-	OAuth       bool
+	ID             string
+	Type           string
+	BaseURL        string
+	AuthStyle      string
+	Placeholder    bool
+	APIKey         bool
+	OAuth          bool
+	Chat           bool
+	ModelDiscovery bool
 }
 
 func NewRegistry(cfg config.Config) (Registry, error) {
@@ -88,13 +97,15 @@ func NewRegistry(cfg config.Config) (Registry, error) {
 			}
 		}
 		instance := Instance{
-			ID:          id,
-			Type:        providerCfg.Type,
-			BaseURL:     baseURL,
-			AuthStyle:   def.AuthStyle,
-			Placeholder: def.Placeholder,
-			APIKey:      def.APIKey,
-			OAuth:       def.OAuth,
+			ID:             id,
+			Type:           providerCfg.Type,
+			BaseURL:        baseURL,
+			AuthStyle:      def.AuthStyle,
+			Placeholder:    def.Placeholder,
+			APIKey:         def.APIKey,
+			OAuth:          def.OAuth,
+			Chat:           def.Chat,
+			ModelDiscovery: def.ModelDiscovery,
 		}
 		reg.instances[id] = instance
 		reg.ordered = append(reg.ordered, instance)

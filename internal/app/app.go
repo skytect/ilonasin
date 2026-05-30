@@ -53,7 +53,7 @@ func Serve(opts Options) error {
 	upstreams := credentials.UpstreamService{Registry: rt.Registry, Repo: rt.Store}
 	srv := &http.Server{
 		Addr:              rt.Config.Server.Bind,
-		Handler:           server.New(rt.Registry, auth, upstreams, chatAdapters(nil), modelDiscoverers(nil), rt.Store, rt.Store).Handler(),
+		Handler:           server.New(rt.Registry, auth, upstreams, upstreams, chatAdapters(nil), modelDiscoverers(nil), rt.Store, rt.Store).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	fmt.Fprintf(opts.Stdout, "ilonasin serving on %s\n", rt.Config.Server.Bind)
@@ -67,6 +67,10 @@ func ServeCheck(opts Options) error {
 	}
 	defer rt.cleanup()
 	defer rt.Store.Close()
+	beforeSnapshot, err := selectedHomeSnapshot(context.Background(), rt.Store, rt.ConfigPath)
+	if err != nil {
+		return err
+	}
 
 	checkDBDir, err := os.MkdirTemp("", "ilonasin-serve-check-db-*")
 	if err != nil {
@@ -80,7 +84,8 @@ func ServeCheck(opts Options) error {
 	defer checkStore.Close()
 
 	tokenService := credentials.Service{Repo: checkStore}
-	upstreamService := credentials.UpstreamService{Registry: rt.Registry, Repo: checkStore}
+	checkNow := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
+	upstreamService := credentials.UpstreamService{Registry: rt.Registry, Repo: checkStore, Now: func() time.Time { return checkNow }}
 	created, err := tokenService.Create(context.Background(), "serve-check")
 	if err != nil {
 		return err
@@ -118,6 +123,54 @@ func ServeCheck(opts Options) error {
 	}); err != nil {
 		return err
 	}
+	disabledOAuth, err := upstreamService.AddOAuthCredential(context.Background(), credentials.NewOAuthCredentialInput{
+		ProviderInstanceID:  "codex",
+		Label:               "serve-check-oauth-disabled",
+		AccessToken:         "oauth-disabled-access-marker",
+		RefreshToken:        "oauth-disabled-refresh-marker",
+		AccountID:           "serve-check-disabled-account",
+		AccountDisplayLabel: "Disabled OAuth",
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := checkStore.DB.ExecContext(context.Background(), `
+		UPDATE provider_credentials
+		SET disabled_at = ?, updated_at = ?
+		WHERE id = ?
+	`, checkNow.Format(time.RFC3339Nano), checkNow.Format(time.RFC3339Nano), disabledOAuth.ID); err != nil {
+		return err
+	}
+	expiredAt := checkNow.Add(-time.Hour)
+	if _, err := upstreamService.AddOAuthCredential(context.Background(), credentials.NewOAuthCredentialInput{
+		ProviderInstanceID:  "codex",
+		Label:               "serve-check-oauth-expired",
+		AccessToken:         "oauth-expired-access-marker",
+		RefreshToken:        "oauth-expired-refresh-marker",
+		AccountID:           "serve-check-expired-account",
+		AccountDisplayLabel: "Expired OAuth",
+		ExpiresAt:           &expiredAt,
+	}); err != nil {
+		return err
+	}
+	missingAccess, err := upstreamService.AddOAuthCredential(context.Background(), credentials.NewOAuthCredentialInput{
+		ProviderInstanceID:  "codex",
+		Label:               "serve-check-oauth-no-access",
+		AccessToken:         "oauth-missing-access-marker",
+		RefreshToken:        "oauth-missing-refresh-marker",
+		AccountID:           "serve-check-missing-account",
+		AccountDisplayLabel: "Missing Access OAuth",
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := checkStore.DB.ExecContext(context.Background(), `
+		UPDATE oauth_tokens
+		SET access_token_secret_id = NULL
+		WHERE credential_id = ?
+	`, missingAccess.ID); err != nil {
+		return err
+	}
 	if _, err := upstreamService.ResolveAPIKey(context.Background(), "codex"); err == nil {
 		return fmt.Errorf("oauth credential resolved as api key")
 	}
@@ -128,7 +181,7 @@ func ServeCheck(opts Options) error {
 	fakeUpstream := newServeCheckUpstream()
 	defer fakeUpstream.server.Close()
 	checkRegistry := baseURLOverrideRegistry{Registry: rt.Registry, baseURL: fakeUpstream.server.URL}
-	handler := server.New(checkRegistry, tokenService, upstreamService, chatAdapters(fakeUpstream.server.Client()), modelDiscoverers(fakeUpstream.server.Client()), checkStore, checkStore).Handler()
+	handler := server.NewWithClock(checkRegistry, tokenService, upstreamService, upstreamService, chatAdapters(fakeUpstream.server.Client()), modelDiscoverers(fakeUpstream.server.Client()), checkStore, checkStore, func() time.Time { return checkNow }).Handler()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return err
@@ -164,6 +217,10 @@ func ServeCheck(opts Options) error {
 	if status, err := postStatus(base+"/v1/chat/completions", created2.Token, body); err != nil || status != http.StatusBadRequest {
 		return fmt.Errorf("unsupported chat status=%d err=%v", status, err)
 	}
+	codexBody := []byte(`{"model":"codex/gpt-5.5-codex","messages":[{"role":"user","content":"check"}]}`)
+	if status, err := postStatus(base+"/v1/chat/completions", created2.Token, codexBody); err != nil || status != http.StatusNotImplemented {
+		return fmt.Errorf("codex chat status=%d err=%v", status, err)
+	}
 	for _, instance := range instances {
 		if _, err := upstreamService.AddAPIKey(context.Background(), instance.ID, "serve-check-adapter", "sk-serve-check-adapter"); err != nil {
 			return err
@@ -186,6 +243,16 @@ func ServeCheck(opts Options) error {
 		if err := assertHomeCredentialCountsZero(context.Background(), rt.Store); err != nil {
 			return err
 		}
+	}
+	if err := exerciseCodexNoEligibleCacheCheck(context.Background(), rt.Registry); err != nil {
+		return err
+	}
+	afterSnapshot, err := selectedHomeSnapshot(context.Background(), rt.Store, rt.ConfigPath)
+	if err != nil {
+		return err
+	}
+	if afterSnapshot != beforeSnapshot {
+		return fmt.Errorf("serve check mutated selected home metadata")
 	}
 
 	_ = srv.Shutdown(context.Background())
@@ -1134,6 +1201,7 @@ func modelDiscoverers(client *http.Client) provider.StaticModelDiscoverers {
 	return provider.StaticModelDiscoverers{
 		"deepseek":   adapter,
 		"openrouter": adapter,
+		"codex":      adapter,
 	}
 }
 
@@ -1267,7 +1335,15 @@ func (u *serveCheckUpstream) handleServeCheckFallbackChat(w http.ResponseWriter,
 }
 
 func (u *serveCheckUpstream) handleServeCheckModels(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("Authorization") != "Bearer sk-serve-check-adapter" {
+	auth := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	codex := r.URL.Query().Get("client_version") == "ilonasin"
+	if codex {
+		u.recordObservedAuth("codex-models", auth)
+		if auth != "oauth-access-secret-marker" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+	} else if auth != "sk-serve-check-adapter" {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -1279,6 +1355,9 @@ func (u *serveCheckUpstream) handleServeCheckModels(w http.ResponseWriter, r *ht
 	duplicate := u.observed["models-duplicate"]
 	timeout := u.observed["models-timeout"]
 	u.observed[r.URL.Path+" models"] = true
+	if codex {
+		u.observed["codex models"] = true
+	}
 	u.mu.Unlock()
 	if timeout {
 		time.Sleep(200 * time.Millisecond)
@@ -1309,6 +1388,10 @@ func (u *serveCheckUpstream) handleServeCheckModels(w http.ResponseWriter, r *ht
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
+	if codex {
+		_, _ = w.Write([]byte(`{"data":[{"id":"gpt-5.5-codex","object":"model","owned_by":"codex","raw_provider_payload":"secret"}]}`))
+		return
+	}
 	if r.URL.Path == "/api/v1/models" {
 		_, _ = w.Write([]byte(`{"data":[{"id":"deepseek/deepseek-v4-pro","name":"DeepSeek V4 Pro","description":"raw description marker","pricing":{"prompt":"secret"},"context_length":1000000,"supported_parameters":["tools","response_format","reasoning","logprobs"]},{"id":"","name":"bad"}]}`))
 		return
@@ -1464,6 +1547,12 @@ func (u *serveCheckUpstream) sawExpectedModels(path string) bool {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	return u.observed[path+" models"]
+}
+
+func (u *serveCheckUpstream) sawCodexModels() bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.observed["codex models"]
 }
 
 func looksLikeChatCompletion(body []byte) bool {
@@ -1662,19 +1751,44 @@ func exerciseModelDiscoveryCheck(ctx context.Context, base, token string, instan
 	if !hasLocalModel(models, "openrouter/deepseek/deepseek-v4-pro", "openrouter") {
 		return fmt.Errorf("model discovery missing openrouter model")
 	}
+	if !hasLocalModel(models, "codex/gpt-5.5-codex", "codex") {
+		return fmt.Errorf("model discovery missing codex oauth model")
+	}
 	for _, row := range models {
 		if len(row) != 3 {
 			return fmt.Errorf("model response exposed non-OpenAI fields")
 		}
 	}
-	if fakeUpstream.sawExpectedModels("/models") == false || fakeUpstream.sawExpectedModels("/api/v1/models") == false {
+	if fakeUpstream.sawExpectedModels("/models") == false || fakeUpstream.sawExpectedModels("/api/v1/models") == false || fakeUpstream.sawCodexModels() == false {
 		return fmt.Errorf("model discovery did not call expected upstream model paths")
+	}
+	if !fakeUpstream.sawAuth("codex-models", "oauth-access-secret-marker") {
+		return fmt.Errorf("codex model discovery did not use oauth access token")
+	}
+	for _, marker := range []string{
+		"oauth-disabled-access-marker",
+		"oauth-expired-access-marker",
+		"oauth-missing-access-marker",
+		"oauth-refresh-secret-marker",
+		"oauth-disabled-refresh-marker",
+		"oauth-expired-refresh-marker",
+		"oauth-missing-refresh-marker",
+	} {
+		if fakeUpstream.sawAuth("codex-models", marker) {
+			return fmt.Errorf("codex model discovery used ineligible oauth marker")
+		}
 	}
 	if err := assertModelCacheRows(ctx, store); err != nil {
 		return err
 	}
-	if bytes.Contains(respBody, []byte("raw description marker")) || bytes.Contains(respBody, []byte("pricing")) {
+	if bytes.Contains(respBody, []byte("raw description marker")) || bytes.Contains(respBody, []byte("pricing")) || bytes.Contains(respBody, []byte("raw_provider_payload")) {
 		return fmt.Errorf("model discovery leaked raw provider metadata")
+	}
+	if err := assertServeCheckOAuthMarkerPlacement(ctx, store); err != nil {
+		return err
+	}
+	if err := assertCodexOAuthModelSafety(ctx, store); err != nil {
+		return err
 	}
 	fakeUpstream.setModelsMode("models-fail")
 	status, respBody, err = getJSON(base+"/v1/models", token)
@@ -1733,6 +1847,118 @@ func exerciseModelDiscoveryCheck(ctx context.Context, base, token string, instan
 		return fmt.Errorf("model all-fail status=%d err=%v body_len=%d", status, err, len(respBody))
 	}
 	fakeUpstream.setModelsMode("")
+	return nil
+}
+
+func exerciseCodexNoEligibleCacheCheck(ctx context.Context, registry provider.Registry) error {
+	checkDBDir, err := os.MkdirTemp("", "ilonasin-serve-check-codex-noeligible-db-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(checkDBDir)
+	store, err := sqlite.Open(ctx, filepath.Join(checkDBDir, "ilonasin.sqlite"))
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	checkNow := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
+	tokenService := credentials.Service{Repo: store}
+	upstreams := credentials.UpstreamService{Registry: registry, Repo: store, Now: func() time.Time { return checkNow }}
+	created, err := tokenService.Create(ctx, "codex-noeligible")
+	if err != nil {
+		return err
+	}
+	disabled, err := upstreams.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID:  "codex",
+		Label:               "noeligible disabled",
+		AccessToken:         "oauth-noeligible-disabled-access",
+		RefreshToken:        "oauth-noeligible-disabled-refresh",
+		AccountID:           "noeligible-disabled",
+		AccountDisplayLabel: "Disabled",
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := store.DB.ExecContext(ctx, `
+		UPDATE provider_credentials
+		SET disabled_at = ?, updated_at = ?
+		WHERE id = ?
+	`, checkNow.Format(time.RFC3339Nano), checkNow.Format(time.RFC3339Nano), disabled.ID); err != nil {
+		return err
+	}
+	var disabledAccessSecretID int64
+	if err := store.DB.QueryRowContext(ctx, `
+		SELECT access_token_secret_id
+		FROM oauth_tokens
+		WHERE credential_id = ?
+	`, disabled.ID).Scan(&disabledAccessSecretID); err != nil {
+		return err
+	}
+	crossLinked, err := upstreams.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID:  "codex",
+		Label:               "noeligible cross linked",
+		AccessToken:         "oauth-noeligible-cross-access",
+		RefreshToken:        "oauth-noeligible-cross-refresh",
+		AccountID:           "noeligible-cross",
+		AccountDisplayLabel: "Cross Linked",
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := store.DB.ExecContext(ctx, `
+		UPDATE oauth_tokens
+		SET access_token_secret_id = ?
+		WHERE credential_id = ?
+	`, disabledAccessSecretID, crossLinked.ID); err != nil {
+		return err
+	}
+	expiredAt := checkNow.Add(-time.Hour)
+	if _, err := upstreams.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID:  "codex",
+		Label:               "noeligible expired",
+		AccessToken:         "oauth-noeligible-expired-access",
+		RefreshToken:        "oauth-noeligible-expired-refresh",
+		AccountID:           "noeligible-expired",
+		AccountDisplayLabel: "Expired",
+		ExpiresAt:           &expiredAt,
+	}); err != nil {
+		return err
+	}
+	missingAccess, err := upstreams.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID:  "codex",
+		Label:               "noeligible missing access",
+		AccessToken:         "oauth-noeligible-missing-access",
+		RefreshToken:        "oauth-noeligible-missing-refresh",
+		AccountID:           "noeligible-missing",
+		AccountDisplayLabel: "Missing",
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := store.DB.ExecContext(ctx, `UPDATE oauth_tokens SET access_token_secret_id = NULL WHERE credential_id = ?`, missingAccess.ID); err != nil {
+		return err
+	}
+	if err := store.ReplaceModelCache(ctx, "codex", []provider.ModelMetadata{{
+		ProviderInstanceID: "codex",
+		ModelID:            "stale-codex-model",
+		CapabilityFlags:    "chat,reasoning,stream,tools",
+		UpdatedAt:          checkNow,
+	}}); err != nil {
+		return err
+	}
+	fakeUpstream := newServeCheckUpstream()
+	defer fakeUpstream.server.Close()
+	checkRegistry := baseURLOverrideRegistry{Registry: registry, baseURL: fakeUpstream.server.URL}
+	handler := server.NewWithClock(checkRegistry, tokenService, upstreams, upstreams, chatAdapters(fakeUpstream.server.Client()), modelDiscoverers(fakeUpstream.server.Client()), store, store, func() time.Time { return checkNow }).Handler()
+	testServer := httptest.NewServer(handler)
+	defer testServer.Close()
+	status, respBody, err := getJSON(testServer.URL+"/v1/models", created.Token)
+	if err != nil || status != http.StatusOK {
+		return fmt.Errorf("codex no-eligible cache status=%d err=%v", status, err)
+	}
+	if hasLocalModelFromBody(respBody, "codex/") || fakeUpstream.sawCodexModels() {
+		return fmt.Errorf("codex no-eligible exposed stale cache or called upstream")
+	}
 	return nil
 }
 
@@ -2009,6 +2235,7 @@ func assertModelCacheRows(ctx context.Context, store *sqlite.Store) error {
 	if len(rows) < 2 {
 		return fmt.Errorf("model cache stored %d rows", len(rows))
 	}
+	codexFound := false
 	for _, row := range rows {
 		if row.ModelID == "deepseek/deepseek-v4-pro" {
 			if row.DisplayName != "DeepSeek V4 Pro" || row.ContextLength != 1000000 || row.CapabilityFlags != "chat,json_object,logprobs,reasoning,tools" {
@@ -2016,6 +2243,107 @@ func assertModelCacheRows(ctx context.Context, store *sqlite.Store) error {
 			}
 			if strings.Contains(row.DisplayName, "raw description marker") || strings.Contains(row.CapabilityFlags, "pricing") {
 				return fmt.Errorf("model cache leaked raw provider metadata")
+			}
+		}
+		if row.ProviderInstanceID == "codex" && row.ModelID == "gpt-5.5-codex" {
+			codexFound = true
+			if row.CapabilityFlags != "chat,reasoning,stream,tools" || row.DisplayName != "" || row.ContextLength != 0 {
+				return fmt.Errorf("codex model cache metadata mismatch")
+			}
+		}
+	}
+	if !codexFound {
+		return fmt.Errorf("model cache missing codex oauth model")
+	}
+	return nil
+}
+
+func assertServeCheckOAuthMarkerPlacement(ctx context.Context, store *sqlite.Store) error {
+	for _, marker := range []string{
+		"oauth-access-secret-marker",
+		"oauth-refresh-secret-marker",
+		"oauth-disabled-access-marker",
+		"oauth-disabled-refresh-marker",
+		"oauth-expired-access-marker",
+		"oauth-expired-refresh-marker",
+		"oauth-missing-access-marker",
+		"oauth-missing-refresh-marker",
+	} {
+		var count int
+		if err := store.DB.QueryRowContext(ctx, `
+			SELECT COUNT(*)
+			FROM credential_secrets
+			WHERE secret_material = ?
+		`, marker).Scan(&count); err != nil {
+			return err
+		}
+		if count != 1 {
+			return fmt.Errorf("serve-check oauth marker credential secret count mismatch")
+		}
+		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
+			return err
+		}
+	}
+	for _, marker := range []string{
+		"serve-check-account",
+		"serve-check-disabled-account",
+		"serve-check-expired-account",
+		"serve-check-missing-account",
+	} {
+		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func assertServeCheckMarkerAbsentOutsideSecrets(ctx context.Context, store *sqlite.Store, marker string) error {
+	for _, query := range []string{
+		`SELECT COUNT(*) FROM provider_credentials WHERE provider_instance_id || kind || label || secret_prefix || secret_last4 || fallback_group LIKE ?`,
+		`SELECT COUNT(*) FROM oauth_tokens WHERE COALESCE(scopes, '') || COALESCE(expires_at, '') || COALESCE(last_refresh_at, '') || COALESCE(refresh_failure_class, '') LIKE ?`,
+		`SELECT COUNT(*) FROM provider_accounts WHERE provider_instance_id || account_hash || display_label || plan_label LIKE ?`,
+		`SELECT COUNT(*) FROM model_cache WHERE provider_instance_id || model_id || display_name || capability_flags LIKE ?`,
+		`SELECT COUNT(*) FROM request_metadata WHERE requested_provider_instance || requested_model || resolved_provider_instance || resolved_model || error_class LIKE ?`,
+		`SELECT COUNT(*) FROM health_events WHERE provider_instance_id || model_id || event_class || normalized_error_class LIKE ?`,
+		`SELECT COUNT(*) FROM fallback_events WHERE provider_instance_id || model_id || reason LIKE ?`,
+	} {
+		var count int
+		if err := store.DB.QueryRowContext(ctx, query, "%"+marker+"%").Scan(&count); err != nil {
+			return err
+		}
+		if count != 0 {
+			return fmt.Errorf("serve-check oauth marker leaked outside credential secrets")
+		}
+	}
+	return nil
+}
+
+func assertCodexOAuthModelSafety(ctx context.Context, store *sqlite.Store) error {
+	queries := []string{
+		`SELECT COALESCE(group_concat(provider_instance_id || ' ' || model_id || ' ' || display_name || ' ' || capability_flags, ' '), '') FROM model_cache`,
+		`SELECT COALESCE(group_concat(requested_provider_instance || ' ' || requested_model || ' ' || error_class, ' '), '') FROM request_metadata`,
+		`SELECT COALESCE(group_concat(provider_instance_id || ' ' || model_id || ' ' || event_class || ' ' || normalized_error_class, ' '), '') FROM health_events`,
+		`SELECT COALESCE(group_concat(provider_instance_id || ' ' || model_id || ' ' || reason, ' '), '') FROM fallback_events`,
+	}
+	for _, query := range queries {
+		var text string
+		if err := store.DB.QueryRowContext(ctx, query).Scan(&text); err != nil {
+			return err
+		}
+		for _, forbidden := range []string{
+			"oauth-access-secret-marker",
+			"oauth-refresh-secret-marker",
+			"oauth-disabled-access-marker",
+			"oauth-disabled-refresh-marker",
+			"oauth-expired-access-marker",
+			"oauth-expired-refresh-marker",
+			"oauth-missing-access-marker",
+			"oauth-missing-refresh-marker",
+			"serve-check-account",
+			"raw_provider_payload",
+		} {
+			if strings.Contains(text, forbidden) {
+				return fmt.Errorf("codex oauth model marker leaked")
 			}
 		}
 	}

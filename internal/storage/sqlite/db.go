@@ -537,6 +537,60 @@ func (s *Store) ResolveAPIKeyCredentials(ctx context.Context, providerInstanceID
 	return out, nil
 }
 
+func (s *Store) ResolveOAuthBearerCredential(ctx context.Context, providerInstanceID string, now time.Time) (credentials.ResolvedOAuthBearerCredential, error) {
+	rows, err := s.DB.QueryContext(ctx, `
+		SELECT pc.id, pc.provider_instance_id, ot.access_token_secret_id, ot.expires_at
+		FROM provider_credentials pc
+		JOIN oauth_tokens ot ON ot.credential_id = pc.id
+		WHERE pc.provider_instance_id = ?
+			AND pc.kind = 'oauth'
+			AND pc.disabled_at IS NULL
+			AND ot.access_token_secret_id IS NOT NULL
+		ORDER BY pc.id ASC
+	`, providerInstanceID)
+	if err != nil {
+		return credentials.ResolvedOAuthBearerCredential{}, err
+	}
+	defer rows.Close()
+	now = now.UTC()
+	for rows.Next() {
+		var out credentials.ResolvedOAuthBearerCredential
+		var accessSecretID int64
+		var expires sql.NullString
+		if err := rows.Scan(&out.ID, &out.ProviderInstanceID, &accessSecretID, &expires); err != nil {
+			return credentials.ResolvedOAuthBearerCredential{}, err
+		}
+		if expires.Valid {
+			expiresAt, err := time.Parse(time.RFC3339Nano, expires.String)
+			if err != nil {
+				return credentials.ResolvedOAuthBearerCredential{}, err
+			}
+			expiresAt = expiresAt.UTC()
+			if !expiresAt.After(now) {
+				continue
+			}
+			out.ExpiresAt = &expiresAt
+		}
+		if err := s.DB.QueryRowContext(ctx, `
+			SELECT secret_material
+			FROM credential_secrets
+			WHERE id = ?
+				AND credential_id = ?
+				AND secret_kind = 'oauth_access'
+		`, accessSecretID, out.ID).Scan(&out.BearerToken); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			return credentials.ResolvedOAuthBearerCredential{}, err
+		}
+		return out, nil
+	}
+	if err := rows.Err(); err != nil {
+		return credentials.ResolvedOAuthBearerCredential{}, err
+	}
+	return credentials.ResolvedOAuthBearerCredential{}, credentials.ErrNoEligibleCredential
+}
+
 func (s *Store) ListFallbackPolicies(ctx context.Context) ([]credentials.FallbackPolicyMetadata, error) {
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT groups.provider_instance_id, groups.group_label,

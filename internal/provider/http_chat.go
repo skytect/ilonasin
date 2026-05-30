@@ -39,7 +39,7 @@ type HTTPChatAdapter struct {
 func (a HTTPChatAdapter) ListModels(ctx context.Context, req ModelRequest) (ModelResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, a.modelTimeout())
 	defer cancel()
-	endpoint, err := modelsURL(req.Instance.BaseURL)
+	endpoint, err := modelsURL(req.Instance)
 	if err != nil {
 		return ModelResult{ErrorClass: "provider_config_error"}, err
 	}
@@ -47,7 +47,7 @@ func (a HTTPChatAdapter) ListModels(ctx context.Context, req ModelRequest) (Mode
 	if err != nil {
 		return ModelResult{ErrorClass: "upstream_request_error"}, err
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+req.Credential.APIKey)
+	httpReq.Header.Set("Authorization", "Bearer "+req.Credential.BearerToken)
 	httpReq.Header.Set("Accept", "application/json")
 	resp, err := a.Client.Do(httpReq)
 	if err != nil {
@@ -222,8 +222,22 @@ func chatCompletionsURL(base string) (string, error) {
 	return joinBasePath(base, "/chat/completions")
 }
 
-func modelsURL(base string) (string, error) {
-	return joinBasePath(base, "/models")
+func modelsURL(instance Instance) (string, error) {
+	endpoint, err := joinBasePath(instance.BaseURL, "/models")
+	if err != nil {
+		return "", err
+	}
+	if instance.Type != "codex" {
+		return endpoint, nil
+	}
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return "", err
+	}
+	q := u.Query()
+	q.Set("client_version", "ilonasin")
+	u.RawQuery = q.Encode()
+	return u.String(), nil
 }
 
 func joinBasePath(base, suffix string) (string, error) {
@@ -273,6 +287,8 @@ func normalizeModels(instance Instance, body []byte) ([]ModelMetadata, error) {
 			meta.CapabilityFlags = openRouterCapabilityFlags(item)
 		case "deepseek":
 			meta.CapabilityFlags = "chat,json_object,reasoning,stream,tools"
+		case "codex":
+			meta.CapabilityFlags = "chat,reasoning,stream,tools"
 		}
 		models = append(models, meta)
 	}

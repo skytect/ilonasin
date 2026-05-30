@@ -21,10 +21,12 @@ type Server struct {
 	registry  ProviderRegistry
 	auth      credentials.LocalTokenVerifier
 	upstreams credentials.UpstreamCredentialResolver
+	oauth     credentials.OAuthBearerResolver
 	adapters  provider.ChatAdapters
 	models    provider.ModelDiscoverers
 	cache     ModelCache
 	meta      MetadataRecorder
+	now       func() time.Time
 }
 
 type MetadataRecorder interface {
@@ -44,8 +46,15 @@ type ModelCache interface {
 	ListModelCache(context.Context) ([]provider.ModelMetadata, error)
 }
 
-func New(registry ProviderRegistry, auth credentials.LocalTokenVerifier, upstreams credentials.UpstreamCredentialResolver, adapters provider.ChatAdapters, models provider.ModelDiscoverers, cache ModelCache, meta MetadataRecorder) *Server {
-	return &Server{registry: registry, auth: auth, upstreams: upstreams, adapters: adapters, models: models, cache: cache, meta: meta}
+func New(registry ProviderRegistry, auth credentials.LocalTokenVerifier, upstreams credentials.UpstreamCredentialResolver, oauth credentials.OAuthBearerResolver, adapters provider.ChatAdapters, models provider.ModelDiscoverers, cache ModelCache, meta MetadataRecorder) *Server {
+	return NewWithClock(registry, auth, upstreams, oauth, adapters, models, cache, meta, time.Now)
+}
+
+func NewWithClock(registry ProviderRegistry, auth credentials.LocalTokenVerifier, upstreams credentials.UpstreamCredentialResolver, oauth credentials.OAuthBearerResolver, adapters provider.ChatAdapters, models provider.ModelDiscoverers, cache ModelCache, meta MetadataRecorder, now func() time.Time) *Server {
+	if now == nil {
+		now = time.Now
+	}
+	return &Server{registry: registry, auth: auth, upstreams: upstreams, oauth: oauth, adapters: adapters, models: models, cache: cache, meta: meta, now: now}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -87,10 +96,10 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request, _ credenti
 	attempted := 0
 	failedWithoutCache := 0
 	for _, instance := range s.registry.List() {
-		if !instance.APIKey || instance.Placeholder {
+		if !instance.ModelDiscovery {
 			continue
 		}
-		credential, err := s.upstreams.ResolveAPIKey(r.Context(), instance.ID)
+		credential, err := s.resolveModelCredential(r.Context(), instance)
 		if err != nil {
 			if errors.Is(err, credentials.ErrNoEligibleCredential) {
 				continue
@@ -114,13 +123,8 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request, _ credenti
 			continue
 		}
 		result, err := discoverer.ListModels(r.Context(), provider.ModelRequest{
-			Instance: instance,
-			Credential: provider.APIKeyCredential{
-				ID:                 credential.ID,
-				ProviderInstanceID: credential.ProviderInstanceID,
-				Label:              credential.Label,
-				APIKey:             credential.APIKey,
-			},
+			Instance:   instance,
+			Credential: credential,
 		})
 		if err == nil && len(result.Models) > 0 {
 			if s.cache != nil {
@@ -164,6 +168,37 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request, _ credenti
 	writeJSON(w, http.StatusOK, resp)
 }
 
+func (s *Server) resolveModelCredential(ctx context.Context, instance provider.Instance) (provider.BearerCredential, error) {
+	if instance.APIKey && !instance.Placeholder {
+		credential, err := s.upstreams.ResolveAPIKey(ctx, instance.ID)
+		if err != nil {
+			return provider.BearerCredential{}, err
+		}
+		return provider.BearerCredential{
+			ID:                 credential.ID,
+			ProviderInstanceID: credential.ProviderInstanceID,
+			Kind:               provider.CredentialKindAPIKey,
+			BearerToken:        credential.APIKey,
+		}, nil
+	}
+	if instance.OAuth {
+		if s.oauth == nil {
+			return provider.BearerCredential{}, credentials.ErrNoEligibleCredential
+		}
+		credential, err := s.oauth.ResolveOAuthBearer(ctx, instance.ID, s.now().UTC())
+		if err != nil {
+			return provider.BearerCredential{}, err
+		}
+		return provider.BearerCredential{
+			ID:                 credential.ID,
+			ProviderInstanceID: credential.ProviderInstanceID,
+			Kind:               provider.CredentialKindOAuthAccess,
+			BearerToken:        credential.BearerToken,
+		}, nil
+	}
+	return provider.BearerCredential{}, credentials.ErrNoEligibleCredential
+}
+
 func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, token credentials.VerifiedLocalToken) {
 	start := time.Now()
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
@@ -186,7 +221,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 		writeError(w, http.StatusNotFound, "provider instance is not configured", "invalid_request_error", "provider_not_configured")
 		return
 	}
-	if !instance.APIKey || instance.Placeholder {
+	if !instance.Chat || !instance.APIKey || instance.Placeholder {
 		_ = s.record(r.Context(), metadata.Request{
 			StartedAt:                 start,
 			ClientTokenID:             token.ID,

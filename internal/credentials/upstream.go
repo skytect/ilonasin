@@ -38,12 +38,17 @@ type UpstreamCredentialResolver interface {
 	ResolveAPIKeys(ctx context.Context, providerInstanceID string) ([]ResolvedAPIKeyCredential, error)
 }
 
+type OAuthBearerResolver interface {
+	ResolveOAuthBearer(ctx context.Context, providerInstanceID string, now time.Time) (ResolvedOAuthBearerCredential, error)
+}
+
 type UpstreamCredentialRepository interface {
 	InsertAPIKeyCredential(ctx context.Context, meta NewUpstreamCredential, apiKey string) (UpstreamCredentialMetadata, error)
 	ListUpstreamCredentials(ctx context.Context) ([]UpstreamCredentialMetadata, error)
 	DisableUpstreamCredential(ctx context.Context, id int64, disabledAt time.Time) error
 	ResolveAPIKeyCredential(ctx context.Context, providerInstanceID string) (ResolvedAPIKeyCredential, error)
 	ResolveAPIKeyCredentials(ctx context.Context, providerInstanceID string) ([]ResolvedAPIKeyCredential, error)
+	ResolveOAuthBearerCredential(ctx context.Context, providerInstanceID string, now time.Time) (ResolvedOAuthBearerCredential, error)
 	ListFallbackPolicies(ctx context.Context) ([]FallbackPolicyMetadata, error)
 	SetFallbackGroupEnabled(ctx context.Context, providerInstanceID, groupLabel string, enabled bool, now time.Time) error
 	InsertOAuthCredential(ctx context.Context, meta NewOAuthCredential, accessToken, refreshToken string) (OAuthCredentialMetadata, error)
@@ -152,6 +157,21 @@ type ResolvedAPIKeyCredential struct {
 	Label              string
 	FallbackGroup      string
 	APIKey             string
+}
+
+type ResolvedOAuthBearerCredential struct {
+	ID                 int64
+	ProviderInstanceID string
+	BearerToken        string
+	ExpiresAt          *time.Time
+}
+
+func (c ResolvedOAuthBearerCredential) String() string {
+	return fmt.Sprintf("ResolvedOAuthBearerCredential{ID:%d ProviderInstanceID:%q BearerToken:%q}", c.ID, c.ProviderInstanceID, RedactSecret(c.BearerToken))
+}
+
+func (c ResolvedOAuthBearerCredential) GoString() string {
+	return c.String()
 }
 
 func (c ResolvedAPIKeyCredential) String() string {
@@ -278,6 +298,20 @@ func (s UpstreamService) ResolveAPIKeys(ctx context.Context, providerInstanceID 
 		return nil, fmt.Errorf("%w: provider %q does not support api-key credentials", ErrUnsupportedCredential, providerInstanceID)
 	}
 	return s.Repo.ResolveAPIKeyCredentials(ctx, providerInstanceID)
+}
+
+func (s UpstreamService) ResolveOAuthBearer(ctx context.Context, providerInstanceID string, now time.Time) (ResolvedOAuthBearerCredential, error) {
+	instance, ok := s.Registry.Get(providerInstanceID)
+	if !ok {
+		return ResolvedOAuthBearerCredential{}, ErrCredentialNotFound
+	}
+	if !instance.OAuth {
+		return ResolvedOAuthBearerCredential{}, fmt.Errorf("%w: provider %q does not support oauth credentials", ErrUnsupportedCredential, providerInstanceID)
+	}
+	if now.IsZero() {
+		now = s.now()
+	}
+	return s.Repo.ResolveOAuthBearerCredential(ctx, providerInstanceID, now.UTC())
 }
 
 func LooksLikeLocalToken(value string) bool {

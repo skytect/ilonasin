@@ -33,7 +33,7 @@ type ChatRequest struct {
 
 type ModelRequest struct {
 	Instance   Instance
-	Credential APIKeyCredential
+	Credential BearerCredential
 }
 
 type ModelResult struct {
@@ -55,6 +55,20 @@ type APIKeyCredential struct {
 	ProviderInstanceID string
 	Label              string
 	APIKey             string
+}
+
+type CredentialKind string
+
+const (
+	CredentialKindAPIKey      CredentialKind = "api_key"
+	CredentialKindOAuthAccess CredentialKind = "oauth_access"
+)
+
+type BearerCredential struct {
+	ID                 int64
+	ProviderInstanceID string
+	Kind               CredentialKind
+	BearerToken        string
 }
 
 type ChatResult struct {

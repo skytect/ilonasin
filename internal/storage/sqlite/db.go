@@ -427,8 +427,8 @@ func (s *Store) RecordRequestMetadata(ctx context.Context, m metadata.Request) (
 			retry_count, fallback_count, prompt_tokens, completion_tokens,
 			total_tokens, reasoning_tokens, total_latency_ms, time_to_first_token_ms,
 			output_tokens_per_second
-		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, m.StartedAt.UTC().Format(time.RFC3339Nano), m.ClientTokenID, nullableInt64(m.CredentialID), m.RequestedProviderInstance,
+		) VALUES(?, NULLIF(?, 0), NULLIF(?, 0), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, m.StartedAt.UTC().Format(time.RFC3339Nano), m.ClientTokenID, m.CredentialID, m.RequestedProviderInstance,
 		m.RequestedModel, m.ResolvedProviderInstance, m.ResolvedModel, m.HTTPStatus,
 		m.ErrorClass, m.RetryCount, m.FallbackCount, m.PromptTokens, m.CompletionTokens,
 		m.TotalTokens, m.ReasoningTokens, m.TotalLatencyMS, m.TimeToFirstTokenMS,
@@ -478,6 +478,210 @@ func (s *Store) RecordFallbackEvent(ctx context.Context, m metadata.FallbackEven
 		m.ProviderInstanceID, m.ModelID, nullableInt64(m.FromCredentialID),
 		nullableInt64(m.ToCredentialID), m.Reason, allowed)
 	return err
+}
+
+func (s *Store) RecentRequests(ctx context.Context, limit int) ([]metadata.RequestSummary, error) {
+	if limit <= 0 || limit > 50 {
+		limit = 5
+	}
+	rows, err := s.DB.QueryContext(ctx, `
+		SELECT rm.id, rm.started_at, rm.requested_provider_instance, rm.requested_model,
+			COALESCE(rm.credential_id, 0), COALESCE(pc.label, ''),
+			rm.http_status, rm.error_class, rm.retry_count, rm.fallback_count,
+			rm.prompt_tokens, rm.completion_tokens, rm.total_tokens, rm.reasoning_tokens,
+			rm.total_latency_ms, rm.time_to_first_token_ms, rm.output_tokens_per_second,
+			COALESCE(sm.completion_status, ''), COALESCE(sm.chunk_count, 0)
+		FROM request_metadata rm
+		LEFT JOIN provider_credentials pc ON pc.id = rm.credential_id
+		LEFT JOIN (
+			SELECT sm1.request_metadata_id, sm1.completion_status, sm1.chunk_count
+			FROM stream_metrics sm1
+			INNER JOIN (
+				SELECT request_metadata_id, MAX(id) AS id
+				FROM stream_metrics
+				GROUP BY request_metadata_id
+			) latest ON latest.id = sm1.id
+		) sm ON sm.request_metadata_id = rm.id
+		ORDER BY rm.id DESC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []metadata.RequestSummary
+	for rows.Next() {
+		var row metadata.RequestSummary
+		var started string
+		if err := rows.Scan(&row.ID, &started, &row.ProviderInstanceID, &row.ModelID,
+			&row.CredentialID, &row.CredentialLabel, &row.HTTPStatus, &row.ErrorClass,
+			&row.RetryCount, &row.FallbackCount, &row.PromptTokens, &row.CompletionTokens,
+			&row.TotalTokens, &row.ReasoningTokens, &row.TotalLatencyMS,
+			&row.TimeToFirstTokenMS, &row.OutputTokensPerSecond,
+			&row.StreamCompletionStatus, &row.StreamChunkCount); err != nil {
+			return nil, err
+		}
+		startedAt, err := time.Parse(time.RFC3339Nano, started)
+		if err != nil {
+			return nil, err
+		}
+		row.StartedAt = startedAt
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) UsageByProvider(ctx context.Context) ([]metadata.UsageSummary, error) {
+	rows, err := s.DB.QueryContext(ctx, `
+		SELECT requested_provider_instance, COUNT(*), COALESCE(SUM(prompt_tokens), 0),
+			COALESCE(SUM(completion_tokens), 0), COALESCE(SUM(total_tokens), 0),
+			COALESCE(SUM(reasoning_tokens), 0)
+		FROM request_metadata
+		GROUP BY requested_provider_instance
+		ORDER BY requested_provider_instance ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []metadata.UsageSummary
+	for rows.Next() {
+		var row metadata.UsageSummary
+		if err := rows.Scan(&row.ProviderInstanceID, &row.RequestCount, &row.PromptTokens,
+			&row.CompletionTokens, &row.TotalTokens, &row.ReasoningTokens); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) LatencyByProvider(ctx context.Context) ([]metadata.LatencySummary, error) {
+	rows, err := s.DB.QueryContext(ctx, `
+		SELECT requested_provider_instance, COUNT(*),
+			COALESCE(AVG(total_latency_ms), 0),
+			COALESCE(AVG(NULLIF(time_to_first_token_ms, 0)), 0),
+			COALESCE(AVG(NULLIF(output_tokens_per_second, 0)), 0)
+		FROM request_metadata
+		GROUP BY requested_provider_instance
+		ORDER BY requested_provider_instance ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []metadata.LatencySummary
+	for rows.Next() {
+		var row metadata.LatencySummary
+		var latency, ttft, tps float64
+		if err := rows.Scan(&row.ProviderInstanceID, &row.RequestCount, &latency, &ttft, &tps); err != nil {
+			return nil, err
+		}
+		row.AverageLatencyMS = int64(latency + 0.5)
+		row.AverageTimeToFirstTokenMS = int64(ttft + 0.5)
+		row.AverageOutputTPS = tps
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) StreamSummary(ctx context.Context) ([]metadata.StreamSummary, error) {
+	rows, err := s.DB.QueryContext(ctx, `
+		SELECT completion_status, COUNT(*), COALESCE(SUM(chunk_count), 0)
+		FROM stream_metrics
+		GROUP BY completion_status
+		ORDER BY completion_status ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []metadata.StreamSummary
+	for rows.Next() {
+		var row metadata.StreamSummary
+		if err := rows.Scan(&row.CompletionStatus, &row.StreamCount, &row.ChunkCount); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) LatestHealth(ctx context.Context) ([]metadata.HealthSummary, error) {
+	rows, err := s.DB.QueryContext(ctx, `
+		SELECT he.provider_instance_id, he.model_id, COALESCE(he.credential_id, 0),
+			COALESCE(pc.label, ''), he.event_class, COALESCE(he.http_status, 0),
+			he.normalized_error_class, he.occurred_at
+		FROM health_events he
+		LEFT JOIN provider_credentials pc ON pc.id = he.credential_id
+		WHERE he.id IN (
+			SELECT MAX(id)
+			FROM health_events
+			GROUP BY provider_instance_id, COALESCE(credential_id, 0), model_id
+		)
+		ORDER BY he.provider_instance_id ASC, COALESCE(he.credential_id, 0) ASC, he.model_id ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []metadata.HealthSummary
+	for rows.Next() {
+		var row metadata.HealthSummary
+		var occurred string
+		if err := rows.Scan(&row.ProviderInstanceID, &row.ModelID, &row.CredentialID,
+			&row.CredentialLabel, &row.EventClass, &row.HTTPStatus, &row.ErrorClass,
+			&occurred); err != nil {
+			return nil, err
+		}
+		occurredAt, err := time.Parse(time.RFC3339Nano, occurred)
+		if err != nil {
+			return nil, err
+		}
+		row.OccurredAt = occurredAt
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) RecentFallbacks(ctx context.Context, limit int) ([]metadata.FallbackSummary, error) {
+	if limit <= 0 || limit > 50 {
+		limit = 5
+	}
+	rows, err := s.DB.QueryContext(ctx, `
+		SELECT fe.id, COALESCE(fe.request_metadata_id, 0), fe.occurred_at,
+			fe.provider_instance_id, fe.model_id,
+			COALESCE(fe.from_credential_id, 0), COALESCE(from_pc.label, ''),
+			COALESCE(fe.to_credential_id, 0), COALESCE(to_pc.label, ''),
+			fe.reason
+		FROM fallback_events fe
+		LEFT JOIN provider_credentials from_pc ON from_pc.id = fe.from_credential_id
+		LEFT JOIN provider_credentials to_pc ON to_pc.id = fe.to_credential_id
+		ORDER BY fe.id DESC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []metadata.FallbackSummary
+	for rows.Next() {
+		var row metadata.FallbackSummary
+		var occurred string
+		if err := rows.Scan(&row.ID, &row.RequestMetadataID, &occurred,
+			&row.ProviderInstanceID, &row.ModelID, &row.FromCredentialID,
+			&row.FromCredentialLabel, &row.ToCredentialID, &row.ToCredentialLabel,
+			&row.Reason); err != nil {
+			return nil, err
+		}
+		occurredAt, err := time.Parse(time.RFC3339Nano, occurred)
+		if err != nil {
+			return nil, err
+		}
+		row.OccurredAt = occurredAt
+		out = append(out, row)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) ReplaceModelCache(ctx context.Context, providerInstanceID string, models []provider.ModelMetadata) error {

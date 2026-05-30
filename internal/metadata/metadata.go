@@ -51,3 +51,72 @@ type FallbackEvent struct {
 	Reason             string
 	AllowedByPolicy    bool
 }
+
+type RequestSummary struct {
+	ID                     int64
+	StartedAt              time.Time
+	ProviderInstanceID     string
+	ModelID                string
+	CredentialID           int64
+	CredentialLabel        string
+	HTTPStatus             int
+	ErrorClass             string
+	RetryCount             int
+	FallbackCount          int
+	PromptTokens           int
+	CompletionTokens       int
+	TotalTokens            int
+	ReasoningTokens        int
+	TotalLatencyMS         int64
+	TimeToFirstTokenMS     int64
+	OutputTokensPerSecond  float64
+	StreamCompletionStatus string
+	StreamChunkCount       int
+}
+
+type UsageSummary struct {
+	ProviderInstanceID string
+	RequestCount       int
+	PromptTokens       int
+	CompletionTokens   int
+	TotalTokens        int
+	ReasoningTokens    int
+}
+
+type LatencySummary struct {
+	ProviderInstanceID        string
+	RequestCount              int
+	AverageLatencyMS          int64
+	AverageTimeToFirstTokenMS int64
+	AverageOutputTPS          float64
+}
+
+type StreamSummary struct {
+	CompletionStatus string
+	StreamCount      int
+	ChunkCount       int
+}
+
+type HealthSummary struct {
+	ProviderInstanceID string
+	ModelID            string
+	CredentialID       int64
+	CredentialLabel    string
+	EventClass         string
+	HTTPStatus         int
+	ErrorClass         string
+	OccurredAt         time.Time
+}
+
+type FallbackSummary struct {
+	ID                  int64
+	RequestMetadataID   int64
+	OccurredAt          time.Time
+	ProviderInstanceID  string
+	ModelID             string
+	FromCredentialID    int64
+	FromCredentialLabel string
+	ToCredentialID      int64
+	ToCredentialLabel   string
+	Reason              string
+}

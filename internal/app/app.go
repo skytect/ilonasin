@@ -19,6 +19,7 @@ import (
 	"ilonasin/internal/config"
 	"ilonasin/internal/credentials"
 	"ilonasin/internal/home"
+	"ilonasin/internal/metadata"
 	"ilonasin/internal/provider"
 	"ilonasin/internal/server"
 	"ilonasin/internal/storage/sqlite"
@@ -183,7 +184,7 @@ func Manage(opts Options) error {
 		return err
 	}
 	defer rt.Store.Close()
-	return tui.Run(rt.Config, rt.Registry, credentials.Service{Repo: rt.Store}, credentials.UpstreamService{Registry: rt.Registry, Repo: rt.Store}, rt.Store)
+	return tui.Run(rt.Config, rt.Registry, credentials.Service{Repo: rt.Store}, credentials.UpstreamService{Registry: rt.Registry, Repo: rt.Store}, rt.Store, rt.Store)
 }
 
 func ManageCheck(opts Options) error {
@@ -193,6 +194,10 @@ func ManageCheck(opts Options) error {
 	}
 	defer rt.cleanup()
 	defer rt.Store.Close()
+	beforeSnapshot, err := selectedHomeSnapshot(context.Background(), rt.Store)
+	if err != nil {
+		return err
+	}
 	if err := exerciseLocalTokenCheck(context.Background()); err != nil {
 		return err
 	}
@@ -202,10 +207,20 @@ func ManageCheck(opts Options) error {
 	if err := exerciseModelCacheCheck(context.Background(), rt.Registry, rt.Config); err != nil {
 		return err
 	}
+	if err := exerciseObservabilityCheck(context.Background(), rt.Registry, rt.Config); err != nil {
+		return err
+	}
 	var buf bytes.Buffer
 	tokenService := credentials.Service{Repo: rt.Store}
-	if err := tui.Check(rt.Config, rt.Registry, tokenService, credentials.UpstreamService{Registry: rt.Registry, Repo: rt.Store}, rt.Store, &buf); err != nil {
+	if err := tui.Check(rt.Config, rt.Registry, tokenService, credentials.UpstreamService{Registry: rt.Registry, Repo: rt.Store}, rt.Store, rt.Store, &buf); err != nil {
 		return err
+	}
+	afterSnapshot, err := selectedHomeSnapshot(context.Background(), rt.Store)
+	if err != nil {
+		return err
+	}
+	if afterSnapshot != beforeSnapshot {
+		return fmt.Errorf("manage check mutated selected home metadata")
 	}
 	if opts.Stdout != nil {
 		_, _ = opts.Stdout.Write(buf.Bytes())
@@ -321,6 +336,143 @@ func exerciseModelCacheCheck(ctx context.Context, registry provider.Registry, cf
 		return err
 	}
 	return tui.ExerciseModelCacheSummary(ctx, cfg, registry, store)
+}
+
+func exerciseObservabilityCheck(ctx context.Context, registry provider.Registry, cfg config.Config) error {
+	checkDBDir, err := os.MkdirTemp("", "ilonasin-manage-check-observe-db-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(checkDBDir)
+	store, err := sqlite.Open(ctx, filepath.Join(checkDBDir, "ilonasin.sqlite"))
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	upstreams := credentials.UpstreamService{Registry: registry, Repo: store}
+	first, err := upstreams.AddAPIKey(ctx, "deepseek", "Bearer sk-observe-secret prompt marker", "sk-observe-secret-value-1")
+	if err != nil {
+		return fmt.Errorf("seed observability first credential: %w", err)
+	}
+	second, err := upstreams.AddAPIKey(ctx, "deepseek", "acct_123 raw-provider-payload", "sk-observe-secret-value-2")
+	if err != nil {
+		return fmt.Errorf("seed observability second credential: %w", err)
+	}
+	var credentialCount int
+	if err := store.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM provider_credentials WHERE id IN (?, ?)`, first.ID, second.ID).Scan(&credentialCount); err != nil {
+		return fmt.Errorf("seed observability credential count: %w", err)
+	}
+	if credentialCount != 2 {
+		return fmt.Errorf("seed observability credentials missing first=%d second=%d count=%d", first.ID, second.ID, credentialCount)
+	}
+	started := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
+	requestID, err := store.RecordRequestMetadata(ctx, metadata.Request{
+		StartedAt:                 started,
+		RequestedProviderInstance: "deepseek",
+		RequestedModel:            "deepseek-v4-pro",
+		ResolvedProviderInstance:  "deepseek",
+		ResolvedModel:             "deepseek-v4-pro",
+		HTTPStatus:                http.StatusOK,
+		PromptTokens:              5,
+		CompletionTokens:          3,
+		TotalTokens:               8,
+		ReasoningTokens:           1,
+		TotalLatencyMS:            100,
+	})
+	if err != nil {
+		return fmt.Errorf("seed observability request: %w", err)
+	}
+	streamRequestID, err := store.RecordRequestMetadata(ctx, metadata.Request{
+		StartedAt:                 started.Add(time.Minute),
+		RequestedProviderInstance: "deepseek",
+		RequestedModel:            "deepseek-v4-pro sk-observe-secret completion marker",
+		ResolvedProviderInstance:  "deepseek",
+		ResolvedModel:             "deepseek-v4-pro",
+		HTTPStatus:                http.StatusOK,
+		ErrorClass:                "raw-provider-payload",
+		RetryCount:                1,
+		FallbackCount:             1,
+		PromptTokens:              6,
+		CompletionTokens:          4,
+		TotalTokens:               10,
+		ReasoningTokens:           2,
+		TotalLatencyMS:            150,
+		TimeToFirstTokenMS:        50,
+		OutputTokensPerSecond:     9,
+	})
+	if err != nil {
+		return fmt.Errorf("seed observability stream request: %w", err)
+	}
+	if requestID == 0 || streamRequestID == 0 {
+		return fmt.Errorf("observability request metadata missing IDs")
+	}
+	if err := store.RecordStreamMetrics(ctx, metadata.Stream{
+		RequestMetadataID:     streamRequestID,
+		TimeToFirstTokenMS:    50,
+		OutputTokensPerSecond: 9,
+		CompletionStatus:      "completed",
+		ChunkCount:            3,
+	}); err != nil {
+		return fmt.Errorf("seed observability stream metrics: %w", err)
+	}
+	if err := store.RecordHealthEvent(ctx, metadata.HealthEvent{
+		OccurredAt:         started.Add(2 * time.Minute),
+		ProviderInstanceID: "deepseek",
+		CredentialID:       second.ID,
+		ModelID:            "deepseek-v4-pro req_unsafe raw-provider-payload",
+		EventClass:         "upstream_success",
+		HTTPStatus:         http.StatusOK,
+		ErrorClass:         "Bearer sk-observe-secret",
+	}); err != nil {
+		return fmt.Errorf("seed observability health: %w", err)
+	}
+	if err := store.RecordFallbackEvent(ctx, metadata.FallbackEvent{
+		RequestMetadataID:  streamRequestID,
+		OccurredAt:         started.Add(3 * time.Minute),
+		ProviderInstanceID: "deepseek",
+		ModelID:            "deepseek-v4-pro",
+		FromCredentialID:   first.ID,
+		ToCredentialID:     second.ID,
+		Reason:             "availability_retry",
+		AllowedByPolicy:    true,
+	}); err != nil {
+		return fmt.Errorf("seed observability fallback: %w", err)
+	}
+	if err := store.RecordFallbackEvent(ctx, metadata.FallbackEvent{
+		RequestMetadataID:  streamRequestID,
+		OccurredAt:         started.Add(4 * time.Minute),
+		ProviderInstanceID: "deepseek",
+		ModelID:            "raw-provider-payload body marker",
+		FromCredentialID:   first.ID,
+		ToCredentialID:     second.ID,
+		Reason:             "Bearer sk-observe-secret",
+		AllowedByPolicy:    true,
+	}); err != nil {
+		return fmt.Errorf("seed observability unsafe fallback: %w", err)
+	}
+	return tui.ExerciseObservabilitySummary(ctx, cfg, registry, store)
+}
+
+func selectedHomeSnapshot(ctx context.Context, store *sqlite.Store) (string, error) {
+	queries := []string{
+		`SELECT 'client_tokens:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || label || ':' || token_prefix || ':' || token_last4 || ':' || COALESCE(disabled_at, '') AS part FROM client_tokens ORDER BY id)), '')`,
+		`SELECT 'provider_credentials:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || provider_instance_id || ':' || kind || ':' || label || ':' || fallback_group || ':' || COALESCE(disabled_at, '') AS part FROM provider_credentials ORDER BY id)), '')`,
+		`SELECT 'request_metadata:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || requested_provider_instance || ':' || requested_model || ':' || http_status || ':' || error_class || ':' || retry_count || ':' || fallback_count AS part FROM request_metadata ORDER BY id)), '')`,
+		`SELECT 'stream_metrics:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || request_metadata_id || ':' || completion_status || ':' || chunk_count AS part FROM stream_metrics ORDER BY id)), '')`,
+		`SELECT 'health_events:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || provider_instance_id || ':' || COALESCE(credential_id, 0) || ':' || model_id || ':' || event_class || ':' || COALESCE(http_status, 0) || ':' || normalized_error_class AS part FROM health_events ORDER BY id)), '')`,
+		`SELECT 'fallback_events:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || COALESCE(request_metadata_id, 0) || ':' || provider_instance_id || ':' || model_id || ':' || COALESCE(from_credential_id, 0) || ':' || COALESCE(to_credential_id, 0) || ':' || reason || ':' || allowed_by_policy AS part FROM fallback_events ORDER BY id)), '')`,
+		`SELECT 'model_cache:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || provider_instance_id || ':' || model_id || ':' || display_name || ':' || capability_flags || ':' || COALESCE(context_length, 0) AS part FROM model_cache ORDER BY id)), '')`,
+	}
+	var b strings.Builder
+	for _, query := range queries {
+		var part string
+		if err := store.DB.QueryRowContext(ctx, query).Scan(&part); err != nil {
+			return "", err
+		}
+		b.WriteString(part)
+		b.WriteByte('\n')
+	}
+	return b.String(), nil
 }
 
 func firstAPIKeyProvider(registry provider.Registry) (provider.Instance, bool) {

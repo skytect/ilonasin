@@ -510,6 +510,8 @@ func (s *Server) handleSingleCredentialChat(w http.ResponseWriter, r *http.Reque
 		TotalTokens:               result.Usage.TotalTokens,
 		ReasoningTokens:           result.Usage.ReasoningTokens,
 		CacheHitTokens:            result.Usage.CachedTokens,
+		CacheWriteTokens:          result.Usage.CacheWriteTokens,
+		CostMicrounits:            result.Usage.CostMicrounits,
 		TotalLatencyMS:            time.Since(sc.start).Milliseconds(),
 	})
 	if errorClass == "client_disconnected" {
@@ -568,11 +570,14 @@ func (s *Server) handleNonStreamingChat(w http.ResponseWriter, r *http.Request, 
 		ErrorClass:                errorClass,
 		RetryCount:                len(fallbackEvents),
 		FallbackCount:             len(fallbackEvents),
+		FallbackReason:            fallbackReason(fallbackEvents),
 		PromptTokens:              final.result.Usage.PromptTokens,
 		CompletionTokens:          final.result.Usage.CompletionTokens,
 		TotalTokens:               final.result.Usage.TotalTokens,
 		ReasoningTokens:           final.result.Usage.ReasoningTokens,
 		CacheHitTokens:            final.result.Usage.CachedTokens,
+		CacheWriteTokens:          final.result.Usage.CacheWriteTokens,
+		CostMicrounits:            final.result.Usage.CostMicrounits,
 		TotalLatencyMS:            time.Since(nc.start).Milliseconds(),
 	})
 	s.recordFallbacks(r.Context(), requestID, fallbackEvents)
@@ -782,6 +787,13 @@ func shouldRecordStreamHealth(summary provider.ChatStreamSummary) bool {
 	return summary.ErrorClass != "client_disconnected" && summary.CompletionStatus != "client_disconnected"
 }
 
+func fallbackReason(events []metadata.FallbackEvent) string {
+	if len(events) == 0 {
+		return ""
+	}
+	return events[0].Reason
+}
+
 func (s *Server) handleSingleCredentialStreamingChat(w http.ResponseWriter, r *http.Request, sc singleStreamContext) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -883,6 +895,8 @@ func (s *Server) handleSingleCredentialStreamingChat(w http.ResponseWriter, r *h
 		TotalTokens:               summary.Usage.TotalTokens,
 		ReasoningTokens:           summary.Usage.ReasoningTokens,
 		CacheHitTokens:            summary.Usage.CachedTokens,
+		CacheWriteTokens:          summary.Usage.CacheWriteTokens,
+		CostMicrounits:            summary.Usage.CostMicrounits,
 		TotalLatencyMS:            time.Since(sc.start).Milliseconds(),
 		TimeToFirstTokenMS:        summary.TimeToFirstTokenMS,
 		OutputTokensPerSecond:     summary.OutputTokensPerSecond,
@@ -980,11 +994,14 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 		ErrorClass:                errorClass,
 		RetryCount:                len(fallbackEvents),
 		FallbackCount:             len(fallbackEvents),
+		FallbackReason:            fallbackReason(fallbackEvents),
 		PromptTokens:              summary.Usage.PromptTokens,
 		CompletionTokens:          summary.Usage.CompletionTokens,
 		TotalTokens:               summary.Usage.TotalTokens,
 		ReasoningTokens:           summary.Usage.ReasoningTokens,
 		CacheHitTokens:            summary.Usage.CachedTokens,
+		CacheWriteTokens:          summary.Usage.CacheWriteTokens,
+		CostMicrounits:            summary.Usage.CostMicrounits,
 		TotalLatencyMS:            time.Since(sc.start).Milliseconds(),
 		TimeToFirstTokenMS:        summary.TimeToFirstTokenMS,
 		OutputTokensPerSecond:     summary.OutputTokensPerSecond,

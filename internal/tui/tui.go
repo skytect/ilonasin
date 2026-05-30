@@ -535,7 +535,7 @@ func ExerciseObservabilitySummary(ctx context.Context, cfg config.Config, regist
 		"Streams",
 		"Health",
 		"Fallbacks",
-		"deepseek 2 req prompt 11 completion 7 total 18 reasoning 3",
+		"deepseek 2 req prompt 11 completion 7 total 18 reasoning 3 cache_hit 5 cache_write 3 cost_microunits 126",
 		"avg latency 125ms ttft 50ms tps 9.00",
 		"completed 1 streams 3 chunks",
 		"availability_retry",
@@ -1002,19 +1002,24 @@ func (m Model) writeObservability(b *strings.Builder) {
 	}
 	for _, row := range m.requestRows {
 		credential := credentialDisplay(row.CredentialID, row.CredentialLabel)
-		fmt.Fprintf(b, "- %s %s/%s status %d %s %s retry %d fallback %d latency %dms\n",
+		fallbackReason := ""
+		if row.FallbackReason != "" {
+			fallbackReason = " reason " + safeDisplay(row.FallbackReason)
+		}
+		fmt.Fprintf(b, "- %s %s/%s status %d %s %s retry %d fallback %d%s latency %dms\n",
 			formatTime(row.StartedAt), safeDisplay(row.ProviderInstanceID), safeDisplay(row.ModelID),
 			row.HTTPStatus, safeDisplay(row.ErrorClass), credential, row.RetryCount,
-			row.FallbackCount, row.TotalLatencyMS)
+			row.FallbackCount, fallbackReason, row.TotalLatencyMS)
 	}
 	b.WriteString("\nUsage totals\n")
 	if len(m.usageRows) == 0 {
 		b.WriteString("No usage metadata.\n")
 	}
 	for _, row := range m.usageRows {
-		fmt.Fprintf(b, "- %s %d req prompt %d completion %d total %d reasoning %d\n",
+		fmt.Fprintf(b, "- %s %d req prompt %d completion %d total %d reasoning %d cache_hit %d cache_write %d cost_microunits %d\n",
 			safeDisplay(row.ProviderInstanceID), row.RequestCount, row.PromptTokens,
-			row.CompletionTokens, row.TotalTokens, row.ReasoningTokens)
+			row.CompletionTokens, row.TotalTokens, row.ReasoningTokens,
+			row.CacheHitTokens, row.CacheWriteTokens, row.CostMicrounits)
 	}
 	b.WriteString("\nLatency\n")
 	if len(m.latencyRows) == 0 {

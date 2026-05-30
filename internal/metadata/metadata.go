@@ -14,11 +14,14 @@ type Request struct {
 	ErrorClass                string
 	RetryCount                int
 	FallbackCount             int
+	FallbackReason            string
 	PromptTokens              int
 	CompletionTokens          int
 	TotalTokens               int
 	ReasoningTokens           int
 	CacheHitTokens            int
+	CacheWriteTokens          int
+	CostMicrounits            int64
 	TotalLatencyMS            int64
 	TimeToFirstTokenMS        int64
 	OutputTokensPerSecond     float64
@@ -64,10 +67,14 @@ type RequestSummary struct {
 	ErrorClass             string
 	RetryCount             int
 	FallbackCount          int
+	FallbackReason         string
 	PromptTokens           int
 	CompletionTokens       int
 	TotalTokens            int
 	ReasoningTokens        int
+	CacheHitTokens         int
+	CacheWriteTokens       int
+	CostMicrounits         int64
 	TotalLatencyMS         int64
 	TimeToFirstTokenMS     int64
 	OutputTokensPerSecond  float64
@@ -82,6 +89,9 @@ type UsageSummary struct {
 	CompletionTokens   int
 	TotalTokens        int
 	ReasoningTokens    int
+	CacheHitTokens     int
+	CacheWriteTokens   int
+	CostMicrounits     int64
 }
 
 type LatencySummary struct {

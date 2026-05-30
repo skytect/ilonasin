@@ -901,14 +901,15 @@ func (s *Store) RecordRequestMetadata(ctx context.Context, m metadata.Request) (
 		INSERT INTO request_metadata(
 			started_at, client_token_id, credential_id, requested_provider_instance, requested_model,
 			resolved_provider_instance, resolved_model, http_status, error_class,
-			retry_count, fallback_count, prompt_tokens, completion_tokens,
-			total_tokens, reasoning_tokens, cache_hit_tokens, total_latency_ms, time_to_first_token_ms,
+			retry_count, fallback_count, fallback_reason, prompt_tokens, completion_tokens,
+			total_tokens, reasoning_tokens, cache_hit_tokens, cache_write_tokens, cost_microunits,
+			total_latency_ms, time_to_first_token_ms,
 			output_tokens_per_second
-		) VALUES(?, NULLIF(?, 0), NULLIF(?, 0), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES(?, NULLIF(?, 0), NULLIF(?, 0), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, m.StartedAt.UTC().Format(time.RFC3339Nano), m.ClientTokenID, m.CredentialID, m.RequestedProviderInstance,
 		m.RequestedModel, m.ResolvedProviderInstance, m.ResolvedModel, m.HTTPStatus,
-		m.ErrorClass, m.RetryCount, m.FallbackCount, m.PromptTokens, m.CompletionTokens,
-		m.TotalTokens, m.ReasoningTokens, m.CacheHitTokens, m.TotalLatencyMS, m.TimeToFirstTokenMS,
+		m.ErrorClass, m.RetryCount, m.FallbackCount, m.FallbackReason, m.PromptTokens, m.CompletionTokens,
+		m.TotalTokens, m.ReasoningTokens, m.CacheHitTokens, m.CacheWriteTokens, m.CostMicrounits, m.TotalLatencyMS, m.TimeToFirstTokenMS,
 		m.OutputTokensPerSecond)
 	if err != nil {
 		return 0, err
@@ -1138,7 +1139,8 @@ func (s *Store) RecentRequests(ctx context.Context, limit int) ([]metadata.Reque
 		SELECT rm.id, rm.started_at, rm.requested_provider_instance, rm.requested_model,
 			COALESCE(rm.credential_id, 0), COALESCE(pc.label, ''),
 			rm.http_status, rm.error_class, rm.retry_count, rm.fallback_count,
-			rm.prompt_tokens, rm.completion_tokens, rm.total_tokens, rm.reasoning_tokens,
+			rm.fallback_reason, rm.prompt_tokens, rm.completion_tokens, rm.total_tokens, rm.reasoning_tokens,
+			rm.cache_hit_tokens, rm.cache_write_tokens, rm.cost_microunits,
 			rm.total_latency_ms, rm.time_to_first_token_ms, rm.output_tokens_per_second,
 			COALESCE(sm.completion_status, ''), COALESCE(sm.chunk_count, 0)
 		FROM request_metadata rm
@@ -1165,8 +1167,8 @@ func (s *Store) RecentRequests(ctx context.Context, limit int) ([]metadata.Reque
 		var started string
 		if err := rows.Scan(&row.ID, &started, &row.ProviderInstanceID, &row.ModelID,
 			&row.CredentialID, &row.CredentialLabel, &row.HTTPStatus, &row.ErrorClass,
-			&row.RetryCount, &row.FallbackCount, &row.PromptTokens, &row.CompletionTokens,
-			&row.TotalTokens, &row.ReasoningTokens, &row.TotalLatencyMS,
+			&row.RetryCount, &row.FallbackCount, &row.FallbackReason, &row.PromptTokens, &row.CompletionTokens,
+			&row.TotalTokens, &row.ReasoningTokens, &row.CacheHitTokens, &row.CacheWriteTokens, &row.CostMicrounits, &row.TotalLatencyMS,
 			&row.TimeToFirstTokenMS, &row.OutputTokensPerSecond,
 			&row.StreamCompletionStatus, &row.StreamChunkCount); err != nil {
 			return nil, err
@@ -1185,7 +1187,8 @@ func (s *Store) UsageByProvider(ctx context.Context) ([]metadata.UsageSummary, e
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT requested_provider_instance, COUNT(*), COALESCE(SUM(prompt_tokens), 0),
 			COALESCE(SUM(completion_tokens), 0), COALESCE(SUM(total_tokens), 0),
-			COALESCE(SUM(reasoning_tokens), 0)
+			COALESCE(SUM(reasoning_tokens), 0), COALESCE(SUM(cache_hit_tokens), 0),
+			COALESCE(SUM(cache_write_tokens), 0), COALESCE(SUM(cost_microunits), 0)
 		FROM request_metadata
 		GROUP BY requested_provider_instance
 		ORDER BY requested_provider_instance ASC
@@ -1198,7 +1201,8 @@ func (s *Store) UsageByProvider(ctx context.Context) ([]metadata.UsageSummary, e
 	for rows.Next() {
 		var row metadata.UsageSummary
 		if err := rows.Scan(&row.ProviderInstanceID, &row.RequestCount, &row.PromptTokens,
-			&row.CompletionTokens, &row.TotalTokens, &row.ReasoningTokens); err != nil {
+			&row.CompletionTokens, &row.TotalTokens, &row.ReasoningTokens, &row.CacheHitTokens,
+			&row.CacheWriteTokens, &row.CostMicrounits); err != nil {
 			return nil, err
 		}
 		out = append(out, row)

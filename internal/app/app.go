@@ -613,6 +613,9 @@ func exerciseObservabilityCheck(ctx context.Context, registry provider.Registry,
 		CompletionTokens:          3,
 		TotalTokens:               8,
 		ReasoningTokens:           1,
+		CacheHitTokens:            2,
+		CacheWriteTokens:          1,
+		CostMicrounits:            42,
 		TotalLatencyMS:            100,
 	})
 	if err != nil {
@@ -628,10 +631,14 @@ func exerciseObservabilityCheck(ctx context.Context, registry provider.Registry,
 		ErrorClass:                "raw-provider-payload",
 		RetryCount:                1,
 		FallbackCount:             1,
+		FallbackReason:            "availability_retry",
 		PromptTokens:              6,
 		CompletionTokens:          4,
 		TotalTokens:               10,
 		ReasoningTokens:           2,
+		CacheHitTokens:            3,
+		CacheWriteTokens:          2,
+		CostMicrounits:            84,
 		TotalLatencyMS:            150,
 		TimeToFirstTokenMS:        50,
 		OutputTokensPerSecond:     9,
@@ -2494,7 +2501,7 @@ func newServeCheckUpstream() *serveCheckUpstream {
 			up.mu.Unlock()
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"chatcmpl_check","object":"chat.completion","created":1,"model":"deepseek-v4-pro","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"completion_tokens_details":{"reasoning_tokens":0}}}`))
+		_, _ = w.Write([]byte(`{"id":"chatcmpl_check","object":"chat.completion","created":1,"model":"deepseek-v4-pro","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"prompt_cache_hit_tokens":1,"prompt_cache_miss_tokens":99,"prompt_tokens_details":{"cached_tokens":1,"cache_write_tokens":2,"unknown_cache_marker":"raw-provider-payload"},"completion_tokens_details":{"reasoning_tokens":0},"unknown_cost_marker":"raw-provider-payload"}}`))
 	}))
 	return up
 }
@@ -2893,7 +2900,7 @@ func (u *serveCheckUpstream) handleServeCheckStream(w http.ResponseWriter, r *ht
 	write(": keep-alive\n\n")
 	write(`data: {"id":"chunk_raw_id","object":"chat.completion.chunk","created":1,"model":"` + model + `","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}],"usage":null,"provider":"raw-provider-extra"}` + "\n\n")
 	write(`data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"ok","reasoning_content":"r"}}],"usage":null}` + "\n\n")
-	write(`data: {"object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"completion_tokens_details":{"reasoning_tokens":0}}}` + "\n\n")
+	write(`data: {"object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"prompt_cache_hit_tokens":1,"prompt_cache_miss_tokens":99,"prompt_tokens_details":{"cached_tokens":1,"cache_write_tokens":2,"unknown_cache_marker":"raw-provider-payload"},"completion_tokens_details":{"reasoning_tokens":0},"unknown_cost_marker":"raw-provider-payload"}}` + "\n\n")
 	write("data: [DONE]\n\n")
 }
 
@@ -4379,6 +4386,9 @@ func exerciseCredentialFallbackCheck(ctx context.Context, base, token string, in
 	if !fakeUpstream.sawAuth("stream-fallback-success", "sk-fallback-second") {
 		return fmt.Errorf("stream pre-start fallback did not try second credential")
 	}
+	if err := assertRequestFallbackMetadata(ctx, store, instance.ID, "stream-fallback-success"); err != nil {
+		return err
+	}
 	errorBeforeBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true}}`, instance.ID+"/stream-fallback-error-before"))
 	status, _, _, respBody, err = postStream(base+"/v1/chat/completions", token, errorBeforeBody)
 	if err != nil || status != http.StatusBadGateway || !hasStreamErrorEnvelope(respBody) || bytes.Contains(respBody, []byte("raw stream fallback secret")) {
@@ -4439,12 +4449,34 @@ func assertRecordedCredentialID(ctx context.Context, store *sqlite.Store) error 
 			AND prompt_tokens = 1
 			AND completion_tokens = 1
 			AND total_tokens = 2
+			AND cache_hit_tokens = 1
+			AND cache_write_tokens = 2
+			AND cost_microunits = 0
 	`).Scan(&count)
 	if err != nil {
 		return err
 	}
 	if count == 0 {
 		return fmt.Errorf("chat adapter metadata did not record credential and usage")
+	}
+	if err := assertNoCacheMissPersisted(ctx, store); err != nil {
+		return err
+	}
+	return nil
+}
+
+func assertNoCacheMissPersisted(ctx context.Context, store *sqlite.Store) error {
+	var count int
+	err := store.DB.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM request_metadata
+		WHERE cache_write_tokens = 99
+	`).Scan(&count)
+	if err != nil {
+		return err
+	}
+	if count != 0 {
+		return fmt.Errorf("prompt_cache_miss_tokens persisted as cache_write_tokens")
 	}
 	return nil
 }
@@ -4538,20 +4570,21 @@ func fallbackEventCount(ctx context.Context, store *sqlite.Store, providerInstan
 
 func assertRequestFallbackMetadata(ctx context.Context, store *sqlite.Store, providerInstanceID, modelID string) error {
 	var retryCount, fallbackCount int
+	var fallbackReason string
 	err := store.DB.QueryRowContext(ctx, `
-		SELECT retry_count, fallback_count
+		SELECT retry_count, fallback_count, fallback_reason
 		FROM request_metadata
 		WHERE requested_provider_instance = ?
 			AND requested_model = ?
 			AND http_status = 200
 		ORDER BY id DESC
 		LIMIT 1
-	`, providerInstanceID, modelID).Scan(&retryCount, &fallbackCount)
+	`, providerInstanceID, modelID).Scan(&retryCount, &fallbackCount, &fallbackReason)
 	if err != nil {
 		return err
 	}
-	if retryCount != 1 || fallbackCount != 1 {
-		return fmt.Errorf("fallback metadata retry=%d fallback=%d", retryCount, fallbackCount)
+	if retryCount != 1 || fallbackCount != 1 || fallbackReason != "availability_retry" {
+		return fmt.Errorf("fallback metadata retry=%d fallback=%d reason=%s", retryCount, fallbackCount, fallbackReason)
 	}
 	return nil
 }
@@ -4988,12 +5021,18 @@ func assertRecordedStreamUsage(ctx context.Context, store *sqlite.Store) error {
 			AND rm.prompt_tokens = 1
 			AND rm.completion_tokens = 1
 			AND rm.total_tokens = 2
+			AND rm.cache_hit_tokens = 1
+			AND rm.cache_write_tokens = 2
+			AND rm.cost_microunits = 0
 	`).Scan(&count)
 	if err != nil {
 		return err
 	}
 	if count == 0 {
 		return fmt.Errorf("stream metadata did not record usage")
+	}
+	if err := assertNoCacheMissPersisted(ctx, store); err != nil {
+		return err
 	}
 	return nil
 }

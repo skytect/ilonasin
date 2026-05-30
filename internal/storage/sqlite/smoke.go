@@ -463,6 +463,8 @@ func exerciseMigratedStore(ctx context.Context, store *Store, suffix string) err
 		TotalTokens:               3,
 		ReasoningTokens:           0,
 		CacheHitTokens:            0,
+		CacheWriteTokens:          1,
+		CostMicrounits:            2,
 		TotalLatencyMS:            10,
 		TimeToFirstTokenMS:        5,
 		OutputTokensPerSecond:     2,

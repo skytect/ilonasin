@@ -506,7 +506,7 @@ func (s *Server) handleSingleCredentialChat(w http.ResponseWriter, r *http.Reque
 		RequestedProviderInstance: sc.address.ProviderInstanceID,
 		RequestedModel:            sc.address.ProviderModelID,
 		ResolvedProviderInstance:  sc.address.ProviderInstanceID,
-		ResolvedModel:             sc.address.ProviderModelID,
+		ResolvedModel:             resolvedChatModel(sc.address.ProviderModelID, result.ResolvedModel),
 		HTTPStatus:                status,
 		ErrorClass:                errorClass,
 		RetryCount:                retryCount,
@@ -570,7 +570,7 @@ func (s *Server) handleNonStreamingChat(w http.ResponseWriter, r *http.Request, 
 		RequestedProviderInstance: nc.address.ProviderInstanceID,
 		RequestedModel:            nc.address.ProviderModelID,
 		ResolvedProviderInstance:  nc.address.ProviderInstanceID,
-		ResolvedModel:             nc.address.ProviderModelID,
+		ResolvedModel:             resolvedChatModel(nc.address.ProviderModelID, final.result.ResolvedModel),
 		HTTPStatus:                status,
 		ErrorClass:                errorClass,
 		RetryCount:                len(fallbackEvents),
@@ -700,6 +700,13 @@ func retryableChatAttempt(result provider.ChatResult, err error) bool {
 
 func shouldRecordChatHealth(result provider.ChatResult) bool {
 	return result.ErrorClass != "client_disconnected"
+}
+
+func resolvedChatModel(requestedModel, resultModel string) string {
+	if resultModel != "" {
+		return resultModel
+	}
+	return requestedModel
 }
 
 func retryableStreamAttempt(summary provider.ChatStreamSummary, err error, sinkStarted bool) bool {
@@ -966,7 +973,7 @@ func (s *Server) handleSingleCredentialStreamingChat(w http.ResponseWriter, r *h
 		RequestedProviderInstance: sc.address.ProviderInstanceID,
 		RequestedModel:            sc.address.ProviderModelID,
 		ResolvedProviderInstance:  sc.address.ProviderInstanceID,
-		ResolvedModel:             sc.address.ProviderModelID,
+		ResolvedModel:             resolvedChatModel(sc.address.ProviderModelID, summary.ResolvedModel),
 		HTTPStatus:                status,
 		ErrorClass:                errorClass,
 		RetryCount:                retryCount,
@@ -1069,7 +1076,7 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 		RequestedProviderInstance: sc.address.ProviderInstanceID,
 		RequestedModel:            sc.address.ProviderModelID,
 		ResolvedProviderInstance:  sc.address.ProviderInstanceID,
-		ResolvedModel:             sc.address.ProviderModelID,
+		ResolvedModel:             resolvedChatModel(sc.address.ProviderModelID, summary.ResolvedModel),
 		HTTPStatus:                status,
 		ErrorClass:                errorClass,
 		RetryCount:                len(fallbackEvents),

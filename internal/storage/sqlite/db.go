@@ -1137,7 +1137,8 @@ func (s *Store) RecentRequests(ctx context.Context, limit int) ([]metadata.Reque
 		limit = 5
 	}
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT rm.id, rm.started_at, rm.requested_provider_instance, rm.requested_model,
+		SELECT rm.id, rm.started_at, rm.resolved_provider_instance, rm.resolved_model,
+			rm.requested_provider_instance, rm.requested_model, rm.resolved_provider_instance, rm.resolved_model,
 			COALESCE(rm.credential_id, 0), COALESCE(pc.label, ''),
 			rm.http_status, rm.error_class, rm.retry_count, rm.fallback_count,
 			rm.fallback_reason, rm.prompt_tokens, rm.completion_tokens, rm.total_tokens, rm.reasoning_tokens,
@@ -1167,6 +1168,7 @@ func (s *Store) RecentRequests(ctx context.Context, limit int) ([]metadata.Reque
 		var row metadata.RequestSummary
 		var started string
 		if err := rows.Scan(&row.ID, &started, &row.ProviderInstanceID, &row.ModelID,
+			&row.RequestedProviderID, &row.RequestedModelID, &row.ResolvedProviderID, &row.ResolvedModelID,
 			&row.CredentialID, &row.CredentialLabel, &row.HTTPStatus, &row.ErrorClass,
 			&row.RetryCount, &row.FallbackCount, &row.FallbackReason, &row.PromptTokens, &row.CompletionTokens,
 			&row.TotalTokens, &row.ReasoningTokens, &row.CacheHitTokens, &row.CacheWriteTokens, &row.CostMicrounits, &row.TotalLatencyMS,

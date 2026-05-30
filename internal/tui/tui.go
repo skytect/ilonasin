@@ -538,6 +538,7 @@ func ExerciseObservabilitySummary(ctx context.Context, cfg config.Config, regist
 		"deepseek 2 req prompt 11 completion 7 total 18 reasoning 3 cache_hit 5 cache_write 3 cost_microunits 126",
 		"avg latency 125ms ttft 50ms tps 9.00",
 		"completed 1 streams 3 chunks",
+		"deepseek/deepseek-router -> deepseek/deepseek-v4-pro status 200",
 		"deepseek/models upstream_failure",
 		"retry_after 2026-05-30T12:10:00Z",
 		"availability_retry",
@@ -1008,8 +1009,8 @@ func (m Model) writeObservability(b *strings.Builder) {
 		if row.FallbackReason != "" {
 			fallbackReason = " reason " + safeDisplay(row.FallbackReason)
 		}
-		fmt.Fprintf(b, "- %s %s/%s status %d %s %s retry %d fallback %d%s latency %dms\n",
-			formatTime(row.StartedAt), safeDisplay(row.ProviderInstanceID), safeDisplay(row.ModelID),
+		fmt.Fprintf(b, "- %s %s status %d %s %s retry %d fallback %d%s latency %dms\n",
+			formatTime(row.StartedAt), requestModelDisplay(row),
 			row.HTTPStatus, safeDisplay(row.ErrorClass), credential, row.RetryCount,
 			row.FallbackCount, fallbackReason, row.TotalLatencyMS)
 	}
@@ -1166,6 +1167,31 @@ func healthModelDisplay(modelID string) string {
 	return safeDisplay(modelID)
 }
 
+func requestModelDisplay(row metadata.RequestSummary) string {
+	requestedProvider := row.RequestedProviderID
+	requestedModel := row.RequestedModelID
+	resolvedProvider := row.ResolvedProviderID
+	resolvedModel := row.ResolvedModelID
+	if requestedProvider == "" {
+		requestedProvider = row.ProviderInstanceID
+	}
+	if requestedModel == "" {
+		requestedModel = row.ModelID
+	}
+	if resolvedProvider == "" {
+		resolvedProvider = row.ProviderInstanceID
+	}
+	if resolvedModel == "" {
+		resolvedModel = row.ModelID
+	}
+	requested := safeDisplay(requestedProvider) + "/" + safeDisplay(requestedModel)
+	resolved := safeDisplay(resolvedProvider) + "/" + safeDisplay(resolvedModel)
+	if requested != resolved {
+		return requested + " -> " + resolved
+	}
+	return resolved
+}
+
 func formatTime(t time.Time) string {
 	if t.IsZero() {
 		return ""
@@ -1180,7 +1206,7 @@ func formatPreciseTime(t time.Time) string {
 	return t.UTC().Format(time.RFC3339Nano)
 }
 
-var unsafeDisplayPattern = regexp.MustCompile(`(?i)(bearer|sk-|iln_|oauth|token|secret|authorization|raw|payload|prompt|completion|body|account|acct_|request[_ -]?id|req_|balance|credit|eyj[a-z0-9_-]*\.[a-z0-9_-]*\.)`)
+var unsafeDisplayPattern = regexp.MustCompile(`(?i)(bearer|sk-|iln_|oauth|token|secret|authorization|raw|payload|prompt|completion|body|account|acct_|request[_ -]?id|requestid|req_|balance|credit|eyj[a-z0-9_-]*\.[a-z0-9_-]*\.)`)
 
 func safeDisplay(value string) string {
 	value = strings.Map(func(r rune) rune {

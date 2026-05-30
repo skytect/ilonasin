@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"sort"
+	"strings"
 )
 
 type ChatCompletionRequest struct {
@@ -124,6 +125,11 @@ type Usage struct {
 	CostMicrounits   int64
 }
 
+type ChatCompletionMetadata struct {
+	Usage         Usage
+	ResolvedModel string
+}
+
 func MessageContentString(msg Message) (string, error) {
 	var text string
 	if err := json.Unmarshal(msg.Content, &text); err != nil {
@@ -202,9 +208,10 @@ func MarshalUpstreamChatRequest(req ChatCompletionRequest, upstreamModel string)
 	return json.Marshal(out)
 }
 
-func ExtractUsage(body []byte) (Usage, error) {
+func ExtractChatCompletionMetadata(body []byte) (ChatCompletionMetadata, error) {
 	var resp struct {
 		Object  string            `json:"object"`
+		Model   json.RawMessage   `json:"model"`
 		Choices []json.RawMessage `json:"choices"`
 		Usage   *struct {
 			PromptTokens            *int `json:"prompt_tokens"`
@@ -221,33 +228,95 @@ func ExtractUsage(body []byte) (Usage, error) {
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return Usage{}, err
+		return ChatCompletionMetadata{}, err
 	}
 	if resp.Object != "chat.completion" {
-		return Usage{}, fmt.Errorf("upstream response object %q is unsupported", resp.Object)
+		return ChatCompletionMetadata{}, fmt.Errorf("upstream response object %q is unsupported", resp.Object)
 	}
 	if len(resp.Choices) == 0 {
-		return Usage{}, errors.New("upstream response choices are missing")
+		return ChatCompletionMetadata{}, errors.New("upstream response choices are missing")
 	}
 	for i, choice := range resp.Choices {
 		if len(bytes.TrimSpace(choice)) == 0 || bytes.Equal(bytes.TrimSpace(choice), []byte("null")) {
-			return Usage{}, fmt.Errorf("upstream response choices[%d] is empty", i)
+			return ChatCompletionMetadata{}, fmt.Errorf("upstream response choices[%d] is empty", i)
 		}
 	}
 	if resp.Usage == nil {
-		return Usage{}, errors.New("upstream response usage is missing")
+		return ChatCompletionMetadata{}, errors.New("upstream response usage is missing")
 	}
 	if resp.Usage.PromptTokens == nil || resp.Usage.CompletionTokens == nil || resp.Usage.TotalTokens == nil {
-		return Usage{}, errors.New("upstream response usage token fields are missing")
+		return ChatCompletionMetadata{}, errors.New("upstream response usage token fields are missing")
 	}
-	return Usage{
-		PromptTokens:     *resp.Usage.PromptTokens,
-		CompletionTokens: *resp.Usage.CompletionTokens,
-		TotalTokens:      *resp.Usage.TotalTokens,
-		ReasoningTokens:  resp.Usage.CompletionTokensDetails.ReasoningTokens,
-		CachedTokens:     firstPositive(resp.Usage.PromptTokensDetails.CachedTokens, resp.Usage.PromptCacheHitTokens),
-		CacheWriteTokens: positiveInt(resp.Usage.PromptTokensDetails.CacheWriteTokens),
+	return ChatCompletionMetadata{
+		ResolvedModel: safeResolvedModelFromRaw(resp.Model),
+		Usage: Usage{
+			PromptTokens:     *resp.Usage.PromptTokens,
+			CompletionTokens: *resp.Usage.CompletionTokens,
+			TotalTokens:      *resp.Usage.TotalTokens,
+			ReasoningTokens:  resp.Usage.CompletionTokensDetails.ReasoningTokens,
+			CachedTokens:     firstPositive(resp.Usage.PromptTokensDetails.CachedTokens, resp.Usage.PromptCacheHitTokens),
+			CacheWriteTokens: positiveInt(resp.Usage.PromptTokensDetails.CacheWriteTokens),
+		},
 	}, nil
+}
+
+func ExtractUsage(body []byte) (Usage, error) {
+	metadata, err := ExtractChatCompletionMetadata(body)
+	if err != nil {
+		return Usage{}, err
+	}
+	return metadata.Usage, nil
+}
+
+func safeResolvedModelFromRaw(raw json.RawMessage) string {
+	if len(raw) == 0 || isJSONNull(raw) {
+		return ""
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return ""
+	}
+	return SafeResolvedModel(value)
+}
+
+func SafeResolvedModel(value string) string {
+	if value == "" || len(value) > 256 || strings.TrimSpace(value) != value {
+		return ""
+	}
+	for _, r := range value {
+		if !safeResolvedModelRune(r) {
+			return ""
+		}
+	}
+	lower := strings.ToLower(value)
+	for _, marker := range []string{
+		"bearer", "sk-", "iln_", "oauth", "token", "secret", "authorization",
+		"raw", "payload", "prompt", "completion", "body", "account", "acct_",
+		"request_id", "request-id", "request id", "requestid", "req_", "balance", "credit",
+	} {
+		if strings.Contains(lower, marker) {
+			return ""
+		}
+	}
+	if strings.HasPrefix(lower, "eyj") && strings.Contains(lower, ".") {
+		return ""
+	}
+	return value
+}
+
+func safeResolvedModelRune(r rune) bool {
+	switch {
+	case r >= 'a' && r <= 'z':
+		return true
+	case r >= 'A' && r <= 'Z':
+		return true
+	case r >= '0' && r <= '9':
+		return true
+	case r == '.' || r == '_' || r == ':' || r == '/' || r == '+' || r == '-':
+		return true
+	default:
+		return false
+	}
 }
 
 func IsStreamError(body []byte) bool {
@@ -260,10 +329,11 @@ func IsStreamError(body []byte) bool {
 }
 
 type NormalizedStreamChunk struct {
-	Body        []byte
-	Usage       Usage
-	HasUsage    bool
-	OutputToken bool
+	Body          []byte
+	Usage         Usage
+	HasUsage      bool
+	OutputToken   bool
+	ResolvedModel string
 }
 
 func NormalizeStreamChunk(body []byte) (NormalizedStreamChunk, error) {
@@ -339,10 +409,11 @@ func NormalizeStreamChunk(body []byte) (NormalizedStreamChunk, error) {
 		return NormalizedStreamChunk{}, err
 	}
 	return NormalizedStreamChunk{
-		Body:        out,
-		Usage:       usage,
-		HasUsage:    hasUsage,
-		OutputToken: outputToken,
+		Body:          out,
+		Usage:         usage,
+		HasUsage:      hasUsage,
+		OutputToken:   outputToken,
+		ResolvedModel: safeResolvedModelFromRaw(raw["model"]),
 	}, nil
 }
 

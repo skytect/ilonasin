@@ -605,7 +605,7 @@ func exerciseObservabilityCheck(ctx context.Context, registry provider.Registry,
 	requestID, err := store.RecordRequestMetadata(ctx, metadata.Request{
 		StartedAt:                 started,
 		RequestedProviderInstance: "deepseek",
-		RequestedModel:            "deepseek-v4-pro",
+		RequestedModel:            "deepseek-router",
 		ResolvedProviderInstance:  "deepseek",
 		ResolvedModel:             "deepseek-v4-pro",
 		HTTPStatus:                http.StatusOK,
@@ -2526,8 +2526,18 @@ func newServeCheckUpstream() *serveCheckUpstream {
 			up.observed[r.URL.Path+" "+model] = true
 			up.mu.Unlock()
 		}
+		responseModel := "deepseek-v4-pro"
+		if model == "resolved-model" {
+			responseModel = "deepseek-v4-flash"
+			if r.URL.Path == "/api/v1/chat/completions" {
+				responseModel = "deepseek/deepseek-v4-flash:free"
+			}
+		}
+		if model == "unsafe-resolved-model" {
+			responseModel = "requestid-unsafe-marker"
+		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"chatcmpl_check","object":"chat.completion","created":1,"model":"deepseek-v4-pro","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"prompt_cache_hit_tokens":1,"prompt_cache_miss_tokens":99,"prompt_tokens_details":{"cached_tokens":1,"cache_write_tokens":2,"unknown_cache_marker":"raw-provider-payload"},"completion_tokens_details":{"reasoning_tokens":0},"unknown_cost_marker":"raw-provider-payload"}}`))
+		_, _ = fmt.Fprintf(w, `{"id":"chatcmpl_check","object":"chat.completion","created":1,"model":%q,"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"prompt_cache_hit_tokens":1,"prompt_cache_miss_tokens":99,"prompt_tokens_details":{"cached_tokens":1,"cache_write_tokens":2,"unknown_cache_marker":"raw-provider-payload"},"completion_tokens_details":{"reasoning_tokens":0},"unknown_cost_marker":"raw-provider-payload"}}`, responseModel)
 	}))
 	return up
 }
@@ -2985,13 +2995,23 @@ func (u *serveCheckUpstream) handleServeCheckStream(w http.ResponseWriter, r *ht
 		write(`data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"late"}}],"usage":null}` + "\n\n")
 		return
 	}
+	responseModel := model
+	if model == "stream-resolved-model" {
+		responseModel = "deepseek-v4-flash"
+		if r.URL.Path == "/api/v1/chat/completions" {
+			responseModel = "deepseek/deepseek-v4-flash:free"
+		}
+	}
+	if model == "stream-unsafe-resolved-model" {
+		responseModel = "requestid-unsafe-marker"
+	}
 	options, _ := body["stream_options"].(map[string]any)
 	if options["include_usage"] != true {
 		http.Error(w, "missing include_usage", http.StatusBadRequest)
 		return
 	}
 	write(": keep-alive\n\n")
-	write(`data: {"id":"chunk_raw_id","object":"chat.completion.chunk","created":1,"model":"` + model + `","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}],"usage":null,"provider":"raw-provider-extra"}` + "\n\n")
+	write(`data: {"id":"chunk_raw_id","object":"chat.completion.chunk","created":1,"model":"` + responseModel + `","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}],"usage":null,"provider":"raw-provider-extra"}` + "\n\n")
 	write(`data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"ok","reasoning_content":"r"}}],"usage":null}` + "\n\n")
 	write(`data: {"object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"prompt_cache_hit_tokens":1,"prompt_cache_miss_tokens":99,"prompt_tokens_details":{"cached_tokens":1,"cache_write_tokens":2,"unknown_cache_marker":"raw-provider-payload"},"completion_tokens_details":{"reasoning_tokens":0},"unknown_cost_marker":"raw-provider-payload"}}` + "\n\n")
 	write("data: [DONE]\n\n")
@@ -4050,6 +4070,30 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 	if err := assertRecordedCredentialID(ctx, store); err != nil {
 		return err
 	}
+	resolvedModel := "deepseek-v4-flash"
+	if instance.Type == "openrouter" {
+		resolvedModel = "deepseek/deepseek-v4-flash:free"
+	}
+	resolvedBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}]}`, instance.ID+"/resolved-model"))
+	if status, _, err := postJSON(base+"/v1/chat/completions", token, resolvedBody); err != nil || status != http.StatusOK {
+		return fmt.Errorf("resolved model provider=%s status=%d err=%v", instance.ID, status, err)
+	}
+	if err := assertResolvedModelMetadata(ctx, store, instance.ID, "resolved-model", resolvedModel); err != nil {
+		return err
+	}
+	unsafeResolvedBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}]}`, instance.ID+"/unsafe-resolved-model"))
+	if status, _, err := postJSON(base+"/v1/chat/completions", token, unsafeResolvedBody); err != nil || status != http.StatusOK {
+		return fmt.Errorf("unsafe resolved model provider=%s status=%d err=%v", instance.ID, status, err)
+	}
+	if err := assertResolvedModelMetadata(ctx, store, instance.ID, "unsafe-resolved-model", "unsafe-resolved-model"); err != nil {
+		return err
+	}
+	if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, "raw-provider-payload"); err != nil {
+		return err
+	}
+	if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, "requestid-unsafe-marker"); err != nil {
+		return err
+	}
 	jsonFormatBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"response_format":{"type":"json_object"}}`, instance.ID+"/json-format"))
 	if status, _, err := postJSON(base+"/v1/chat/completions", token, jsonFormatBody); err != nil || status != http.StatusOK {
 		return fmt.Errorf("json response_format provider=%s status=%d err=%v", instance.ID, status, err)
@@ -4142,6 +4186,30 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 		return err
 	}
 	if err := assertRecordedStreamUsage(ctx, store); err != nil {
+		return err
+	}
+	resolvedModel := "deepseek-v4-flash"
+	if instance.Type == "openrouter" {
+		resolvedModel = "deepseek/deepseek-v4-flash:free"
+	}
+	resolvedBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true}}`, instance.ID+"/stream-resolved-model"))
+	if status, _, _, _, err := postStream(base+"/v1/chat/completions", token, resolvedBody); err != nil || status != http.StatusOK {
+		return fmt.Errorf("stream resolved model provider=%s status=%d err=%v", instance.ID, status, err)
+	}
+	if err := assertResolvedModelMetadata(ctx, store, instance.ID, "stream-resolved-model", resolvedModel); err != nil {
+		return err
+	}
+	unsafeResolvedBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true}}`, instance.ID+"/stream-unsafe-resolved-model"))
+	if status, _, _, _, err := postStream(base+"/v1/chat/completions", token, unsafeResolvedBody); err != nil || status != http.StatusOK {
+		return fmt.Errorf("stream unsafe resolved model provider=%s status=%d err=%v", instance.ID, status, err)
+	}
+	if err := assertResolvedModelMetadata(ctx, store, instance.ID, "stream-unsafe-resolved-model", "stream-unsafe-resolved-model"); err != nil {
+		return err
+	}
+	if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, "raw-provider-payload"); err != nil {
+		return err
+	}
+	if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, "requestid-unsafe-marker"); err != nil {
 		return err
 	}
 	optionBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/stream-provider-options", providerOptionsExtra(instance.Type)))
@@ -4703,6 +4771,25 @@ func assertRecordedCredentialID(ctx context.Context, store *sqlite.Store) error 
 	return nil
 }
 
+func assertResolvedModelMetadata(ctx context.Context, store *sqlite.Store, providerID, requestedModel, resolvedModel string) error {
+	var count int
+	err := store.DB.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM request_metadata
+		WHERE requested_provider_instance = ?
+			AND requested_model = ?
+			AND resolved_provider_instance = ?
+			AND resolved_model = ?
+	`, providerID, requestedModel, providerID, resolvedModel).Scan(&count)
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return fmt.Errorf("resolved model metadata missing provider=%s requested=%s resolved=%s", providerID, requestedModel, resolvedModel)
+	}
+	return nil
+}
+
 func assertNoCacheMissPersisted(ctx context.Context, store *sqlite.Store) error {
 	var count int
 	err := store.DB.QueryRowContext(ctx, `
@@ -4726,6 +4813,8 @@ func assertCodexChatMetadata(ctx context.Context, store *sqlite.Store, model str
 		FROM request_metadata
 		WHERE requested_provider_instance = 'codex'
 			AND requested_model = ?
+			AND resolved_provider_instance = 'codex'
+			AND resolved_model = ?
 			AND http_status = ?
 			AND COALESCE(error_class, '') = ?
 			AND prompt_tokens = ?
@@ -4734,7 +4823,7 @@ func assertCodexChatMetadata(ctx context.Context, store *sqlite.Store, model str
 			AND reasoning_tokens = ?
 			AND cache_hit_tokens = ?
 			AND credential_id IS NOT NULL
-	`, model, status, errorClass, prompt, completion, total, reasoning, cached).Scan(&count)
+	`, model, model, status, errorClass, prompt, completion, total, reasoning, cached).Scan(&count)
 	if err != nil {
 		return err
 	}
@@ -4747,19 +4836,20 @@ func assertCodexChatMetadata(ctx context.Context, store *sqlite.Store, model str
 func assertLatestCodexChatMetadata(ctx context.Context, store *sqlite.Store, model string, status int, errorClass string) error {
 	var gotStatus int
 	var gotClass string
+	var gotResolved string
 	err := store.DB.QueryRowContext(ctx, `
-		SELECT http_status, error_class
+		SELECT http_status, error_class, resolved_model
 		FROM request_metadata
 		WHERE requested_provider_instance = 'codex'
 			AND requested_model = ?
 		ORDER BY id DESC
 		LIMIT 1
-	`, model).Scan(&gotStatus, &gotClass)
+	`, model).Scan(&gotStatus, &gotClass, &gotResolved)
 	if err != nil {
-		return err
+		return fmt.Errorf("codex metadata %s missing: %w", model, err)
 	}
-	if gotStatus != status || gotClass != errorClass {
-		return fmt.Errorf("codex metadata %s status=%d class=%s", model, gotStatus, gotClass)
+	if gotStatus != status || gotClass != errorClass || gotResolved != model {
+		return fmt.Errorf("codex metadata %s status=%d class=%s resolved=%s", model, gotStatus, gotClass, gotResolved)
 	}
 	return nil
 }

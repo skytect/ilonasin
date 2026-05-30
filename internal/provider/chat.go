@@ -86,6 +86,7 @@ type ChatResult struct {
 	ContentType   string
 	Body          []byte
 	Usage         openai.Usage
+	ResolvedModel string
 	ErrorClass    string
 	Latency       time.Duration
 	RetryAfter    *time.Time
@@ -105,6 +106,7 @@ type ChatStreamEvent struct {
 type ChatStreamSummary struct {
 	StatusCode            int
 	Usage                 openai.Usage
+	ResolvedModel         string
 	ErrorClass            string
 	CompletionStatus      string
 	ChunkCount            int

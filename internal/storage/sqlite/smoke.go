@@ -481,6 +481,35 @@ func exerciseMigratedStore(ctx context.Context, store *Store, suffix string) err
 	}); err != nil {
 		return err
 	}
+	resolvedRequestID, err := store.RecordRequestMetadata(ctx, metadata.Request{
+		StartedAt:                 now.Add(time.Second),
+		CredentialID:              api.ID,
+		RequestedProviderInstance: "openrouter",
+		RequestedModel:            "openrouter/auto",
+		ResolvedProviderInstance:  "openrouter",
+		ResolvedModel:             "deepseek/deepseek-v4-flash:free",
+		HTTPStatus:                200,
+		PromptTokens:              1,
+		CompletionTokens:          1,
+		TotalTokens:               2,
+		TotalLatencyMS:            11,
+	})
+	if err != nil {
+		return err
+	}
+	recent, err := store.RecentRequests(ctx, 1)
+	if err != nil {
+		return err
+	}
+	if len(recent) != 1 || recent[0].ID != resolvedRequestID ||
+		recent[0].RequestedProviderID != "openrouter" ||
+		recent[0].RequestedModelID != "openrouter/auto" ||
+		recent[0].ResolvedProviderID != "openrouter" ||
+		recent[0].ResolvedModelID != "deepseek/deepseek-v4-flash:free" ||
+		recent[0].ProviderInstanceID != "openrouter" ||
+		recent[0].ModelID != "deepseek/deepseek-v4-flash:free" {
+		return fmt.Errorf("recent request resolved metadata mismatch")
+	}
 	retryAfter := now.Add(2 * time.Minute)
 	if err := store.RecordHealthEvent(ctx, metadata.HealthEvent{
 		OccurredAt:         now,

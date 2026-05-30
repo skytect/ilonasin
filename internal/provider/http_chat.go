@@ -370,7 +370,7 @@ func (a HTTPChatAdapter) CompleteChat(ctx context.Context, req ChatRequest) (Cha
 		result.ErrorClass = "upstream_http_error"
 		return result, nil
 	}
-	usage, err := openai.ExtractUsage(respBody)
+	metadata, err := openai.ExtractChatCompletionMetadata(respBody)
 	if err != nil {
 		result.StatusCode = http.StatusBadGateway
 		result.ContentType = "application/json"
@@ -379,7 +379,8 @@ func (a HTTPChatAdapter) CompleteChat(ctx context.Context, req ChatRequest) (Cha
 		result.InvalidBody = true
 		return result, err
 	}
-	result.Usage = usage
+	result.Usage = metadata.Usage
+	result.ResolvedModel = metadata.ResolvedModel
 	return result, nil
 }
 
@@ -431,11 +432,12 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 		return ChatResult{StatusCode: http.StatusBadGateway, ContentType: "application/json", ErrorClass: "upstream_invalid_response", Latency: time.Since(start)}, err
 	}
 	return ChatResult{
-		StatusCode:  http.StatusOK,
-		ContentType: "application/json",
-		Body:        out,
-		Usage:       parsed.Usage,
-		Latency:     time.Since(start),
+		StatusCode:    http.StatusOK,
+		ContentType:   "application/json",
+		Body:          out,
+		Usage:         parsed.Usage,
+		ResolvedModel: req.UpstreamModel,
+		Latency:       time.Since(start),
 	}, nil
 }
 
@@ -812,6 +814,7 @@ func (a HTTPChatAdapter) streamCodexChat(ctx context.Context, req ChatRequest, s
 	summary := ChatStreamSummary{
 		StatusCode:       http.StatusOK,
 		CompletionStatus: "completed",
+		ResolvedModel:    req.UpstreamModel,
 	}
 	state := codexStreamState{
 		id:           localChatCompletionID(),
@@ -1648,6 +1651,9 @@ func (a HTTPChatAdapter) handleStreamEvent(ctx context.Context, data []byte, sin
 	}
 	summary.Started = true
 	summary.ChunkCount++
+	if summary.ResolvedModel == "" && chunk.ResolvedModel != "" {
+		summary.ResolvedModel = chunk.ResolvedModel
+	}
 	if chunk.HasUsage {
 		summary.Usage = chunk.Usage
 		if summary.TimeToFirstTokenMS > 0 {

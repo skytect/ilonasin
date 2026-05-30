@@ -62,6 +62,10 @@ type RequestSummary struct {
 	StartedAt              time.Time
 	ProviderInstanceID     string
 	ModelID                string
+	RequestedProviderID    string
+	RequestedModelID       string
+	ResolvedProviderID     string
+	ResolvedModelID        string
 	CredentialID           int64
 	CredentialLabel        string
 	HTTPStatus             int

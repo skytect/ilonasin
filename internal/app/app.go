@@ -237,17 +237,17 @@ func ServeCheck(opts Options) error {
 			return err
 		}
 		if err := exerciseChatAdapterCheck(context.Background(), base, created2.Token, instance, fakeUpstream, checkStore); err != nil {
-			return err
+			return fmt.Errorf("chat adapter check %s: %w", instance.ID, err)
 		}
 	}
 	if len(instances) > 0 {
 		if err := exerciseModelDiscoveryCheck(context.Background(), base, created2.Token, instances, fakeUpstream, checkStore, upstreamService); err != nil {
-			return err
+			return fmt.Errorf("model discovery check: %w", err)
 		}
 	}
 	for _, instance := range instances {
 		if err := exerciseCredentialFallbackCheck(context.Background(), base, created2.Token, instance, fakeUpstream, checkStore, upstreamService); err != nil {
-			return err
+			return fmt.Errorf("credential fallback check %s: %w", instance.ID, err)
 		}
 	}
 	if len(instances) > 0 {
@@ -256,7 +256,7 @@ func ServeCheck(opts Options) error {
 		}
 	}
 	if err := exerciseCodexNoEligibleCacheCheck(context.Background(), rt.Registry); err != nil {
-		return err
+		return fmt.Errorf("codex no-eligible cache check: %w", err)
 	}
 	afterSnapshot, err := selectedHomeSnapshot(context.Background(), rt.Store, rt.ConfigPath)
 	if err != nil {
@@ -2478,12 +2478,19 @@ func newServeCheckUpstream() *serveCheckUpstream {
 			return
 		}
 		model, _ := body["model"].(string)
-		if strings.HasPrefix(model, "fallback-") {
-			up.handleServeCheckFallbackChat(w, model, auth)
-			return
-		}
 		if body["stream"] == true {
 			up.handleServeCheckStream(w, r, body, model, auth)
+			return
+		}
+		if _, ok := body["provider_options"]; ok {
+			up.mu.Lock()
+			up.observed[r.URL.Path+" "+model] = true
+			up.mu.Unlock()
+			http.Error(w, "provider_options wrapper was forwarded", http.StatusBadRequest)
+			return
+		}
+		if strings.HasPrefix(model, "fallback-") {
+			up.handleServeCheckFallbackChat(w, model, auth)
 			return
 		}
 		if model == "invalid-json" {
@@ -2508,6 +2515,12 @@ func newServeCheckUpstream() *serveCheckUpstream {
 				return
 			}
 		}
+		if model == "provider-options" {
+			if err := validateServeCheckProviderOptions(r.URL.Path, body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
 		if body["stream"] == nil {
 			up.mu.Lock()
 			up.observed[r.URL.Path+" "+model] = true
@@ -2517,6 +2530,36 @@ func newServeCheckUpstream() *serveCheckUpstream {
 		_, _ = w.Write([]byte(`{"id":"chatcmpl_check","object":"chat.completion","created":1,"model":"deepseek-v4-pro","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"prompt_cache_hit_tokens":1,"prompt_cache_miss_tokens":99,"prompt_tokens_details":{"cached_tokens":1,"cache_write_tokens":2,"unknown_cache_marker":"raw-provider-payload"},"completion_tokens_details":{"reasoning_tokens":0},"unknown_cost_marker":"raw-provider-payload"}}`))
 	}))
 	return up
+}
+
+func validateServeCheckProviderOptions(path string, body map[string]any) error {
+	switch path {
+	case "/chat/completions":
+		thinking, ok := body["thinking"].(map[string]any)
+		if !ok || thinking["type"] != "disabled" {
+			return fmt.Errorf("missing DeepSeek thinking translation")
+		}
+		if body["reasoning_effort"] != "max" {
+			return fmt.Errorf("missing DeepSeek reasoning effort translation")
+		}
+		if _, ok := body["reasoning"]; ok {
+			return fmt.Errorf("unexpected OpenRouter reasoning for DeepSeek")
+		}
+	case "/api/v1/chat/completions":
+		reasoning, ok := body["reasoning"].(map[string]any)
+		if !ok || reasoning["effort"] != "high" || reasoning["exclude"] != true {
+			return fmt.Errorf("missing OpenRouter reasoning translation")
+		}
+		if _, ok := body["thinking"]; ok {
+			return fmt.Errorf("unexpected DeepSeek thinking for OpenRouter")
+		}
+		if _, ok := body["reasoning_effort"]; ok {
+			return fmt.Errorf("unexpected DeepSeek effort for OpenRouter")
+		}
+	default:
+		return fmt.Errorf("unexpected provider option path %s", path)
+	}
+	return nil
 }
 
 func (u *serveCheckUpstream) handleServeCheckCodexResponses(w http.ResponseWriter, r *http.Request) {
@@ -2853,6 +2896,16 @@ func (u *serveCheckUpstream) handleServeCheckStream(w http.ResponseWriter, r *ht
 	u.mu.Lock()
 	u.observed[r.URL.Path+" stream "+model] = true
 	u.mu.Unlock()
+	if _, ok := body["provider_options"]; ok {
+		http.Error(w, "provider_options wrapper was forwarded", http.StatusBadRequest)
+		return
+	}
+	if model == "stream-provider-options" {
+		if err := validateServeCheckProviderOptions(r.URL.Path, body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 	if strings.HasPrefix(model, "stream-fallback") {
 		u.recordObservedAuth(model, auth)
 	}
@@ -3010,6 +3063,9 @@ func assertUnsupportedChatNoUpstream(base, token string, body []byte, fakeUpstre
 	if bytes.Contains(respBody, []byte("in this slice")) {
 		return fmt.Errorf("unsupported %s returned slice-era wording", name)
 	}
+	if bytes.Contains(respBody, []byte(providerOptionPrivacyMarker)) {
+		return fmt.Errorf("unsupported %s leaked provider option marker", name)
+	}
 	if fakeUpstream.sawExpected(path, upstreamModel) {
 		return fmt.Errorf("unsupported %s reached upstream", name)
 	}
@@ -3058,6 +3114,7 @@ func exerciseCodexChatCheck(ctx context.Context, base, token string, fakeUpstrea
 		{name: "temperature", extra: `"temperature":0.2`},
 		{name: "top_p", extra: `"top_p":0.9`},
 		{name: "stop", extra: `"stop":"x"`},
+		{name: "provider_options", extra: `"provider_options":{"codex":{"reasoning_effort":"high"}}`},
 	} {
 		upstreamModel := "codex-unsupported-" + tc.name
 		body := []byte(fmt.Sprintf(`{"model":"codex/%s","messages":[{"role":"user","content":"check"}],%s}`, upstreamModel, tc.extra))
@@ -3931,6 +3988,44 @@ func assertLatestCodexChatRetryMetadata(ctx context.Context, store *sqlite.Store
 	return nil
 }
 
+type providerOptionInvalidCase struct {
+	name  string
+	extra string
+}
+
+const providerOptionPrivacyMarker = "provider-option-private-marker"
+
+func providerOptionsExtra(providerType string) string {
+	if providerType == "openrouter" {
+		return `"provider_options":{"openrouter":{"reasoning":{"effort":"high","exclude":true}}}`
+	}
+	return `"provider_options":{"deepseek":{"thinking":{"type":"disabled"},"reasoning_effort":"max"}}`
+}
+
+func providerOptionInvalidCases(providerType string) []providerOptionInvalidCase {
+	if providerType == "openrouter" {
+		return []providerOptionInvalidCase{
+			{name: "null", extra: `"provider_options":null`},
+			{name: "wrong-namespace", extra: `"provider_options":{"deepseek":{"thinking":{"type":"disabled"}}}`},
+			{name: "extra-namespace", extra: `"provider_options":{"openrouter":{"reasoning":{"effort":"high"}},"deepseek":{"thinking":{"type":"disabled"}}}`},
+			{name: "unknown-key", extra: `"provider_options":{"openrouter":{"provider-option-private-marker":true}}`},
+			{name: "bad-reasoning", extra: `"provider_options":{"openrouter":{"reasoning":true}}`},
+			{name: "bad-effort", extra: `"provider_options":{"openrouter":{"reasoning":{"effort":"provider-option-private-marker"}}}`},
+			{name: "bad-max-tokens", extra: `"provider_options":{"openrouter":{"reasoning":{"max_tokens":0}}}`},
+			{name: "conflicting-reasoning", extra: `"provider_options":{"openrouter":{"reasoning":{"effort":"high","max_tokens":12}}}`},
+		}
+	}
+	return []providerOptionInvalidCase{
+		{name: "null", extra: `"provider_options":null`},
+		{name: "wrong-namespace", extra: `"provider_options":{"openrouter":{"reasoning":{"effort":"high"}}}`},
+		{name: "extra-namespace", extra: `"provider_options":{"deepseek":{"thinking":{"type":"disabled"}},"openrouter":{"reasoning":{"effort":"high"}}}`},
+		{name: "unknown-key", extra: `"provider_options":{"deepseek":{"provider-option-private-marker":true}}`},
+		{name: "bad-thinking", extra: `"provider_options":{"deepseek":{"thinking":true}}`},
+		{name: "bad-thinking-type", extra: `"provider_options":{"deepseek":{"thinking":{"type":"provider-option-private-marker"}}}`},
+		{name: "bad-effort", extra: `"provider_options":{"deepseek":{"reasoning_effort":"provider-option-private-marker"}}`},
+	}
+}
+
 func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance provider.Instance, fakeUpstream *serveCheckUpstream, store *sqlite.Store) error {
 	modelID := "deepseek-v4-pro"
 	if instance.Type == "openrouter" {
@@ -3962,6 +4057,14 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 	if !fakeUpstream.sawExpected(expectedPath, "json-format") {
 		return fmt.Errorf("json response_format did not reach upstream provider=%s", instance.ID)
 	}
+	optionExtra := providerOptionsExtra(instance.Type)
+	optionBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-options", optionExtra))
+	if status, _, err := postJSON(base+"/v1/chat/completions", token, optionBody); err != nil || status != http.StatusOK {
+		return fmt.Errorf("provider_options provider=%s status=%d err=%v", instance.ID, status, err)
+	}
+	if !fakeUpstream.sawExpected(expectedPath, "provider-options") {
+		return fmt.Errorf("provider_options did not reach upstream provider=%s", instance.ID)
+	}
 	for _, tc := range []struct {
 		name  string
 		extra string
@@ -3970,13 +4073,22 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 		{name: "tool_choice", extra: `"tool_choice":null`},
 		{name: "logprobs", extra: `"logprobs":null`},
 		{name: "top_logprobs", extra: `"top_logprobs":null`},
-		{name: "provider_options", extra: `"provider_options":null`},
 	} {
 		upstreamModel := "unsupported-" + tc.name
 		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
 		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" "+tc.name); err != nil {
 			return err
 		}
+	}
+	for _, tc := range providerOptionInvalidCases(instance.Type) {
+		upstreamModel := "invalid-options-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" provider_options "+tc.name); err != nil {
+			return err
+		}
+	}
+	if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, providerOptionPrivacyMarker); err != nil {
+		return err
 	}
 	invalidBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}]}`, instance.ID+"/invalid-json"))
 	if status, err := postStatus(base+"/v1/chat/completions", token, invalidBody); err != nil || status != http.StatusBadGateway {
@@ -4032,6 +4144,13 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 	if err := assertRecordedStreamUsage(ctx, store); err != nil {
 		return err
 	}
+	optionBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/stream-provider-options", providerOptionsExtra(instance.Type)))
+	if status, _, _, _, err := postStream(base+"/v1/chat/completions", token, optionBody); err != nil || status != http.StatusOK {
+		return fmt.Errorf("stream provider_options provider=%s status=%d err=%v", instance.ID, status, err)
+	}
+	if !fakeUpstream.sawExpectedStream(expectedPath, "stream-provider-options") {
+		return fmt.Errorf("stream provider_options did not reach upstream provider=%s", instance.ID)
+	}
 	if status, err := postStatus(base+"/v1/chat/completions", token, []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream_options":{"include_usage":true}}`, model))); err != nil || status != http.StatusBadRequest {
 		return fmt.Errorf("stream_options without stream provider=%s status=%d err=%v", instance.ID, status, err)
 	}
@@ -4059,13 +4178,22 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 		{name: "tool_choice", extra: `"tool_choice":null`},
 		{name: "logprobs", extra: `"logprobs":null`},
 		{name: "top_logprobs", extra: `"top_logprobs":null`},
-		{name: "provider_options", extra: `"provider_options":null`},
 	} {
 		upstreamModel := "stream-unsupported-" + tc.name
 		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/"+upstreamModel, tc.extra))
 		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" stream "+tc.name); err != nil {
 			return err
 		}
+	}
+	for _, tc := range providerOptionInvalidCases(instance.Type) {
+		upstreamModel := "stream-invalid-options-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" stream provider_options "+tc.name); err != nil {
+			return err
+		}
+	}
+	if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, providerOptionPrivacyMarker); err != nil {
+		return err
 	}
 	preErrorBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true}}`, instance.ID+"/stream-error-before"))
 	status, _, _, raw, err := postStream(base+"/v1/chat/completions", token, preErrorBody)
@@ -4241,7 +4369,7 @@ func exerciseModelDiscoveryCheck(ctx context.Context, base, token string, instan
 			return fmt.Errorf("%s refresh changed model cache", mode)
 		}
 		if mode == "models-too-large" {
-			if err := assertModelDiscoveryErrorHealth(ctx, store, "deepseek", http.StatusOK, "upstream_body_too_large"); err != nil {
+			if err := assertAnyModelDiscoveryErrorHealth(ctx, store, http.StatusOK, "upstream_body_too_large"); err != nil {
 				return err
 			}
 		}
@@ -4863,6 +4991,25 @@ func assertModelDiscoveryErrorHealth(ctx context.Context, store *sqlite.Store, p
 	return nil
 }
 
+func assertAnyModelDiscoveryErrorHealth(ctx context.Context, store *sqlite.Store, status int, errorClass string) error {
+	var count int
+	err := store.DB.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM health_events
+		WHERE model_id = ''
+			AND event_class = 'upstream_failure'
+			AND http_status = ?
+			AND normalized_error_class = ?
+	`, status, errorClass).Scan(&count)
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return fmt.Errorf("model discovery health missing status=%d error=%s", status, errorClass)
+	}
+	return nil
+}
+
 func assertFallbackMetadataNoLeak(ctx context.Context, store *sqlite.Store) error {
 	queries := []string{
 		`SELECT COALESCE(group_concat(provider_instance_id || ' ' || model_id || ' ' || event_class || ' ' || normalized_error_class || ' ' || COALESCE(retry_after, ''), ' '), '') FROM health_events`,
@@ -5108,7 +5255,7 @@ func assertServeCheckMarkerAbsentOutsideSecrets(ctx context.Context, store *sqli
 			return err
 		}
 		if count != 0 {
-			return fmt.Errorf("serve-check oauth marker leaked outside credential secrets")
+			return fmt.Errorf("serve-check marker leaked outside credential secrets")
 		}
 	}
 	return nil

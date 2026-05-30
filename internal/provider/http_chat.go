@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -96,15 +97,18 @@ func NewHTTPChatAdapter(client *http.Client) HTTPChatAdapter {
 }
 
 func (a HTTPChatAdapter) ValidateChatRequest(instance Instance, req openai.ChatCompletionRequest) error {
-	commonUnsupported := []string{"tools", "tool_choice", "logprobs", "top_logprobs", "provider_options"}
+	commonUnsupported := []string{"tools", "tool_choice", "logprobs", "top_logprobs"}
 	switch instance.Type {
 	case "deepseek", "openrouter":
 		if err := rejectPresentFields(req, commonUnsupported...); err != nil {
 			return err
 		}
-		return validateChatResponseFormat(req)
+		if err := validateChatResponseFormat(req); err != nil {
+			return err
+		}
+		return validateProviderOptions(instance.Type, req)
 	case "codex":
-		if err := rejectPresentFields(req, append(commonUnsupported, "max_tokens", "temperature", "top_p", "stop", "response_format")...); err != nil {
+		if err := rejectPresentFields(req, append(commonUnsupported, "provider_options", "max_tokens", "temperature", "top_p", "stop", "response_format")...); err != nil {
 			return err
 		}
 		return nil
@@ -141,12 +145,174 @@ func validateChatResponseFormat(req openai.ChatCompletionRequest) error {
 	}
 }
 
+func validateProviderOptions(providerType string, req openai.ChatCompletionRequest) error {
+	if !req.HasField("provider_options") {
+		return nil
+	}
+	if req.ReasoningOptions == nil {
+		return errors.New("provider_options must be an object")
+	}
+	if len(req.ReasoningOptions) != 1 {
+		return fmt.Errorf("provider_options must contain only %s", providerType)
+	}
+	raw, ok := req.ReasoningOptions[providerType]
+	if !ok {
+		return fmt.Errorf("provider_options must contain only %s", providerType)
+	}
+	switch providerType {
+	case "deepseek":
+		return validateDeepSeekOptions(raw)
+	case "openrouter":
+		return validateOpenRouterOptions(raw)
+	default:
+		return fmt.Errorf("provider_options is not supported for %s", providerType)
+	}
+}
+
+func validateDeepSeekOptions(raw any) error {
+	opts, ok := raw.(map[string]any)
+	if !ok || opts == nil {
+		return errors.New("provider_options.deepseek must be an object")
+	}
+	if len(opts) == 0 {
+		return errors.New("provider_options.deepseek must not be empty")
+	}
+	for key, value := range opts {
+		switch key {
+		case "thinking":
+			thinking, ok := value.(map[string]any)
+			if !ok || thinking == nil {
+				return errors.New("provider_options.deepseek.thinking must be an object")
+			}
+			if len(thinking) != 1 {
+				return errors.New("provider_options.deepseek.thinking only supports type")
+			}
+			typ, ok := thinking["type"].(string)
+			if !ok {
+				return errors.New("provider_options.deepseek.thinking.type must be a string")
+			}
+			if typ != "enabled" && typ != "disabled" {
+				return errors.New("provider_options.deepseek.thinking.type is unsupported")
+			}
+		case "reasoning_effort":
+			effort, ok := value.(string)
+			if !ok {
+				return errors.New("provider_options.deepseek.reasoning_effort must be a string")
+			}
+			if effort != "high" && effort != "max" {
+				return errors.New("provider_options.deepseek.reasoning_effort is unsupported")
+			}
+		default:
+			return errors.New("provider_options.deepseek contains an unsupported field")
+		}
+	}
+	return nil
+}
+
+func validateOpenRouterOptions(raw any) error {
+	opts, ok := raw.(map[string]any)
+	if !ok || opts == nil {
+		return errors.New("provider_options.openrouter must be an object")
+	}
+	if len(opts) != 1 {
+		return errors.New("provider_options.openrouter only supports reasoning")
+	}
+	rawReasoning, ok := opts["reasoning"]
+	if !ok {
+		return errors.New("provider_options.openrouter.reasoning is required")
+	}
+	reasoning, ok := rawReasoning.(map[string]any)
+	if !ok || reasoning == nil {
+		return errors.New("provider_options.openrouter.reasoning must be an object")
+	}
+	if len(reasoning) == 0 {
+		return errors.New("provider_options.openrouter.reasoning must not be empty")
+	}
+	hasEffort := false
+	hasMaxTokens := false
+	for key, value := range reasoning {
+		switch key {
+		case "effort":
+			effort, ok := value.(string)
+			if !ok {
+				return errors.New("provider_options.openrouter.reasoning.effort must be a string")
+			}
+			if !isOpenRouterReasoningEffort(effort) {
+				return errors.New("provider_options.openrouter.reasoning.effort is unsupported")
+			}
+			hasEffort = true
+		case "max_tokens":
+			if !isPositiveJSONInteger(value) {
+				return errors.New("provider_options.openrouter.reasoning.max_tokens must be a positive integer")
+			}
+			hasMaxTokens = true
+		case "exclude", "enabled":
+			if _, ok := value.(bool); !ok {
+				return fmt.Errorf("provider_options.openrouter.reasoning.%s must be a boolean", key)
+			}
+		default:
+			return errors.New("provider_options.openrouter.reasoning contains an unsupported field")
+		}
+	}
+	if hasEffort && hasMaxTokens {
+		return errors.New("provider_options.openrouter.reasoning.effort and max_tokens are mutually exclusive")
+	}
+	return nil
+}
+
+func isOpenRouterReasoningEffort(value string) bool {
+	switch value {
+	case "xhigh", "high", "medium", "low", "minimal", "none":
+		return true
+	default:
+		return false
+	}
+}
+
+func isPositiveJSONInteger(value any) bool {
+	num, ok := value.(float64)
+	return ok && num > 0 && num <= math.MaxInt64 && math.Trunc(num) == num
+}
+
+func marshalChatCompletionsRequest(providerType string, req openai.ChatCompletionRequest, upstreamModel string) ([]byte, error) {
+	body, err := openai.MarshalUpstreamChatRequest(req, upstreamModel)
+	if err != nil {
+		return nil, err
+	}
+	if !req.HasField("provider_options") {
+		return body, nil
+	}
+	if err := validateProviderOptions(providerType, req); err != nil {
+		return nil, err
+	}
+	var out map[string]any
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, err
+	}
+	switch providerType {
+	case "deepseek":
+		opts := req.ReasoningOptions["deepseek"].(map[string]any)
+		if thinking, ok := opts["thinking"]; ok {
+			out["thinking"] = thinking
+		}
+		if effort, ok := opts["reasoning_effort"]; ok {
+			out["reasoning_effort"] = effort
+		}
+	case "openrouter":
+		opts := req.ReasoningOptions["openrouter"].(map[string]any)
+		out["reasoning"] = opts["reasoning"]
+	default:
+		return nil, fmt.Errorf("provider_options is not supported for %s", providerType)
+	}
+	return json.Marshal(out)
+}
+
 func (a HTTPChatAdapter) CompleteChat(ctx context.Context, req ChatRequest) (ChatResult, error) {
 	start := time.Now()
 	if req.Instance.Type == "codex" {
 		return a.completeCodexChat(ctx, req, start)
 	}
-	body, err := openai.MarshalUpstreamChatRequest(req.Request, req.UpstreamModel)
+	body, err := marshalChatCompletionsRequest(req.Instance.Type, req.Request, req.UpstreamModel)
 	if err != nil {
 		return ChatResult{ErrorClass: "invalid_request"}, err
 	}
@@ -535,7 +701,7 @@ func (a HTTPChatAdapter) StreamChat(ctx context.Context, req ChatRequest, sink C
 	if req.Instance.Type == "codex" {
 		return a.streamCodexChat(ctx, req, sink, start)
 	}
-	body, err := openai.MarshalUpstreamChatRequest(req.Request, req.UpstreamModel)
+	body, err := marshalChatCompletionsRequest(req.Instance.Type, req.Request, req.UpstreamModel)
 	if err != nil {
 		return ChatStreamSummary{ErrorClass: "invalid_request", CompletionStatus: "upstream_invalid"}, err
 	}

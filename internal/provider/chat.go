@@ -51,7 +51,16 @@ type ModelMetadata struct {
 	DisplayName        string
 	CapabilityFlags    string
 	ContextLength      int
+	DefaultServiceTier string
+	ServiceTiers       []ModelServiceTier
+	InputModalities    []string
 	UpdatedAt          time.Time
+}
+
+type ModelServiceTier struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
 }
 
 type APIKeyCredential struct {

@@ -235,9 +235,13 @@ func writeResponsesSSE(w http.ResponseWriter, r *http.Request, responseID string
 		itemIndex++
 	}
 	for _, item := range message.ResponsesOutputItems {
+		body, err := responseOutputItem(responseID, itemIndex, item)
+		if err != nil {
+			return err
+		}
 		if err := writeResponseSSEEvent(r.Context(), w, flusher, "response.output_item.done", map[string]any{
 			"type": "response.output_item.done",
-			"item": responseCustomToolCallItem(responseID, itemIndex, item),
+			"item": body,
 		}); err != nil {
 			return err
 		}
@@ -273,14 +277,40 @@ func responseFunctionCallItem(responseID string, index int, call map[string]any)
 	}, nil
 }
 
-func responseCustomToolCallItem(responseID string, index int, item openai.ResponsesOutputItem) map[string]any {
-	return map[string]any{
+func responseOutputItem(responseID string, index int, item openai.ResponsesOutputItem) (map[string]any, error) {
+	out := map[string]any{
 		"id":      fmt.Sprintf("%s_item_%d", responseID, index),
-		"type":    "custom_tool_call",
+		"type":    item.Type,
 		"call_id": item.CallID,
-		"name":    item.Name,
-		"input":   item.Input,
 	}
+	switch item.Type {
+	case "function_call":
+		out["name"] = item.Name
+		if item.Namespace != "" {
+			out["namespace"] = item.Namespace
+		}
+		if len(item.Arguments) > 0 {
+			out["arguments"] = item.Arguments
+		} else {
+			out["arguments"] = json.RawMessage(`{}`)
+		}
+	case "tool_search_call":
+		out["execution"] = item.Execution
+		if len(item.Arguments) > 0 {
+			out["arguments"] = item.Arguments
+		} else {
+			out["arguments"] = json.RawMessage(`{}`)
+		}
+		if len(item.Tools) > 0 {
+			out["tools"] = item.Tools
+		}
+	case "custom_tool_call":
+		out["name"] = item.Name
+		out["input"] = item.Input
+	default:
+		return nil, fmt.Errorf("unsupported responses output item %q", item.Type)
+	}
+	return out, nil
 }
 
 func writeResponseSSEEvent(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, event string, payload map[string]any) error {

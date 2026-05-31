@@ -253,10 +253,14 @@ type ChatCompletionMessageResult struct {
 }
 
 type ResponsesOutputItem struct {
-	Type   string
-	CallID string
-	Name   string
-	Input  string
+	Type      string
+	CallID    string
+	Name      string
+	Namespace string
+	Arguments json.RawMessage
+	Input     string
+	Execution string
+	Tools     []json.RawMessage
 }
 
 func MessageContentString(msg Message) (string, error) {

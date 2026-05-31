@@ -28,9 +28,11 @@ type ResponseInputItem struct {
 	Content   []ResponseContentItem
 	CallID    string
 	Name      string
+	Namespace string
 	Arguments string
 	Input     string
 	Output    string
+	Execution string
 }
 
 type ResponseContentItem struct {
@@ -222,6 +224,10 @@ func parseResponsesInputItem(raw map[string]json.RawMessage, index int) (Respons
 		return parseResponsesFunctionCallItem(raw, index, typ)
 	case "function_call_output":
 		return parseResponsesFunctionCallOutputItem(raw, index, typ)
+	case "tool_search_call":
+		return parseResponsesToolSearchCallItem(raw, index, typ)
+	case "tool_search_output":
+		return parseResponsesToolSearchOutputItem(raw, index, typ)
 	case "custom_tool_call":
 		return parseResponsesCustomToolCallItem(raw, index, typ)
 	case "custom_tool_call_output":
@@ -258,7 +264,7 @@ func parseResponsesMessageItem(raw map[string]json.RawMessage, index int, typ st
 func parseResponsesFunctionCallItem(raw map[string]json.RawMessage, index int, typ string) (ResponseInputItem, error) {
 	for key := range raw {
 		switch key {
-		case "id", "type", "call_id", "name", "arguments":
+		case "id", "type", "call_id", "name", "namespace", "arguments":
 		default:
 			return ResponseInputItem{}, fmt.Errorf("input[%d] contains unsupported fields", index)
 		}
@@ -280,11 +286,22 @@ func parseResponsesFunctionCallItem(raw map[string]json.RawMessage, index int, t
 	if !isFunctionName(name) {
 		return ResponseInputItem{}, fmt.Errorf("input[%d].name is invalid", index)
 	}
+	namespace := ""
+	if rawNamespace, ok := raw["namespace"]; ok && !isJSONNull(rawNamespace) {
+		parsed, err := requiredRawString(rawNamespace, fmt.Sprintf("input[%d].namespace", index))
+		if err != nil {
+			return ResponseInputItem{}, err
+		}
+		if parsed != "" && !isFunctionName(parsed) {
+			return ResponseInputItem{}, fmt.Errorf("input[%d].namespace is invalid", index)
+		}
+		namespace = parsed
+	}
 	arguments, err := requiredRawString(raw["arguments"], fmt.Sprintf("input[%d].arguments", index))
 	if err != nil {
 		return ResponseInputItem{}, err
 	}
-	return ResponseInputItem{Type: typ, CallID: callID, Name: name, Arguments: arguments}, nil
+	return ResponseInputItem{Type: typ, CallID: callID, Name: name, Namespace: namespace, Arguments: arguments}, nil
 }
 
 func parseResponsesFunctionCallOutputItem(raw map[string]json.RawMessage, index int, typ string) (ResponseInputItem, error) {
@@ -310,6 +327,79 @@ func parseResponsesFunctionCallOutputItem(raw map[string]json.RawMessage, index 
 		return ResponseInputItem{}, err
 	}
 	return ResponseInputItem{Type: typ, CallID: callID, Output: output}, nil
+}
+
+func parseResponsesToolSearchCallItem(raw map[string]json.RawMessage, index int, typ string) (ResponseInputItem, error) {
+	for key := range raw {
+		switch key {
+		case "id", "type", "call_id", "execution", "arguments", "status":
+		default:
+			return ResponseInputItem{}, fmt.Errorf("input[%d] contains unsupported fields", index)
+		}
+	}
+	if _, err := optionalRawString(raw["id"], fmt.Sprintf("input[%d].id", index)); err != nil {
+		return ResponseInputItem{}, err
+	}
+	callID, err := requiredRawString(raw["call_id"], fmt.Sprintf("input[%d].call_id", index))
+	if err != nil {
+		return ResponseInputItem{}, err
+	}
+	if callID == "" {
+		return ResponseInputItem{}, fmt.Errorf("input[%d].call_id is required", index)
+	}
+	execution, err := requiredRawString(raw["execution"], fmt.Sprintf("input[%d].execution", index))
+	if err != nil {
+		return ResponseInputItem{}, err
+	}
+	if execution != "client" && execution != "server" {
+		return ResponseInputItem{}, fmt.Errorf("input[%d].execution is unsupported", index)
+	}
+	if _, err := optionalRawString(raw["status"], fmt.Sprintf("input[%d].status", index)); err != nil {
+		return ResponseInputItem{}, err
+	}
+	if _, err := optionalRawObject(raw["arguments"], fmt.Sprintf("input[%d].arguments", index)); err != nil {
+		return ResponseInputItem{}, err
+	}
+	return ResponseInputItem{Type: typ, CallID: callID, Execution: execution}, nil
+}
+
+func parseResponsesToolSearchOutputItem(raw map[string]json.RawMessage, index int, typ string) (ResponseInputItem, error) {
+	for key := range raw {
+		switch key {
+		case "type", "call_id", "status", "execution", "tools":
+		default:
+			return ResponseInputItem{}, fmt.Errorf("input[%d] contains unsupported fields", index)
+		}
+	}
+	callID, err := requiredRawString(raw["call_id"], fmt.Sprintf("input[%d].call_id", index))
+	if err != nil {
+		return ResponseInputItem{}, err
+	}
+	if callID == "" {
+		return ResponseInputItem{}, fmt.Errorf("input[%d].call_id is required", index)
+	}
+	status, err := requiredRawString(raw["status"], fmt.Sprintf("input[%d].status", index))
+	if err != nil {
+		return ResponseInputItem{}, err
+	}
+	if status == "" {
+		return ResponseInputItem{}, fmt.Errorf("input[%d].status is required", index)
+	}
+	execution, err := requiredRawString(raw["execution"], fmt.Sprintf("input[%d].execution", index))
+	if err != nil {
+		return ResponseInputItem{}, err
+	}
+	if execution != "client" && execution != "server" {
+		return ResponseInputItem{}, fmt.Errorf("input[%d].execution is unsupported", index)
+	}
+	tools, err := parseResponsesTools(raw["tools"])
+	if err != nil {
+		return ResponseInputItem{}, fmt.Errorf("input[%d].tools is invalid", index)
+	}
+	if tools == nil {
+		return ResponseInputItem{}, fmt.Errorf("input[%d].tools is required", index)
+	}
+	return ResponseInputItem{Type: typ, CallID: callID, Execution: execution}, nil
 }
 
 func parseResponsesCustomToolCallItem(raw map[string]json.RawMessage, index int, typ string) (ResponseInputItem, error) {
@@ -389,7 +479,7 @@ func validateResponsesToolTranscript(items []ResponseInputItem) error {
 	acceptingOutputs := false
 	for i, item := range items {
 		switch item.Type {
-		case "function_call", "custom_tool_call":
+		case "function_call", "custom_tool_call", "tool_search_call":
 			if acceptingOutputs && len(pending) != 0 {
 				return fmt.Errorf("input[%d].type cannot appear before all function_call_output items", i)
 			}
@@ -401,7 +491,7 @@ func validateResponsesToolTranscript(items []ResponseInputItem) error {
 			}
 			calls[item.CallID] = callInfo{index: i, typ: item.Type}
 			pending[item.CallID] = true
-		case "function_call_output", "custom_tool_call_output":
+		case "function_call_output", "custom_tool_call_output", "tool_search_output":
 			if _, exists := outputs[item.CallID]; exists {
 				return fmt.Errorf("input[%d].call_id output is duplicated", i)
 			}
@@ -409,7 +499,7 @@ func validateResponsesToolTranscript(items []ResponseInputItem) error {
 			if !exists {
 				return fmt.Errorf("input[%d].call_id does not match a prior function_call", i)
 			}
-			if (item.Type == "function_call_output") != (call.typ == "function_call") {
+			if !responsesOutputMatchesCall(item.Type, call.typ) {
 				return fmt.Errorf("input[%d].call_id output type does not match prior call", i)
 			}
 			if _, exists := pending[item.CallID]; !exists {
@@ -430,6 +520,19 @@ func validateResponsesToolTranscript(items []ResponseInputItem) error {
 		}
 	}
 	return nil
+}
+
+func responsesOutputMatchesCall(outputType, callType string) bool {
+	switch outputType {
+	case "function_call_output":
+		return callType == "function_call"
+	case "custom_tool_call_output":
+		return callType == "custom_tool_call"
+	case "tool_search_output":
+		return callType == "tool_search_call"
+	default:
+		return false
+	}
 }
 
 func parseResponsesContent(raw json.RawMessage, inputIndex int) ([]ResponseContentItem, error) {
@@ -534,6 +637,13 @@ func responsesToolsToChatTools(tools []json.RawMessage, providerType string) ([]
 		if !ok || typ == "" {
 			return nil, nil, fmt.Errorf("tools[%d].type is required", i)
 		}
+		if providerType == "codex" {
+			if err := validateCodexResponsesTool(tool, i); err != nil {
+				return nil, nil, err
+			}
+			codexRaw = append(codexRaw, rawTool)
+			continue
+		}
 		if typ != "function" {
 			continue
 		}
@@ -552,7 +662,7 @@ func responsesToolsToChatTools(tools []json.RawMessage, providerType string) ([]
 			}
 			deferLoadingValue = value
 		}
-		if providerType != "codex" && deferLoadingValue {
+		if deferLoadingValue {
 			continue
 		}
 		if strict, ok := tool["strict"]; ok {
@@ -560,7 +670,7 @@ func responsesToolsToChatTools(tools []json.RawMessage, providerType string) ([]
 			if !ok {
 				return nil, nil, fmt.Errorf("tools[%d].strict must be a boolean", i)
 			}
-			if providerType != "codex" && value {
+			if value {
 				continue
 			}
 		}
@@ -597,9 +707,6 @@ func responsesToolsToChatTools(tools []json.RawMessage, providerType string) ([]
 			if value {
 				return nil, nil, fmt.Errorf("tools[%d].strict is unsupported", i)
 			}
-			if providerType == "codex" {
-				function["strict"] = value
-			}
 		}
 		if deferLoadingValue {
 			continue
@@ -608,11 +715,58 @@ func responsesToolsToChatTools(tools []json.RawMessage, providerType string) ([]
 			"type":     "function",
 			"function": function,
 		})
-		if providerType == "codex" {
-			codexRaw = append(codexRaw, rawTool)
-		}
 	}
 	return out, codexRaw, nil
+}
+
+func validateCodexResponsesTool(tool map[string]any, index int) error {
+	typ, _ := tool["type"].(string)
+	switch typ {
+	case "function":
+		if name, _ := tool["name"].(string); name == "" {
+			return fmt.Errorf("tools[%d].name is required", index)
+		} else if !isFunctionName(name) {
+			return fmt.Errorf("tools[%d].name is invalid", index)
+		}
+		if description, ok := tool["description"]; ok {
+			if _, ok := description.(string); !ok {
+				return fmt.Errorf("tools[%d].description must be a string", index)
+			}
+		}
+		if parameters, ok := tool["parameters"]; ok {
+			if _, ok := parameters.(map[string]any); !ok {
+				return fmt.Errorf("tools[%d].parameters must be an object", index)
+			}
+		}
+	case "namespace":
+		if name, _ := tool["name"].(string); name == "" {
+			return fmt.Errorf("tools[%d].name is required", index)
+		} else if !isFunctionName(name) {
+			return fmt.Errorf("tools[%d].name is invalid", index)
+		}
+		children, ok := tool["tools"].([]any)
+		if !ok {
+			return fmt.Errorf("tools[%d].tools must be an array", index)
+		}
+		for childIndex, child := range children {
+			childTool, ok := child.(map[string]any)
+			if !ok {
+				return fmt.Errorf("tools[%d].tools[%d] must be an object", index, childIndex)
+			}
+			if typ, _ := childTool["type"].(string); typ != "function" {
+				return fmt.Errorf("tools[%d].tools[%d].type is unsupported", index, childIndex)
+			}
+			if name, _ := childTool["name"].(string); name == "" {
+				return fmt.Errorf("tools[%d].tools[%d].name is required", index, childIndex)
+			} else if !isFunctionName(name) {
+				return fmt.Errorf("tools[%d].tools[%d].name is invalid", index, childIndex)
+			}
+		}
+	default:
+		// Codex uses Responses-native hosted and custom tool families. Keep
+		// ilonasin out of the business of second-guessing those schemas.
+	}
+	return nil
 }
 
 func decodeJSONObjectUseNumber(raw json.RawMessage) (map[string]any, error) {
@@ -653,7 +807,7 @@ func (r ResponsesRequest) ToChatCompletionRequest(providerType string) (ChatComp
 	if providerType == "codex" {
 		for _, item := range r.Input {
 			switch item.Type {
-			case "message", "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output":
+			case "message", "function_call", "function_call_output", "tool_search_call", "tool_search_output", "custom_tool_call", "custom_tool_call_output":
 			default:
 				return ChatCompletionRequest{}, errors.New("input contains unsupported Codex Responses item")
 			}
@@ -772,6 +926,9 @@ func responsesInputToChatMessages(instructions string, input []ResponseInputItem
 			calls := []map[string]any{}
 			for ; i < len(input) && input[i].Type == "function_call"; i++ {
 				call := input[i]
+				if call.Namespace != "" {
+					return nil, fmt.Errorf("input[%d].namespace is unsupported", i)
+				}
 				calls = append(calls, map[string]any{
 					"id":   call.CallID,
 					"type": "function",

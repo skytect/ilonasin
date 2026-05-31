@@ -239,6 +239,9 @@ func normalizeCodexModels(instance Instance, body []byte) ([]ModelMetadata, erro
 			meta.DisplayName = safeDisplayName(name)
 		}
 		meta.ContextLength = safeInt(item["context_window"])
+		meta.DefaultServiceTier = safeCodexServiceTierID(codexStringField(item, "default_service_tier"))
+		meta.ServiceTiers = codexServiceTiers(item)
+		meta.InputModalities = codexInputModalities(item)
 		models = append(models, meta)
 	}
 	if len(models) == 0 {
@@ -278,13 +281,79 @@ func codexCapabilityFlags(item map[string]any) string {
 }
 
 func hasCodexServiceTier(item map[string]any) bool {
+	return len(codexServiceTiers(item)) > 0
+}
+
+func codexServiceTiers(item map[string]any) []ModelServiceTier {
+	var out []ModelServiceTier
+	seen := map[string]bool{}
 	for _, raw := range codexArrayField(item, "service_tiers") {
 		tier, ok := raw.(map[string]any)
 		if !ok {
 			continue
 		}
-		switch codexStringField(tier, "id") {
-		case "priority", "flex":
+		id := safeCodexServiceTierID(codexStringField(tier, "id"))
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		switch id {
+		case "priority":
+			out = append(out, ModelServiceTier{
+				ID:          "priority",
+				Name:        "Fast",
+				Description: "1.5x speed, increased usage",
+			})
+		case "flex":
+			out = append(out, ModelServiceTier{
+				ID:          "flex",
+				Name:        "flex",
+				Description: "Flexible inference tier",
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].ID < out[j].ID
+	})
+	return out
+}
+
+func safeCodexServiceTierID(value string) string {
+	switch value {
+	case "priority", "flex":
+		return value
+	default:
+		return ""
+	}
+}
+
+func codexInputModalities(item map[string]any) []string {
+	if _, ok := item["input_modalities"]; !ok {
+		return []string{"text", "image"}
+	}
+	seen := map[string]bool{}
+	for _, raw := range codexArrayField(item, "input_modalities") {
+		value, ok := raw.(string)
+		if !ok {
+			continue
+		}
+		switch value {
+		case "text", "image":
+			seen[value] = true
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for _, value := range []string{"text", "image"} {
+		if seen[value] {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func containsString(values []string, needle string) bool {
+	for _, value := range values {
+		if value == needle {
 			return true
 		}
 	}
@@ -292,16 +361,7 @@ func hasCodexServiceTier(item map[string]any) bool {
 }
 
 func hasCodexVisionCapability(item map[string]any) bool {
-	if _, ok := item["input_modalities"]; !ok {
-		return true
-	}
-	for _, raw := range codexArrayField(item, "input_modalities") {
-		value, ok := raw.(string)
-		if ok && value == "image" {
-			return true
-		}
-	}
-	return false
+	return containsString(codexInputModalities(item), "image")
 }
 
 func codexStringField(item map[string]any, key string) string {

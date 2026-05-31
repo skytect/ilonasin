@@ -224,6 +224,7 @@ type codexResponseItem struct {
 	Role      string             `json:"role,omitempty"`
 	Content   []codexContentItem `json:"content,omitempty"`
 	Name      string             `json:"name,omitempty"`
+	Namespace string             `json:"namespace,omitempty"`
 	Arguments string             `json:"arguments,omitempty"`
 	CallID    string             `json:"call_id,omitempty"`
 	Output    string             `json:"output,omitempty"`
@@ -586,6 +587,7 @@ type codexResponseParseState struct {
 	sawItemDoneText bool
 	sawTextDoneText bool
 	toolCalls       []map[string]any
+	outputItems     []openai.ResponsesOutputItem
 	toolState       codexResponseToolState
 	customToolState codexResponseCustomToolState
 	usage           openai.Usage
@@ -601,6 +603,7 @@ type codexResponseToolState struct {
 type codexResponseToolCall struct {
 	CallID    string
 	Name      string
+	Namespace string
 	Arguments strings.Builder
 }
 
@@ -685,7 +688,7 @@ func (state *codexResponseParseState) codexResponsesResult() codexResponsesResul
 	return codexResponsesResult{
 		Text:        codexFinalText(state.itemDoneText, state.textDoneText, state.deltaText, state.sawItemDoneText, state.sawTextDoneText),
 		ToolCalls:   state.toolCalls,
-		OutputItems: state.customToolItems(),
+		OutputItems: append(state.outputItems, state.customToolItems()...),
 		Usage:       state.usage,
 	}
 }
@@ -697,6 +700,12 @@ func (state *codexResponseParseState) aggregateBytes() int {
 	}
 	for _, call := range state.customToolState.calls {
 		total += call.Input.Len()
+	}
+	for _, item := range state.outputItems {
+		total += len(item.Arguments)
+		for _, tool := range item.Tools {
+			total += len(tool)
+		}
 	}
 	return total
 }
@@ -729,14 +738,17 @@ func handleCodexEvent(data []byte, state *codexResponseParseState) error {
 		CallID    string `json:"call_id"`
 		Arguments string `json:"arguments"`
 		Item      *struct {
-			ID        string `json:"id"`
-			Type      string `json:"type"`
-			Role      string `json:"role"`
-			CallID    string `json:"call_id"`
-			Name      string `json:"name"`
-			Namespace string `json:"namespace"`
-			Arguments string `json:"arguments"`
-			Input     string `json:"input"`
+			ID        string            `json:"id"`
+			Type      string            `json:"type"`
+			Role      string            `json:"role"`
+			CallID    string            `json:"call_id"`
+			Name      string            `json:"name"`
+			Namespace string            `json:"namespace"`
+			Arguments json.RawMessage   `json:"arguments"`
+			Execution string            `json:"execution"`
+			Status    string            `json:"status"`
+			Input     string            `json:"input"`
+			Tools     []json.RawMessage `json:"tools"`
 			Content   []struct {
 				Type string `json:"type"`
 				Text string `json:"text"`
@@ -774,7 +786,9 @@ func handleCodexEvent(data []byte, state *codexResponseParseState) error {
 		}
 		switch event.Item.Type {
 		case "function_call":
-			return state.addCodexFunctionCall(codexToolCallKey(event.Item.ID, event.Item.CallID), event.Item.CallID, event.Item.Name, event.Item.Namespace, "")
+			return state.addCodexFunctionCall(codexToolCallKey(event.Item.ID, event.Item.CallID), event.Item.CallID, event.Item.Name, event.Item.Namespace, nil)
+		case "tool_search_call":
+			return nil
 		case "custom_tool_call":
 			return state.addCodexCustomToolCall(event.Item.ID, event.Item.CallID, event.Item.Name, event.Item.Input)
 		case "message", "reasoning":
@@ -798,6 +812,8 @@ func handleCodexEvent(data []byte, state *codexResponseParseState) error {
 				return err
 			}
 			return state.emitCodexFunctionCall(codexToolCallKey(event.Item.ID, event.Item.CallID))
+		case "tool_search_call":
+			return state.addCodexToolSearchCall(event.Item.CallID, event.Item.Execution, event.Item.Arguments, event.Item.Tools)
 		case "custom_tool_call":
 			return state.finishCodexCustomToolCall(event.Item.ID, event.Item.CallID, event.Item.Name, event.Item.Input)
 		case "message":
@@ -857,10 +873,7 @@ func handleCodexEvent(data []byte, state *codexResponseParseState) error {
 	return nil
 }
 
-func (state *codexResponseParseState) addCodexFunctionCall(key, callID, name, namespace, arguments string) error {
-	if namespace != "" {
-		return codexEventFailure{class: "upstream_invalid_response"}
-	}
+func (state *codexResponseParseState) addCodexFunctionCall(key, callID, name, namespace string, arguments json.RawMessage) error {
 	if key == "" || callID == "" || name == "" {
 		return fmt.Errorf("invalid codex function_call")
 	}
@@ -870,15 +883,15 @@ func (state *codexResponseParseState) addCodexFunctionCall(key, callID, name, na
 	}
 	call := state.toolState.calls[key]
 	if call == nil {
-		call = &codexResponseToolCall{CallID: callID, Name: name}
+		call = &codexResponseToolCall{CallID: callID, Name: name, Namespace: namespace}
 		state.toolState.calls[key] = call
 		state.toolState.order = append(state.toolState.order, key)
-	} else if call.CallID != callID || call.Name != name {
+	} else if call.CallID != callID || call.Name != name || call.Namespace != namespace {
 		return fmt.Errorf("conflicting codex function_call")
 	}
-	if arguments != "" {
+	if len(arguments) != 0 && !bytes.Equal(bytes.TrimSpace(arguments), []byte("null")) {
 		call.Arguments.Reset()
-		call.Arguments.WriteString(arguments)
+		call.Arguments.Write(bytes.TrimSpace(arguments))
 	}
 	return nil
 }
@@ -923,12 +936,68 @@ func (state *codexResponseParseState) emitCodexFunctionCall(key string) error {
 	if call == nil {
 		return fmt.Errorf("missing codex function_call")
 	}
+	if call.Namespace != "" {
+		state.toolState.emitted[key] = true
+		return state.addCodexResponsesFunctionCallItem(call)
+	}
 	out, err := codexToolCall(call.CallID, call.Name, call.Arguments.String())
 	if err != nil {
 		return err
 	}
 	state.toolCalls = append(state.toolCalls, out)
 	state.toolState.emitted[key] = true
+	return nil
+}
+
+func (state *codexResponseParseState) addCodexResponsesFunctionCallItem(call *codexResponseToolCall) error {
+	if call == nil || call.CallID == "" || call.Name == "" {
+		return fmt.Errorf("invalid codex function_call")
+	}
+	arguments := json.RawMessage(call.Arguments.String())
+	if len(bytes.TrimSpace(arguments)) == 0 {
+		arguments = json.RawMessage(`"{}"`)
+	} else if bytes.TrimSpace(arguments)[0] != '"' {
+		body, err := json.Marshal(call.Arguments.String())
+		if err != nil {
+			return err
+		}
+		arguments = body
+	}
+	stateOutput := openai.ResponsesOutputItem{
+		Type:      "function_call",
+		CallID:    call.CallID,
+		Name:      call.Name,
+		Namespace: call.Namespace,
+		Arguments: arguments,
+	}
+	state.outputItem(stateOutput)
+	return nil
+}
+
+func (state *codexResponseParseState) outputItem(item openai.ResponsesOutputItem) {
+	state.outputItems = append(state.outputItems, item)
+}
+
+func (state *codexResponseParseState) addCodexToolSearchCall(callID, execution string, arguments json.RawMessage, tools []json.RawMessage) error {
+	if callID == "" {
+		return codexEventFailure{class: "upstream_invalid_response"}
+	}
+	if execution == "" {
+		execution = "client"
+	}
+	if execution != "client" && execution != "server" {
+		return codexEventFailure{class: "upstream_invalid_response"}
+	}
+	if len(bytes.TrimSpace(arguments)) == 0 {
+		arguments = json.RawMessage(`{}`)
+	}
+	state.outputItem(openai.ResponsesOutputItem{
+		Type:      "tool_search_call",
+		CallID:    callID,
+		Arguments: json.RawMessage(bytes.TrimSpace(arguments)),
+		Execution: execution,
+		Tools:     tools,
+	})
 	return nil
 }
 
@@ -1668,7 +1737,7 @@ func unsupportedCodexToolEvent(typ string) bool {
 
 func unsupportedCodexOutputItem(typ string) bool {
 	typ = strings.ToLower(typ)
-	if typ == "custom_tool_call" {
+	if typ == "custom_tool_call" || typ == "tool_search_call" {
 		return false
 	}
 	return codexToolEvent(typ)

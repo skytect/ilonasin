@@ -2479,7 +2479,9 @@ func newServeCheckUpstream() *serveCheckUpstream {
 			return
 		}
 		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		dec := json.NewDecoder(r.Body)
+		dec.UseNumber()
+		if err := dec.Decode(&body); err != nil {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
@@ -2552,6 +2554,12 @@ func newServeCheckUpstream() *serveCheckUpstream {
 				return
 			}
 		}
+		if strings.HasPrefix(model, "advanced-sampling-") {
+			if err := validateServeCheckAdvancedSampling(r.URL.Path, model, body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
 		if body["stream"] == nil {
 			up.mu.Lock()
 			up.observed[r.URL.Path+" "+model] = true
@@ -2606,14 +2614,14 @@ func validateServeCheckProviderOptions(path string, body map[string]any) error {
 func validateServeCheckMaxCompletionTokens(path string, body map[string]any) error {
 	switch path {
 	case "/chat/completions":
-		if body["max_tokens"] != float64(2) {
+		if !jsonNumberEquals(body["max_tokens"], "2") {
 			return fmt.Errorf("missing DeepSeek max_tokens translation")
 		}
 		if _, ok := body["max_completion_tokens"]; ok {
 			return fmt.Errorf("unexpected DeepSeek max_completion_tokens")
 		}
 	case "/api/v1/chat/completions":
-		if body["max_completion_tokens"] != float64(2) {
+		if !jsonNumberEquals(body["max_completion_tokens"], "2") {
 			return fmt.Errorf("missing OpenRouter max_completion_tokens")
 		}
 		if _, ok := body["max_tokens"]; ok {
@@ -2625,6 +2633,11 @@ func validateServeCheckMaxCompletionTokens(path string, body map[string]any) err
 	return nil
 }
 
+func jsonNumberEquals(value any, want string) bool {
+	num, ok := value.(json.Number)
+	return ok && num.String() == want
+}
+
 func validateServeCheckSamplingPenalties(path, model string, body map[string]any) error {
 	if path != "/api/v1/chat/completions" {
 		return fmt.Errorf("sampling penalties reached unsupported provider")
@@ -2633,19 +2646,61 @@ func validateServeCheckSamplingPenalties(path, model string, body map[string]any
 	frequency, hasFrequency := body["frequency_penalty"]
 	switch model {
 	case "sampling-penalty-presence":
-		if presence != penaltyPresenceMarkerValue || hasFrequency {
+		if !jsonNumberEquals(presence, "1.75") || hasFrequency {
 			return fmt.Errorf("invalid presence penalty forwarding")
 		}
 	case "sampling-penalty-frequency":
-		if frequency != penaltyFrequencyMarkerValue || hasPresence {
+		if !jsonNumberEquals(frequency, "-1.25") || hasPresence {
 			return fmt.Errorf("invalid frequency penalty forwarding")
 		}
 	case "sampling-penalty-both":
-		if presence != float64(2) || frequency != float64(-2) {
+		if !jsonNumberEquals(presence, "2") || !jsonNumberEquals(frequency, "-2") {
 			return fmt.Errorf("invalid combined penalty forwarding")
 		}
 	default:
 		return fmt.Errorf("unexpected sampling penalty model")
+	}
+	return nil
+}
+
+func validateServeCheckAdvancedSampling(path, model string, body map[string]any) error {
+	if path != "/api/v1/chat/completions" {
+		return fmt.Errorf("advanced sampling reached unsupported provider")
+	}
+	switch model {
+	case "advanced-sampling-all":
+		return validateOnlyAdvancedSamplingFields(body, map[string]string{
+			"top_k":              "9223372036854775807",
+			"min_p":              "0.125",
+			"top_a":              "1.0",
+			"repetition_penalty": "2.0",
+			"seed":               "-9223372036854775808",
+		})
+	case "advanced-sampling-seed-max":
+		return validateOnlyAdvancedSamplingFields(body, map[string]string{"seed": "9223372036854775807"})
+	case "advanced-sampling-top-k-zero":
+		return validateOnlyAdvancedSamplingFields(body, map[string]string{"top_k": "0"})
+	}
+	for _, field := range advancedSamplingFields() {
+		if model == "advanced-sampling-"+field {
+			return validateOnlyAdvancedSamplingFields(body, map[string]string{field: advancedSamplingExpectedValue(field)})
+		}
+	}
+	return fmt.Errorf("unexpected advanced sampling model")
+}
+
+func validateOnlyAdvancedSamplingFields(body map[string]any, want map[string]string) error {
+	for field, value := range want {
+		if !jsonNumberEquals(body[field], value) {
+			return fmt.Errorf("invalid advanced sampling forwarding")
+		}
+	}
+	for _, field := range advancedSamplingFields() {
+		if _, expected := want[field]; !expected {
+			if _, ok := body[field]; ok {
+				return fmt.Errorf("unexpected advanced sampling field")
+			}
+		}
 	}
 	return nil
 }
@@ -2946,6 +3001,7 @@ func (u *serveCheckUpstream) handleServeCheckModels(w http.ResponseWriter, r *ht
 	}
 	if tooLarge {
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", provider.MaxUpstreamModelsBodyBytes+1))
 		_, _ = w.Write([]byte(strings.Repeat("x", int(provider.MaxUpstreamModelsBodyBytes)+1)))
 		return
 	}
@@ -3049,6 +3105,13 @@ func (u *serveCheckUpstream) handleServeCheckStream(w http.ResponseWriter, r *ht
 	if strings.HasPrefix(model, "stream-sampling-penalty-") {
 		checkModel := strings.TrimPrefix(model, "stream-")
 		if err := validateServeCheckSamplingPenalties(r.URL.Path, checkModel, body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	if strings.HasPrefix(model, "stream-advanced-sampling-") {
+		checkModel := strings.TrimPrefix(model, "stream-")
+		if err := validateServeCheckAdvancedSampling(r.URL.Path, checkModel, body); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -3220,10 +3283,10 @@ func assertUnsupportedChatNoUpstream(base, token string, body []byte, fakeUpstre
 	if bytes.Contains(respBody, []byte("in this slice")) {
 		return fmt.Errorf("unsupported %s returned slice-era wording", name)
 	}
-	if strings.Contains(name, "sampling_penalty") && (bytes.Contains(respBody, []byte("invalid request JSON")) || bytes.Contains(respBody, []byte("cannot unmarshal"))) {
+	if (strings.Contains(name, "sampling_penalty") || strings.Contains(name, "advanced_sampling")) && (bytes.Contains(respBody, []byte("invalid request JSON")) || bytes.Contains(respBody, []byte("cannot unmarshal"))) {
 		return fmt.Errorf("unsupported %s returned raw decode wording", name)
 	}
-	for _, marker := range []string{providerOptionPrivacyMarker, responseFormatPrivacyMarker, responseFormatSchemaMarker, "1.75", "-1.25", penaltyOverflowMarker, "2.01", "-2.01", "2.0000000000000001", "-2.0000000000000001", "2.000000000000000000000000000000000000000000000000000000000000000000000000000000001"} {
+	for _, marker := range []string{providerOptionPrivacyMarker, responseFormatPrivacyMarker, responseFormatSchemaMarker, "1.75", "-1.25", penaltyOverflowMarker, "2.01", "-2.01", "2.0000000000000001", "-2.0000000000000001", "2.000000000000000000000000000000000000000000000000000000000000000000000000000000001", "9223372036854775807", "-9223372036854775808", "9223372036854775808", "-9223372036854775809", "1.0000000000000001", "2.0000000000000001"} {
 		if bytes.Contains(respBody, []byte(marker)) {
 			return fmt.Errorf("unsupported %s leaked private marker", name)
 		}
@@ -3277,6 +3340,11 @@ func exerciseCodexChatCheck(ctx context.Context, base, token string, fakeUpstrea
 		{name: "top_p", extra: `"top_p":0.9`},
 		{name: "presence_penalty", extra: fmt.Sprintf(`"presence_penalty":%g`, penaltyPresenceMarkerValue)},
 		{name: "frequency_penalty", extra: fmt.Sprintf(`"frequency_penalty":%g`, penaltyFrequencyMarkerValue)},
+		{name: "top_k", extra: advancedSamplingExtra("top_k")},
+		{name: "min_p", extra: advancedSamplingExtra("min_p")},
+		{name: "top_a", extra: advancedSamplingExtra("top_a")},
+		{name: "repetition_penalty", extra: advancedSamplingExtra("repetition_penalty")},
+		{name: "seed", extra: advancedSamplingExtra("seed")},
 		{name: "stop", extra: `"stop":"x"`},
 		{name: "provider_options", extra: `"provider_options":{"codex":{"reasoning_effort":"high"}}`},
 	} {
@@ -4167,12 +4235,43 @@ type samplingPenaltyInvalidCase struct {
 	extra string
 }
 
+type advancedSamplingInvalidCase struct {
+	name  string
+	extra string
+}
+
 const providerOptionPrivacyMarker = "provider-option-private-marker"
 const responseFormatPrivacyMarker = "response-format-private-marker"
 const responseFormatSchemaMarker = "schema-secret-marker"
 const penaltyPresenceMarkerValue = 1.75
 const penaltyFrequencyMarkerValue = -1.25
 const penaltyOverflowMarker = "1e309"
+const advancedSamplingOverflowMarker = "1e309"
+
+func advancedSamplingFields() []string {
+	return []string{"top_k", "min_p", "top_a", "repetition_penalty", "seed"}
+}
+
+func advancedSamplingExpectedValue(field string) string {
+	switch field {
+	case "top_k":
+		return "7"
+	case "min_p":
+		return "0.125"
+	case "top_a":
+		return "0.875"
+	case "repetition_penalty":
+		return "1.5"
+	case "seed":
+		return "-42"
+	default:
+		return ""
+	}
+}
+
+func advancedSamplingExtra(field string) string {
+	return fmt.Sprintf(`%q:%s`, field, advancedSamplingExpectedValue(field))
+}
 
 func providerOptionsExtra(providerType string) string {
 	if providerType == "openrouter" {
@@ -4302,6 +4401,68 @@ func samplingPenaltyUnsupportedCases(providerType string) []samplingPenaltyInval
 	}
 }
 
+func advancedSamplingInvalidCases() []advancedSamplingInvalidCase {
+	return []advancedSamplingInvalidCase{
+		{name: "top-k-null", extra: `"top_k":null`},
+		{name: "top-k-string", extra: `"top_k":"7"`},
+		{name: "top-k-bool", extra: `"top_k":true`},
+		{name: "top-k-object", extra: `"top_k":{"value":7}`},
+		{name: "top-k-array", extra: `"top_k":[7]`},
+		{name: "top-k-negative", extra: `"top_k":-1`},
+		{name: "top-k-float", extra: `"top_k":1.5`},
+		{name: "top-k-exponent", extra: `"top_k":1e3`},
+		{name: "top-k-high", extra: `"top_k":9223372036854775808`},
+		{name: "min-p-null", extra: `"min_p":null`},
+		{name: "min-p-string", extra: `"min_p":"0.125"`},
+		{name: "min-p-bool", extra: `"min_p":false`},
+		{name: "min-p-object", extra: `"min_p":{"value":0.1}`},
+		{name: "min-p-array", extra: `"min_p":[0.1]`},
+		{name: "min-p-low", extra: `"min_p":-0.0000001`},
+		{name: "min-p-high", extra: `"min_p":1.0000001`},
+		{name: "min-p-high-rounding-edge", extra: `"min_p":1.0000000000000001`},
+		{name: "min-p-high-long-rounding-edge", extra: `"min_p":1.` + strings.Repeat("0", 80) + `1`},
+		{name: "min-p-overflow", extra: `"min_p":1e309`},
+		{name: "top-a-null", extra: `"top_a":null`},
+		{name: "top-a-string", extra: `"top_a":"0.875"`},
+		{name: "top-a-bool", extra: `"top_a":true`},
+		{name: "top-a-object", extra: `"top_a":{"value":0.1}`},
+		{name: "top-a-array", extra: `"top_a":[0.1]`},
+		{name: "top-a-low", extra: `"top_a":-0.0000001`},
+		{name: "top-a-high", extra: `"top_a":1.0000001`},
+		{name: "top-a-overflow", extra: `"top_a":1e309`},
+		{name: "repetition-null", extra: `"repetition_penalty":null`},
+		{name: "repetition-string", extra: `"repetition_penalty":"1.5"`},
+		{name: "repetition-bool", extra: `"repetition_penalty":false`},
+		{name: "repetition-object", extra: `"repetition_penalty":{"value":1.5}`},
+		{name: "repetition-array", extra: `"repetition_penalty":[1.5]`},
+		{name: "repetition-low", extra: `"repetition_penalty":-0.0000001`},
+		{name: "repetition-high", extra: `"repetition_penalty":2.0000001`},
+		{name: "repetition-high-rounding-edge", extra: `"repetition_penalty":2.0000000000000001`},
+		{name: "repetition-high-long-rounding-edge", extra: `"repetition_penalty":2.` + strings.Repeat("0", 80) + `1`},
+		{name: "repetition-overflow", extra: `"repetition_penalty":1e309`},
+		{name: "seed-null", extra: `"seed":null`},
+		{name: "seed-string", extra: `"seed":"-42"`},
+		{name: "seed-bool", extra: `"seed":true`},
+		{name: "seed-object", extra: `"seed":{"value":42}`},
+		{name: "seed-array", extra: `"seed":[42]`},
+		{name: "seed-float", extra: `"seed":1.5`},
+		{name: "seed-exponent", extra: `"seed":1e3`},
+		{name: "seed-low", extra: `"seed":-9223372036854775809`},
+		{name: "seed-high", extra: `"seed":9223372036854775808`},
+	}
+}
+
+func advancedSamplingUnsupportedCases(providerType string) []advancedSamplingInvalidCase {
+	if providerType == "openrouter" {
+		return nil
+	}
+	cases := make([]advancedSamplingInvalidCase, 0, len(advancedSamplingFields()))
+	for _, field := range advancedSamplingFields() {
+		cases = append(cases, advancedSamplingInvalidCase{name: field, extra: advancedSamplingExtra(field)})
+	}
+	return cases
+}
+
 func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance provider.Instance, fakeUpstream *serveCheckUpstream, store *sqlite.Store) error {
 	modelID := "deepseek-v4-pro"
 	if instance.Type == "openrouter" {
@@ -4413,6 +4574,41 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 				return fmt.Errorf("sampling penalties did not reach upstream provider=%s model=%s", instance.ID, tc.model)
 			}
 		}
+		for _, field := range advancedSamplingFields() {
+			modelName := "advanced-sampling-" + field
+			body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+modelName, advancedSamplingExtra(field)))
+			status, respBody, err := postJSON(base+"/v1/chat/completions", token, body)
+			if err != nil || status != http.StatusOK {
+				return fmt.Errorf("advanced sampling provider=%s model=%s status=%d err=%v", instance.ID, modelName, status, err)
+			}
+			if bytes.Contains(respBody, []byte("9223372036854775807")) || bytes.Contains(respBody, []byte("-9223372036854775808")) {
+				return fmt.Errorf("advanced sampling echoed private marker")
+			}
+			if !fakeUpstream.sawExpected(expectedPath, modelName) {
+				return fmt.Errorf("advanced sampling did not reach upstream provider=%s model=%s", instance.ID, modelName)
+			}
+		}
+		for _, tc := range []struct {
+			model string
+			extra string
+		}{
+			{"advanced-sampling-all", `"top_k":9223372036854775807,"min_p":0.125,"top_a":1.0,"repetition_penalty":2.0,"seed":-9223372036854775808`},
+			{"advanced-sampling-seed-max", `"seed":9223372036854775807`},
+			{"advanced-sampling-top-k-zero", `"top_k":0`},
+			{"advanced-sampling-all", `"top_k":9223372036854775807,"min_p":0.125,"top_a":1.0,"repetition_penalty":2.0,"seed":-9223372036854775808,"max_completion_tokens":2,` + providerOptionsExtra("openrouter")},
+		} {
+			body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+tc.model, tc.extra))
+			status, respBody, err := postJSON(base+"/v1/chat/completions", token, body)
+			if err != nil || status != http.StatusOK {
+				return fmt.Errorf("advanced sampling provider=%s model=%s status=%d err=%v", instance.ID, tc.model, status, err)
+			}
+			if bytes.Contains(respBody, []byte("9223372036854775807")) || bytes.Contains(respBody, []byte("-9223372036854775808")) {
+				return fmt.Errorf("advanced sampling echoed private marker")
+			}
+			if !fakeUpstream.sawExpected(expectedPath, tc.model) {
+				return fmt.Errorf("advanced sampling did not reach upstream provider=%s model=%s", instance.ID, tc.model)
+			}
+		}
 	}
 	for _, tc := range []struct {
 		name  string
@@ -4457,10 +4653,24 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 			return err
 		}
 	}
+	for _, tc := range advancedSamplingInvalidCases() {
+		upstreamModel := "invalid-advanced-sampling-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" advanced_sampling "+tc.name); err != nil {
+			return err
+		}
+	}
 	for _, tc := range samplingPenaltyUnsupportedCases(instance.Type) {
 		upstreamModel := "unsupported-penalty-" + tc.name
 		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
 		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" sampling_penalty unsupported "+tc.name); err != nil {
+			return err
+		}
+	}
+	for _, tc := range advancedSamplingUnsupportedCases(instance.Type) {
+		upstreamModel := "unsupported-advanced-sampling-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" advanced_sampling unsupported "+tc.name); err != nil {
 			return err
 		}
 	}
@@ -4472,7 +4682,7 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 			return err
 		}
 	}
-	for _, marker := range []string{"1.75", "-1.25", penaltyOverflowMarker} {
+	for _, marker := range []string{"1.75", "-1.25", penaltyOverflowMarker, "9223372036854775807", "-9223372036854775808", advancedSamplingOverflowMarker} {
 		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
 			return err
 		}
@@ -4610,6 +4820,41 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 				return fmt.Errorf("stream sampling penalties did not reach upstream provider=%s model=%s", instance.ID, tc.model)
 			}
 		}
+		for _, field := range advancedSamplingFields() {
+			modelName := "stream-advanced-sampling-" + field
+			body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/"+modelName, advancedSamplingExtra(field)))
+			status, _, _, raw, err := postStream(base+"/v1/chat/completions", token, body)
+			if err != nil || status != http.StatusOK {
+				return fmt.Errorf("stream advanced sampling provider=%s model=%s status=%d err=%v", instance.ID, modelName, status, err)
+			}
+			if bytes.Contains(raw, []byte("9223372036854775807")) || bytes.Contains(raw, []byte("-9223372036854775808")) {
+				return fmt.Errorf("stream advanced sampling echoed private marker")
+			}
+			if !fakeUpstream.sawExpectedStream(expectedPath, modelName) {
+				return fmt.Errorf("stream advanced sampling did not reach upstream provider=%s model=%s", instance.ID, modelName)
+			}
+		}
+		for _, tc := range []struct {
+			model string
+			extra string
+		}{
+			{"stream-advanced-sampling-all", `"top_k":9223372036854775807,"min_p":0.125,"top_a":1.0,"repetition_penalty":2.0,"seed":-9223372036854775808`},
+			{"stream-advanced-sampling-seed-max", `"seed":9223372036854775807`},
+			{"stream-advanced-sampling-top-k-zero", `"top_k":0`},
+			{"stream-advanced-sampling-all", `"top_k":9223372036854775807,"min_p":0.125,"top_a":1.0,"repetition_penalty":2.0,"seed":-9223372036854775808,"max_completion_tokens":2,` + providerOptionsExtra("openrouter")},
+		} {
+			body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/"+tc.model, tc.extra))
+			status, _, _, raw, err := postStream(base+"/v1/chat/completions", token, body)
+			if err != nil || status != http.StatusOK {
+				return fmt.Errorf("stream advanced sampling provider=%s model=%s status=%d err=%v", instance.ID, tc.model, status, err)
+			}
+			if bytes.Contains(raw, []byte("9223372036854775807")) || bytes.Contains(raw, []byte("-9223372036854775808")) {
+				return fmt.Errorf("stream advanced sampling echoed private marker")
+			}
+			if !fakeUpstream.sawExpectedStream(expectedPath, tc.model) {
+				return fmt.Errorf("stream advanced sampling did not reach upstream provider=%s model=%s", instance.ID, tc.model)
+			}
+		}
 	}
 	if status, err := postStatus(base+"/v1/chat/completions", token, []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream_options":{"include_usage":true}}`, model))); err != nil || status != http.StatusBadRequest {
 		return fmt.Errorf("stream_options without stream provider=%s status=%d err=%v", instance.ID, status, err)
@@ -4673,10 +4918,24 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 			return err
 		}
 	}
+	for _, tc := range advancedSamplingInvalidCases() {
+		upstreamModel := "stream-invalid-advanced-sampling-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" stream advanced_sampling "+tc.name); err != nil {
+			return err
+		}
+	}
 	for _, tc := range samplingPenaltyUnsupportedCases(instance.Type) {
 		upstreamModel := "stream-unsupported-penalty-" + tc.name
 		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/"+upstreamModel, tc.extra))
 		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" stream sampling_penalty unsupported "+tc.name); err != nil {
+			return err
+		}
+	}
+	for _, tc := range advancedSamplingUnsupportedCases(instance.Type) {
+		upstreamModel := "stream-unsupported-advanced-sampling-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" stream advanced_sampling unsupported "+tc.name); err != nil {
 			return err
 		}
 	}
@@ -5130,10 +5389,24 @@ func exerciseSamplingPenaltyNoEligibleCheck(ctx context.Context, registry provid
 				return err
 			}
 		}
+		for _, tc := range advancedSamplingInvalidCases() {
+			upstreamModel := "noeligible-invalid-advanced-sampling-" + tc.name
+			body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+			if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, body, fakeUpstream, expectedPath, upstreamModel, "noeligible "+instance.ID+" advanced_sampling "+tc.name); err != nil {
+				return err
+			}
+		}
 		for _, tc := range samplingPenaltyUnsupportedCases(instance.Type) {
 			upstreamModel := "noeligible-unsupported-penalty-" + tc.name
 			body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
 			if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, body, fakeUpstream, expectedPath, upstreamModel, "noeligible "+instance.ID+" sampling_penalty unsupported "+tc.name); err != nil {
+				return err
+			}
+		}
+		for _, tc := range advancedSamplingUnsupportedCases(instance.Type) {
+			upstreamModel := "noeligible-unsupported-advanced-sampling-" + tc.name
+			body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+			if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, body, fakeUpstream, expectedPath, upstreamModel, "noeligible "+instance.ID+" advanced_sampling unsupported "+tc.name); err != nil {
 				return err
 			}
 		}
@@ -5151,7 +5424,14 @@ func exerciseSamplingPenaltyNoEligibleCheck(ctx context.Context, registry provid
 			return err
 		}
 	}
-	for _, marker := range []string{"1.75", "-1.25", penaltyOverflowMarker} {
+	for _, tc := range advancedSamplingUnsupportedCases("codex") {
+		upstreamModel := "codex-noeligible-advanced-sampling-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, "codex/"+upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, body, fakeUpstream, "/responses", upstreamModel, "codex noeligible advanced_sampling "+tc.name); err != nil {
+			return err
+		}
+	}
+	for _, marker := range []string{"1.75", "-1.25", penaltyOverflowMarker, "9223372036854775807", "-9223372036854775808", advancedSamplingOverflowMarker} {
 		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
 			return err
 		}
@@ -5663,9 +5943,39 @@ func assertAnyModelDiscoveryErrorHealth(ctx context.Context, store *sqlite.Store
 		return err
 	}
 	if count == 0 {
-		return fmt.Errorf("model discovery health missing status=%d error=%s", status, errorClass)
+		return fmt.Errorf("model discovery health missing status=%d error=%s existing=%s", status, errorClass, modelDiscoveryHealthSummary(ctx, store))
 	}
 	return nil
+}
+
+func modelDiscoveryHealthSummary(ctx context.Context, store *sqlite.Store) string {
+	rows, err := store.DB.QueryContext(ctx, `
+		SELECT COALESCE(provider_instance_id, ''), COALESCE(http_status, 0), COALESCE(normalized_error_class, ''), COUNT(*)
+		FROM health_events
+		WHERE model_id = ''
+			AND event_class = 'upstream_failure'
+		GROUP BY provider_instance_id, http_status, normalized_error_class
+		ORDER BY provider_instance_id, http_status, normalized_error_class
+	`)
+	if err != nil {
+		return "unavailable"
+	}
+	defer rows.Close()
+	var parts []string
+	for rows.Next() {
+		var providerID string
+		var status int
+		var errorClass string
+		var count int
+		if err := rows.Scan(&providerID, &status, &errorClass, &count); err != nil {
+			return "unavailable"
+		}
+		parts = append(parts, fmt.Sprintf("%s:%d:%s:%d", providerID, status, errorClass, count))
+	}
+	if len(parts) == 0 {
+		return "none"
+	}
+	return strings.Join(parts, ",")
 }
 
 func assertFallbackMetadataNoLeak(ctx context.Context, store *sqlite.Store) error {

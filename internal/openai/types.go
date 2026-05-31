@@ -20,6 +20,11 @@ type ChatCompletionRequest struct {
 	MaxCompletionTokens *int             `json:"max_completion_tokens,omitempty"`
 	Temperature         *float64         `json:"temperature,omitempty"`
 	TopP                *float64         `json:"top_p,omitempty"`
+	TopK                *json.Number     `json:"top_k,omitempty"`
+	MinP                *json.Number     `json:"min_p,omitempty"`
+	TopA                *json.Number     `json:"top_a,omitempty"`
+	RepetitionPenalty   *json.Number     `json:"repetition_penalty,omitempty"`
+	Seed                *json.Number     `json:"seed,omitempty"`
 	PresencePenalty     *float64         `json:"presence_penalty,omitempty"`
 	FrequencyPenalty    *float64         `json:"frequency_penalty,omitempty"`
 	Stop                any              `json:"stop,omitempty"`
@@ -73,6 +78,9 @@ func DecodeChatCompletion(r io.Reader) (ChatCompletionRequest, error) {
 	if err := validateRawPenalties(raw); err != nil {
 		return ChatCompletionRequest{}, err
 	}
+	if err := validateRawAdvancedSampling(raw); err != nil {
+		return ChatCompletionRequest{}, err
+	}
 	var req ChatCompletionRequest
 	body, err := json.Marshal(raw)
 	if err != nil {
@@ -118,6 +126,9 @@ func (r ChatCompletionRequest) Validate() error {
 		return err
 	}
 	if err := validatePenaltyValue("frequency_penalty", r.HasField("frequency_penalty"), r.FrequencyPenalty); err != nil {
+		return err
+	}
+	if err := validateAdvancedSamplingValues(r); err != nil {
 		return err
 	}
 	for i, msg := range r.Messages {
@@ -220,6 +231,21 @@ func MarshalUpstreamChatRequest(req ChatCompletionRequest, upstreamModel string)
 	}
 	if req.TopP != nil {
 		out["top_p"] = *req.TopP
+	}
+	if req.TopK != nil {
+		out["top_k"] = *req.TopK
+	}
+	if req.MinP != nil {
+		out["min_p"] = *req.MinP
+	}
+	if req.TopA != nil {
+		out["top_a"] = *req.TopA
+	}
+	if req.RepetitionPenalty != nil {
+		out["repetition_penalty"] = *req.RepetitionPenalty
+	}
+	if req.Seed != nil {
+		out["seed"] = *req.Seed
 	}
 	if req.PresencePenalty != nil {
 		out["presence_penalty"] = *req.PresencePenalty
@@ -461,6 +487,11 @@ func validateTopLevelKeys(raw map[string]json.RawMessage) error {
 		"max_completion_tokens": true,
 		"temperature":           true,
 		"top_p":                 true,
+		"top_k":                 true,
+		"min_p":                 true,
+		"top_a":                 true,
+		"repetition_penalty":    true,
+		"seed":                  true,
 		"presence_penalty":      true,
 		"frequency_penalty":     true,
 		"stop":                  true,
@@ -482,6 +513,92 @@ func validateTopLevelKeys(raw map[string]json.RawMessage) error {
 		}
 	}
 	return nil
+}
+
+func validateRawAdvancedSampling(raw map[string]json.RawMessage) error {
+	for _, spec := range advancedSamplingSpecs() {
+		value, ok := raw[spec.field]
+		if !ok {
+			continue
+		}
+		if _, err := parseAdvancedSamplingNumber(spec, value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type advancedSamplingSpec struct {
+	field      string
+	integer    bool
+	min        *big.Rat
+	max        *big.Rat
+	intMin     *big.Int
+	intMax     *big.Int
+	rangeLabel string
+}
+
+func advancedSamplingSpecs() []advancedSamplingSpec {
+	maxInt64 := new(big.Int).SetInt64(math.MaxInt64)
+	minInt64 := new(big.Int).SetInt64(math.MinInt64)
+	return []advancedSamplingSpec{
+		{field: "top_k", integer: true, intMin: big.NewInt(0), intMax: maxInt64, rangeLabel: "a supported integer"},
+		{field: "min_p", min: big.NewRat(0, 1), max: big.NewRat(1, 1), rangeLabel: "a number between 0 and 1"},
+		{field: "top_a", min: big.NewRat(0, 1), max: big.NewRat(1, 1), rangeLabel: "a number between 0 and 1"},
+		{field: "repetition_penalty", min: big.NewRat(0, 1), max: big.NewRat(2, 1), rangeLabel: "a number between 0 and 2"},
+		{field: "seed", integer: true, intMin: minInt64, intMax: maxInt64, rangeLabel: "a supported integer"},
+	}
+}
+
+func advancedSamplingSpecFor(field string) (advancedSamplingSpec, bool) {
+	for _, spec := range advancedSamplingSpecs() {
+		if spec.field == field {
+			return spec, true
+		}
+	}
+	return advancedSamplingSpec{}, false
+}
+
+func parseAdvancedSamplingNumber(spec advancedSamplingSpec, raw json.RawMessage) (json.Number, error) {
+	num, err := parseJSONNumberToken(spec.field, raw, spec.rangeLabel)
+	if err != nil {
+		return "", err
+	}
+	if spec.integer {
+		if strings.ContainsAny(num.String(), ".eE") {
+			return "", fmt.Errorf("%s must be %s", spec.field, spec.rangeLabel)
+		}
+		value, ok := new(big.Int).SetString(num.String(), 10)
+		if !ok || value.Cmp(spec.intMin) < 0 || value.Cmp(spec.intMax) > 0 {
+			return "", fmt.Errorf("%s must be %s", spec.field, spec.rangeLabel)
+		}
+		return num, nil
+	}
+	precise, ok := new(big.Rat).SetString(num.String())
+	if !ok || precise.Cmp(spec.min) < 0 || precise.Cmp(spec.max) > 0 {
+		return "", fmt.Errorf("%s must be %s", spec.field, spec.rangeLabel)
+	}
+	return num, nil
+}
+
+func parseJSONNumberToken(field string, raw json.RawMessage, rangeLabel string) (json.Number, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || isJSONNull(trimmed) {
+		return "", fmt.Errorf("%s must be %s", field, rangeLabel)
+	}
+	if (trimmed[0] < '0' || trimmed[0] > '9') && trimmed[0] != '-' {
+		return "", fmt.Errorf("%s must be %s", field, rangeLabel)
+	}
+	dec := json.NewDecoder(bytes.NewReader(trimmed))
+	dec.UseNumber()
+	var num json.Number
+	if err := dec.Decode(&num); err != nil {
+		return "", fmt.Errorf("%s must be %s", field, rangeLabel)
+	}
+	if dec.Decode(&struct{}{}) != io.EOF {
+		return "", fmt.Errorf("%s must be %s", field, rangeLabel)
+	}
+	return num, nil
 }
 
 func validateRawPenalties(raw map[string]json.RawMessage) error {
@@ -536,6 +653,32 @@ func validatePenaltyValue(field string, present bool, value *float64) error {
 	}
 	if value == nil || math.IsInf(*value, 0) || math.IsNaN(*value) || *value < -2 || *value > 2 {
 		return fmt.Errorf("%s must be a number between -2 and 2", field)
+	}
+	return nil
+}
+
+func validateAdvancedSamplingValues(r ChatCompletionRequest) error {
+	values := map[string]*json.Number{
+		"top_k":              r.TopK,
+		"min_p":              r.MinP,
+		"top_a":              r.TopA,
+		"repetition_penalty": r.RepetitionPenalty,
+		"seed":               r.Seed,
+	}
+	for field, value := range values {
+		if !r.HasField(field) {
+			continue
+		}
+		spec, ok := advancedSamplingSpecFor(field)
+		if !ok {
+			continue
+		}
+		if value == nil {
+			return fmt.Errorf("%s must be %s", field, spec.rangeLabel)
+		}
+		if _, err := parseAdvancedSamplingNumber(spec, json.RawMessage(value.String())); err != nil {
+			return err
+		}
 	}
 	return nil
 }

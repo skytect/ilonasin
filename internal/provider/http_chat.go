@@ -32,6 +32,17 @@ const DefaultStreamHeaderTimeout = 30 * time.Second
 const MaxCodexAggregateAssistantBytes = 16 << 20
 const maxRetryAfter = 365 * 24 * time.Hour
 
+func readLimitedUpstreamBody(body io.Reader, limit int64) ([]byte, bool, error) {
+	data, err := io.ReadAll(io.LimitReader(body, limit+1))
+	if int64(len(data)) > limit {
+		return nil, true, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return data, false, nil
+}
+
 type HTTPChatAdapter struct {
 	Client                 *http.Client
 	StreamIdleTimeout      time.Duration
@@ -68,15 +79,15 @@ func (a HTTPChatAdapter) ListModels(ctx context.Context, req ModelRequest) (Mode
 		}
 		return ModelResult{ErrorClass: errorClass, StatusCode: resp.StatusCode, RetryAfter: retryAfterFromHeader(resp.Header, time.Now())}, fmt.Errorf("upstream models status %d", resp.StatusCode)
 	}
-	limited := http.MaxBytesReader(nil, resp.Body, MaxUpstreamModelsBodyBytes)
-	body, readErr := io.ReadAll(limited)
+	if resp.ContentLength > MaxUpstreamModelsBodyBytes {
+		return ModelResult{ErrorClass: "upstream_body_too_large", StatusCode: resp.StatusCode}, fmt.Errorf("upstream models body exceeded limit")
+	}
+	body, tooLarge, readErr := readLimitedUpstreamBody(resp.Body, MaxUpstreamModelsBodyBytes)
+	if tooLarge {
+		return ModelResult{ErrorClass: "upstream_body_too_large", StatusCode: resp.StatusCode}, fmt.Errorf("upstream models body exceeded limit")
+	}
 	if readErr != nil {
-		errorClass := "upstream_network_error"
-		var maxBytesErr *http.MaxBytesError
-		if errors.As(readErr, &maxBytesErr) {
-			errorClass = "upstream_body_too_large"
-		}
-		return ModelResult{ErrorClass: errorClass, StatusCode: resp.StatusCode}, readErr
+		return ModelResult{ErrorClass: "upstream_network_error", StatusCode: resp.StatusCode}, readErr
 	}
 	models, err := normalizeModels(req.Instance, body)
 	if err != nil {
@@ -98,6 +109,7 @@ func NewHTTPChatAdapter(client *http.Client) HTTPChatAdapter {
 
 func (a HTTPChatAdapter) ValidateChatRequest(instance Instance, req openai.ChatCompletionRequest) error {
 	commonUnsupported := []string{"tools", "tool_choice", "logprobs", "top_logprobs"}
+	openRouterSamplingFields := []string{"top_k", "min_p", "top_a", "repetition_penalty", "seed"}
 	switch instance.Type {
 	case "deepseek", "openrouter":
 		if err := rejectPresentFields(req, commonUnsupported...); err != nil {
@@ -107,13 +119,18 @@ func (a HTTPChatAdapter) ValidateChatRequest(instance Instance, req openai.ChatC
 			if err := rejectPresentFields(req, "presence_penalty", "frequency_penalty"); err != nil {
 				return err
 			}
+			if err := rejectPresentFields(req, openRouterSamplingFields...); err != nil {
+				return err
+			}
 		}
 		if err := validateChatResponseFormat(instance.Type, req); err != nil {
 			return err
 		}
 		return validateProviderOptions(instance.Type, req)
 	case "codex":
-		if err := rejectPresentFields(req, append(commonUnsupported, "provider_options", "max_tokens", "max_completion_tokens", "temperature", "top_p", "presence_penalty", "frequency_penalty", "stop", "response_format")...); err != nil {
+		unsupported := append(commonUnsupported, "provider_options", "max_tokens", "max_completion_tokens", "temperature", "top_p", "presence_penalty", "frequency_penalty", "stop", "response_format")
+		unsupported = append(unsupported, openRouterSamplingFields...)
+		if err := rejectPresentFields(req, unsupported...); err != nil {
 			return err
 		}
 		return nil
@@ -356,8 +373,13 @@ func marshalChatCompletionsRequest(providerType string, req openai.ChatCompletio
 		return body, nil
 	}
 	var out map[string]any
-	if err := json.Unmarshal(body, &out); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	if err := dec.Decode(&out); err != nil {
 		return nil, err
+	}
+	if dec.Decode(&struct{}{}) != io.EOF {
+		return nil, fmt.Errorf("chat request body must contain a single JSON object")
 	}
 	if req.MaxCompletionTokens != nil {
 		switch providerType {
@@ -419,24 +441,36 @@ func (a HTTPChatAdapter) CompleteChat(ctx context.Context, req ChatRequest) (Cha
 	}
 	defer resp.Body.Close()
 
-	limited := http.MaxBytesReader(nil, resp.Body, MaxUpstreamChatBodyBytes)
-	respBody, readErr := io.ReadAll(limited)
-	latency := time.Since(start)
-	if readErr != nil {
-		errorClass := "upstream_network_error"
-		truncated := false
-		var maxBytesErr *http.MaxBytesError
-		if errors.As(readErr, &maxBytesErr) {
-			errorClass = "upstream_body_too_large"
-			truncated = true
-		}
+	if resp.ContentLength > MaxUpstreamChatBodyBytes {
+		latency := time.Since(start)
 		return ChatResult{
 			StatusCode:    http.StatusBadGateway,
 			ContentType:   "application/json",
-			ErrorClass:    errorClass,
+			ErrorClass:    "upstream_body_too_large",
 			Latency:       latency,
 			RetryAfter:    retryAfterFromHeader(resp.Header, time.Now()),
-			BodyTruncated: truncated,
+			BodyTruncated: true,
+		}, fmt.Errorf("upstream response body exceeded limit")
+	}
+	respBody, tooLarge, readErr := readLimitedUpstreamBody(resp.Body, MaxUpstreamChatBodyBytes)
+	latency := time.Since(start)
+	if tooLarge {
+		return ChatResult{
+			StatusCode:    http.StatusBadGateway,
+			ContentType:   "application/json",
+			ErrorClass:    "upstream_body_too_large",
+			Latency:       latency,
+			RetryAfter:    retryAfterFromHeader(resp.Header, time.Now()),
+			BodyTruncated: true,
+		}, fmt.Errorf("upstream response body exceeded limit")
+	}
+	if readErr != nil {
+		return ChatResult{
+			StatusCode:  http.StatusBadGateway,
+			ContentType: "application/json",
+			ErrorClass:  "upstream_network_error",
+			Latency:     latency,
+			RetryAfter:  retryAfterFromHeader(resp.Header, time.Now()),
 		}, readErr
 	}
 	contentType := resp.Header.Get("Content-Type")

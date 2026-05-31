@@ -36,6 +36,7 @@ type ChatCompletionRequest struct {
 	ParallelToolCalls   *bool                  `json:"parallel_tool_calls,omitempty"`
 	Prediction          map[string]any         `json:"prediction,omitempty"`
 	User                *string                `json:"user,omitempty"`
+	ServiceTier         *string                `json:"service_tier,omitempty"`
 	Logprobs            *bool                  `json:"logprobs,omitempty"`
 	TopLogprobs         *int                   `json:"top_logprobs,omitempty"`
 	LogitBias           map[string]json.Number `json:"logit_bias,omitempty"`
@@ -99,6 +100,9 @@ func DecodeChatCompletion(r io.Reader) (ChatCompletionRequest, error) {
 		return ChatCompletionRequest{}, err
 	}
 	if err := validateRawUser(raw); err != nil {
+		return ChatCompletionRequest{}, err
+	}
+	if err := validateRawServiceTier(raw); err != nil {
 		return ChatCompletionRequest{}, err
 	}
 	toolNames, hasTools, err := validateRawTools(raw)
@@ -337,6 +341,9 @@ func MarshalUpstreamChatRequest(req ChatCompletionRequest, upstreamModel string)
 	}
 	if req.User != nil {
 		out["user"] = *req.User
+	}
+	if req.ServiceTier != nil {
+		out["service_tier"] = *req.ServiceTier
 	}
 	if req.Stream {
 		out["stream"] = true
@@ -580,6 +587,7 @@ func validateTopLevelKeys(raw map[string]json.RawMessage) error {
 		"parallel_tool_calls":   true,
 		"prediction":            true,
 		"user":                  true,
+		"service_tier":          true,
 		"logprobs":              true,
 		"top_logprobs":          true,
 		"logit_bias":            true,
@@ -661,6 +669,27 @@ func validateRawUser(raw map[string]json.RawMessage) error {
 		return errors.New("user must be a non-empty string up to 512 bytes")
 	}
 	return nil
+}
+
+func validateRawServiceTier(raw map[string]json.RawMessage) error {
+	value, ok := raw["service_tier"]
+	if !ok {
+		return nil
+	}
+	trimmed := bytes.TrimSpace(value)
+	if len(trimmed) == 0 || isJSONNull(trimmed) {
+		return errors.New("service_tier must be one of auto, default, flex, priority, scale")
+	}
+	var out string
+	if err := json.Unmarshal(trimmed, &out); err != nil {
+		return errors.New("service_tier must be one of auto, default, flex, priority, scale")
+	}
+	switch out {
+	case "auto", "default", "flex", "priority", "scale":
+		return nil
+	default:
+		return errors.New("service_tier must be one of auto, default, flex, priority, scale")
+	}
 }
 
 func validateRawParallelToolCalls(raw map[string]json.RawMessage) error {

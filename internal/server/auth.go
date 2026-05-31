@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 
@@ -10,6 +11,18 @@ import (
 
 func (s *Server) withAuth(next func(http.ResponseWriter, *http.Request, credentials.VerifiedLocalToken)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if s.ioLogger != nil {
+			r = r.WithContext(context.WithValue(r.Context(), ioLogContextKey{}, logging.EventID()))
+			capture := &ioCaptureResponseWriter{ResponseWriter: w}
+			w = capture
+			defer func() {
+				status := capture.status
+				if status == 0 {
+					status = http.StatusOK
+				}
+				s.ioLogOutput(r, status, w.Header().Get("Content-Type"), capture.body.Bytes())
+			}()
+		}
 		rec, err := s.auth.VerifyBearer(r.Context(), r.Header.Get("Authorization"))
 		if err != nil {
 			s.logHTTP(r, http.StatusUnauthorized, "local_auth", "authentication_error")

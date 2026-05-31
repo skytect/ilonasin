@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"ilonasin/internal/credentials"
+	"ilonasin/internal/logging"
 	"ilonasin/internal/provider"
 )
 
@@ -20,6 +21,7 @@ type Server struct {
 	meta      MetadataRecorder
 	quota     QuotaReader
 	logger    *slog.Logger
+	ioLogger  *logging.IOLogger
 	now       func() time.Time
 }
 
@@ -38,5 +40,10 @@ func NewWithClock(registry ProviderRegistry, auth credentials.LocalTokenVerifier
 
 func (s *Server) WithLogger(logger *slog.Logger) *Server {
 	s.logger = logger
+	return s
+}
+
+func (s *Server) WithIOLogger(logger *logging.IOLogger) *Server {
+	s.ioLogger = logger
 	return s
 }

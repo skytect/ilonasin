@@ -1,6 +1,8 @@
 package server
 
 import (
+	"bytes"
+	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -15,7 +17,14 @@ const maxRequestBodyBytes = 64 << 20
 func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, token credentials.VerifiedLocalToken) {
 	start := time.Now()
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
-	req, err := openai.DecodeChatCompletion(r.Body)
+	rawBody, readErr := io.ReadAll(r.Body)
+	if readErr == nil {
+		s.ioLogInput(r, rawBody)
+	}
+	req, err := openai.DecodeChatCompletion(bytes.NewReader(rawBody))
+	if readErr != nil {
+		err = readErr
+	}
 	if err != nil {
 		s.logHTTP(r, http.StatusBadRequest, "chat_route", "invalid_json")
 		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "invalid_json")

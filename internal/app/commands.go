@@ -44,7 +44,7 @@ func Serve(opts Options) error {
 	upstreams.OAuthRefresher = refresher
 	srv := &http.Server{
 		Addr:              rt.Config.Server.Bind,
-		Handler:           server.New(rt.Registry, auth, upstreams, upstreams, chatAdapters(nil, rt.Logger), modelDiscoverers(nil, rt.Logger), rt.Store, rt.Store).WithLogger(rt.Logger).Handler(),
+		Handler:           server.New(rt.Registry, auth, upstreams, upstreams, chatAdapters(nil, rt.Logger), modelDiscoverers(nil, rt.Logger), rt.Store, rt.Store).WithLogger(rt.Logger).WithIOLogger(rt.IOLogger).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	fmt.Fprintf(opts.Stdout, "ilonasin serving on %s\n", rt.Config.Server.Bind)

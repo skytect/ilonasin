@@ -24,6 +24,7 @@ type coreRuntime struct {
 	Config     config.Config
 	Registry   provider.Registry
 	Logger     *slog.Logger
+	IOLogger   *logging.IOLogger
 	cleanup    func()
 }
 
@@ -71,6 +72,19 @@ func bootstrapCore(ctx context.Context, opts Options) (*coreRuntime, error) {
 			previous()
 		}
 	}(cleanup)
+	ioLogger, err := logging.SetupIO(cfg)
+	if err != nil {
+		cleanup()
+		return nil, err
+	}
+	if ioLogger != nil {
+		cleanup = func(previous func()) func() {
+			return func() {
+				_ = ioLogger.Close()
+				previous()
+			}
+		}(cleanup)
+	}
 	logger.InfoContext(ctx, "application bootstrap complete",
 		slog.String("event", "app_bootstrap"),
 		slog.String("home_dir", homeDir),
@@ -82,5 +96,5 @@ func bootstrapCore(ctx context.Context, opts Options) (*coreRuntime, error) {
 		cleanup()
 		return nil, err
 	}
-	return &coreRuntime{HomeDir: homeDir, ConfigPath: cfgPath, Config: cfg, Registry: registry, Logger: logger, cleanup: cleanup}, nil
+	return &coreRuntime{HomeDir: homeDir, ConfigPath: cfgPath, Config: cfg, Registry: registry, Logger: logger, IOLogger: ioLogger, cleanup: cleanup}, nil
 }

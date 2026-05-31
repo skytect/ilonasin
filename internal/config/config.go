@@ -30,9 +30,10 @@ type PathsConfig struct {
 }
 
 type LoggingConfig struct {
-	Level   string   `toml:"level"`
-	Format  string   `toml:"format"`
-	Outputs []string `toml:"outputs"`
+	Level     string   `toml:"level"`
+	Format    string   `toml:"format"`
+	Outputs   []string `toml:"outputs"`
+	CaptureIO bool     `toml:"capture_io"`
 }
 
 type ProviderConfig struct {

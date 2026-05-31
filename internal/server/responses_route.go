@@ -1,12 +1,14 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -20,7 +22,14 @@ import (
 func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request, token credentials.VerifiedLocalToken) {
 	start := time.Now()
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
-	responsesReq, err := openai.DecodeResponses(r.Body)
+	rawBody, readErr := io.ReadAll(r.Body)
+	if readErr == nil {
+		s.ioLogInput(r, rawBody)
+	}
+	responsesReq, err := openai.DecodeResponses(bytes.NewReader(rawBody))
+	if readErr != nil {
+		err = readErr
+	}
 	if err != nil {
 		s.logHTTP(r, http.StatusBadRequest, "responses_route", "invalid_json")
 		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "invalid_json")

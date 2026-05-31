@@ -2567,6 +2567,21 @@ func newServeCheckUpstream() *serveCheckUpstream {
 					http.Error(w, err.Error(), http.StatusBadRequest)
 					return
 				}
+			case "provider-targets":
+				if err := validateServeCheckOpenRouterProviderTargets(r.URL.Path, body); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+			case "provider-targets-marker":
+				if err := validateServeCheckOpenRouterProviderTargetsMarker(r.URL.Path, body); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+			case "provider-targets-fallback":
+				if err := validateServeCheckOpenRouterProviderTargetsFallback(r.URL.Path, body); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
 			case "provider-privacy":
 				if err := validateServeCheckOpenRouterPrivacyProvider(r.URL.Path, body); err != nil {
 					http.Error(w, err.Error(), http.StatusBadRequest)
@@ -2949,6 +2964,29 @@ func validateServeCheckOpenRouterFallbackProvider(path string, body map[string]a
 	return validateServeCheckOpenRouterProviderExact(path, body, map[string]any{"require_parameters": true, "data_collection": "deny", "zdr": true, "allow_fallbacks": false})
 }
 
+func validateServeCheckOpenRouterProviderTargets(path string, body map[string]any) error {
+	return validateServeCheckOpenRouterProviderExact(path, body, map[string]any{
+		"order":  []string{"google-vertex/us-east5", "deepinfra/turbo"},
+		"only":   []string{"deepinfra"},
+		"ignore": []string{"openai"},
+	})
+}
+
+func validateServeCheckOpenRouterProviderTargetsMarker(path string, body map[string]any) error {
+	return validateServeCheckOpenRouterProviderExact(path, body, map[string]any{
+		"order":  []string{providerOptionPrivacyMarker},
+		"only":   []string{"deepinfra"},
+		"ignore": []string{"openai"},
+	})
+}
+
+func validateServeCheckOpenRouterProviderTargetsFallback(path string, body map[string]any) error {
+	return validateServeCheckOpenRouterProviderExact(path, body, map[string]any{
+		"order":           []string{"google-vertex/us-east5"},
+		"allow_fallbacks": false,
+	})
+}
+
 func validateServeCheckOpenRouterProviderFields(path string, body map[string]any) error {
 	if path != "/api/v1/chat/completions" {
 		return fmt.Errorf("OpenRouter provider routing reached unsupported provider")
@@ -2969,6 +3007,10 @@ func validateServeCheckOpenRouterProviderFields(path string, body map[string]any
 		case "allow_fallbacks":
 			if _, ok := value.(bool); !ok {
 				return fmt.Errorf("invalid OpenRouter allow_fallbacks translation")
+			}
+		case "order", "only", "ignore":
+			if !isStringList(value) {
+				return fmt.Errorf("invalid OpenRouter provider target translation")
 			}
 		case "data_collection":
 			if value != "deny" {
@@ -2995,11 +3037,42 @@ func validateServeCheckOpenRouterProviderExact(path string, body map[string]any,
 	}
 	for key, want := range expected {
 		got, ok := provider[key]
-		if !ok || got != want {
+		if !ok || !providerValueEqual(got, want) {
 			return fmt.Errorf("missing OpenRouter provider translation")
 		}
 	}
 	return nil
+}
+
+func providerValueEqual(got, want any) bool {
+	switch expected := want.(type) {
+	case []string:
+		values, ok := got.([]any)
+		if !ok || len(values) != len(expected) {
+			return false
+		}
+		for i, expectedValue := range expected {
+			if values[i] != expectedValue {
+				return false
+			}
+		}
+		return true
+	default:
+		return got == want
+	}
+}
+
+func isStringList(value any) bool {
+	values, ok := value.([]any)
+	if !ok || len(values) == 0 {
+		return false
+	}
+	for _, value := range values {
+		if _, ok := value.(string); !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func validateServeCheckMaxCompletionTokens(path string, body map[string]any) error {
@@ -3783,6 +3856,16 @@ func (u *serveCheckUpstream) handleServeCheckStream(w http.ResponseWriter, r *ht
 			}
 		case "stream-provider-allow-fallbacks":
 			if err := validateServeCheckOpenRouterAllowFallbacks(r.URL.Path, body, false); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		case "stream-provider-targets":
+			if err := validateServeCheckOpenRouterProviderTargets(r.URL.Path, body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		case "stream-provider-targets-marker":
+			if err := validateServeCheckOpenRouterProviderTargetsMarker(r.URL.Path, body); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
@@ -5430,6 +5513,18 @@ func openRouterAllowFallbacksExtra(allow bool) string {
 	return `"provider_options":{"openrouter":{"provider":{"allow_fallbacks":false}}}`
 }
 
+func openRouterProviderTargetsExtra() string {
+	return `"provider_options":{"openrouter":{"provider":{"order":["google-vertex/us-east5","deepinfra/turbo"],"only":["deepinfra"],"ignore":["openai"]}}}`
+}
+
+func openRouterProviderTargetsMarkerExtra() string {
+	return `"provider_options":{"openrouter":{"provider":{"order":["` + providerOptionPrivacyMarker + `"],"only":["deepinfra"],"ignore":["openai"]}}}`
+}
+
+func openRouterProviderTargetsFallbackExtra() string {
+	return `"provider_options":{"openrouter":{"provider":{"order":["google-vertex/us-east5"],"allow_fallbacks":false}}}`
+}
+
 func openRouterPrivacyProviderExtra() string {
 	return `"provider_options":{"openrouter":{"provider":{"require_parameters":true,"data_collection":"deny","zdr":true}}}`
 }
@@ -5453,14 +5548,32 @@ func providerOptionInvalidCases(providerType string) []providerOptionInvalidCase
 			{name: "empty-provider", extra: `"provider_options":{"openrouter":{"provider":{}}}`},
 			{name: "bad-require-parameters", extra: `"provider_options":{"openrouter":{"provider":{"require_parameters":"true"}}}`},
 			{name: "bad-allow-fallbacks", extra: `"provider_options":{"openrouter":{"provider":{"allow_fallbacks":"false"}}}`},
+			{name: "bad-order-type", extra: `"provider_options":{"openrouter":{"provider":{"order":"deepinfra"}}}`},
+			{name: "bad-only-type", extra: `"provider_options":{"openrouter":{"provider":{"only":"deepinfra"}}}`},
+			{name: "bad-ignore-type", extra: `"provider_options":{"openrouter":{"provider":{"ignore":"deepinfra"}}}`},
+			{name: "order-empty", extra: `"provider_options":{"openrouter":{"provider":{"order":[]}}}`},
+			{name: "order-empty-slug", extra: `"provider_options":{"openrouter":{"provider":{"order":[""]}}}`},
+			{name: "order-duplicate", extra: `"provider_options":{"openrouter":{"provider":{"order":["deepinfra","deepinfra"]}}}`},
+			{name: "order-too-many", extra: `"provider_options":{"openrouter":{"provider":{"order":["p00","p01","p02","p03","p04","p05","p06","p07","p08","p09","p10","p11","p12","p13","p14","p15","p16","p17","p18","p19","p20","p21","p22","p23","p24","p25","p26","p27","p28","p29","p30","p31","p32"]}}}`},
+			{name: "order-too-long", extra: `"provider_options":{"openrouter":{"provider":{"order":["` + strings.Repeat("p", 129) + `"]}}}`},
+			{name: "order-bad-char", extra: `"provider_options":{"openrouter":{"provider":{"order":["` + providerOptionPrivacyMarker + ` bad"]}}}`},
+			{name: "only-empty", extra: `"provider_options":{"openrouter":{"provider":{"only":[]}}}`},
+			{name: "only-empty-slug", extra: `"provider_options":{"openrouter":{"provider":{"only":[""]}}}`},
+			{name: "only-duplicate", extra: `"provider_options":{"openrouter":{"provider":{"only":["deepinfra","deepinfra"]}}}`},
+			{name: "only-too-many", extra: `"provider_options":{"openrouter":{"provider":{"only":["p00","p01","p02","p03","p04","p05","p06","p07","p08","p09","p10","p11","p12","p13","p14","p15","p16","p17","p18","p19","p20","p21","p22","p23","p24","p25","p26","p27","p28","p29","p30","p31","p32"]}}}`},
+			{name: "only-too-long", extra: `"provider_options":{"openrouter":{"provider":{"only":["` + strings.Repeat("p", 129) + `"]}}}`},
+			{name: "only-bad-char", extra: `"provider_options":{"openrouter":{"provider":{"only":["` + providerOptionPrivacyMarker + ` bad"]}}}`},
+			{name: "ignore-empty", extra: `"provider_options":{"openrouter":{"provider":{"ignore":[]}}}`},
+			{name: "ignore-empty-slug", extra: `"provider_options":{"openrouter":{"provider":{"ignore":[""]}}}`},
+			{name: "ignore-duplicate", extra: `"provider_options":{"openrouter":{"provider":{"ignore":["deepinfra","deepinfra"]}}}`},
+			{name: "ignore-too-many", extra: `"provider_options":{"openrouter":{"provider":{"ignore":["p00","p01","p02","p03","p04","p05","p06","p07","p08","p09","p10","p11","p12","p13","p14","p15","p16","p17","p18","p19","p20","p21","p22","p23","p24","p25","p26","p27","p28","p29","p30","p31","p32"]}}}`},
+			{name: "ignore-too-long", extra: `"provider_options":{"openrouter":{"provider":{"ignore":["` + strings.Repeat("p", 129) + `"]}}}`},
+			{name: "ignore-bad-char", extra: `"provider_options":{"openrouter":{"provider":{"ignore":["` + providerOptionPrivacyMarker + ` bad"]}}}`},
 			{name: "bad-data-collection", extra: `"provider_options":{"openrouter":{"provider":{"data_collection":true}}}`},
 			{name: "data-collection-allow", extra: `"provider_options":{"openrouter":{"provider":{"data_collection":"allow"}}}`},
 			{name: "data-collection-marker", extra: `"provider_options":{"openrouter":{"provider":{"data_collection":"` + providerOptionPrivacyMarker + `"}}}`},
 			{name: "bad-zdr", extra: `"provider_options":{"openrouter":{"provider":{"zdr":"true"}}}`},
 			{name: "zdr-false", extra: `"provider_options":{"openrouter":{"provider":{"zdr":false}}}`},
-			{name: "provider-order", extra: `"provider_options":{"openrouter":{"provider":{"order":["` + providerOptionPrivacyMarker + `"]}}}`},
-			{name: "provider-only", extra: `"provider_options":{"openrouter":{"provider":{"only":["` + providerOptionPrivacyMarker + `"]}}}`},
-			{name: "provider-ignore", extra: `"provider_options":{"openrouter":{"provider":{"ignore":["` + providerOptionPrivacyMarker + `"]}}}`},
 			{name: "provider-sort", extra: `"provider_options":{"openrouter":{"provider":{"sort":"` + providerOptionPrivacyMarker + `"}}}`},
 			{name: "provider-max-price", extra: `"provider_options":{"openrouter":{"provider":{"max_price":{"prompt":"` + providerOptionPrivacyMarker + `"}}}}`},
 			{name: "provider-quantizations", extra: `"provider_options":{"openrouter":{"provider":{"quantizations":["` + providerOptionPrivacyMarker + `"]}}}`},
@@ -5478,6 +5591,7 @@ func providerOptionInvalidCases(providerType string) []providerOptionInvalidCase
 		{name: "wrong-namespace", extra: `"provider_options":{"openrouter":{"reasoning":{"effort":"high"}}}`},
 		{name: "openrouter-require-parameters", extra: openRouterRequireParametersExtra()},
 		{name: "openrouter-allow-fallbacks", extra: openRouterAllowFallbacksExtra(false)},
+		{name: "openrouter-provider-targets", extra: openRouterProviderTargetsExtra()},
 		{name: "extra-namespace", extra: `"provider_options":{"deepseek":{"thinking":{"type":"disabled"}},"openrouter":{"reasoning":{"effort":"high"}}}`},
 		{name: "unknown-key", extra: `"provider_options":{"deepseek":{"provider-option-private-marker":true}}`},
 		{name: "bad-thinking", extra: `"provider_options":{"deepseek":{"thinking":true}}`},
@@ -5777,6 +5891,31 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 		}
 		if !fakeUpstream.sawExpected(expectedPath, "provider-allow-fallbacks-true") {
 			return fmt.Errorf("provider allow_fallbacks true did not reach upstream provider=%s", instance.ID)
+		}
+		targetsBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-targets", openRouterProviderTargetsExtra()))
+		if status, _, err := postJSON(base+"/v1/chat/completions", token, targetsBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("provider targets provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if !fakeUpstream.sawExpected(expectedPath, "provider-targets") {
+			return fmt.Errorf("provider targets did not reach upstream provider=%s", instance.ID)
+		}
+		targetsMarkerBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-targets-marker", openRouterProviderTargetsMarkerExtra()))
+		status, respBody, err = postJSON(base+"/v1/chat/completions", token, targetsMarkerBody)
+		if err != nil || status != http.StatusOK {
+			return fmt.Errorf("provider targets marker provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if bytes.Contains(respBody, []byte(providerOptionPrivacyMarker)) {
+			return fmt.Errorf("provider targets marker echoed private marker")
+		}
+		if !fakeUpstream.sawExpected(expectedPath, "provider-targets-marker") {
+			return fmt.Errorf("provider targets marker did not reach upstream provider=%s", instance.ID)
+		}
+		targetsFallbackBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-targets-fallback", openRouterProviderTargetsFallbackExtra()))
+		if status, _, err := postJSON(base+"/v1/chat/completions", token, targetsFallbackBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("provider targets fallback provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if !fakeUpstream.sawExpected(expectedPath, "provider-targets-fallback") {
+			return fmt.Errorf("provider targets fallback did not reach upstream provider=%s", instance.ID)
 		}
 		privacyBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-privacy", openRouterPrivacyProviderExtra()))
 		if status, _, err := postJSON(base+"/v1/chat/completions", token, privacyBody); err != nil || status != http.StatusOK {
@@ -6464,6 +6603,24 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 		}
 		if !fakeUpstream.sawExpectedStream(expectedPath, "stream-provider-allow-fallbacks") {
 			return fmt.Errorf("stream provider allow_fallbacks did not reach upstream provider=%s", instance.ID)
+		}
+		targetsBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/stream-provider-targets", openRouterProviderTargetsExtra()))
+		if status, _, _, _, err := postStream(base+"/v1/chat/completions", token, targetsBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("stream provider targets provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if !fakeUpstream.sawExpectedStream(expectedPath, "stream-provider-targets") {
+			return fmt.Errorf("stream provider targets did not reach upstream provider=%s", instance.ID)
+		}
+		targetsMarkerBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/stream-provider-targets-marker", openRouterProviderTargetsMarkerExtra()))
+		status, _, _, respBody, err = postStream(base+"/v1/chat/completions", token, targetsMarkerBody)
+		if err != nil || status != http.StatusOK {
+			return fmt.Errorf("stream provider targets marker provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if bytes.Contains(respBody, []byte(providerOptionPrivacyMarker)) {
+			return fmt.Errorf("stream provider targets marker echoed private marker")
+		}
+		if !fakeUpstream.sawExpectedStream(expectedPath, "stream-provider-targets-marker") {
+			return fmt.Errorf("stream provider targets marker did not reach upstream provider=%s", instance.ID)
 		}
 		privacyBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/stream-provider-privacy", openRouterPrivacyProviderExtra()))
 		if status, _, _, _, err := postStream(base+"/v1/chat/completions", token, privacyBody); err != nil || status != http.StatusOK {
@@ -7294,6 +7451,14 @@ func exerciseCodexNoEligibleCacheCheck(ctx context.Context, registry provider.Re
 	}
 	invalidAllowFallbacksBody := []byte(`{"model":"codex/codex-noeligible-invalid-allow-fallbacks","messages":[{"role":"user","content":"check"}],"provider_options":{"openrouter":{"provider":{"allow_fallbacks":"false"}}}}`)
 	if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, invalidAllowFallbacksBody, fakeUpstream, "/responses", "codex-noeligible-invalid-allow-fallbacks", "codex noeligible invalid openrouter allow_fallbacks"); err != nil {
+		return err
+	}
+	unsupportedProviderTargetsBody := []byte(`{"model":"codex/codex-noeligible-openrouter-provider-targets","messages":[{"role":"user","content":"check"}],` + openRouterProviderTargetsExtra() + `}`)
+	if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, unsupportedProviderTargetsBody, fakeUpstream, "/responses", "codex-noeligible-openrouter-provider-targets", "codex noeligible openrouter provider targets"); err != nil {
+		return err
+	}
+	invalidProviderTargetsBody := []byte(`{"model":"codex/codex-noeligible-invalid-provider-targets","messages":[{"role":"user","content":"check"}],"provider_options":{"openrouter":{"provider":{"order":[]}}}}`)
+	if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, invalidProviderTargetsBody, fakeUpstream, "/responses", "codex-noeligible-invalid-provider-targets", "codex noeligible invalid openrouter provider targets"); err != nil {
 		return err
 	}
 	unsupportedUserIDOptionsBody := []byte(`{"model":"codex/codex-noeligible-deepseek-user-id","messages":[{"role":"user","content":"check"}],` + deepSeekUserIDExtra(userIDPrivacyMarker) + `}`)

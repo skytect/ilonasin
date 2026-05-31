@@ -420,6 +420,10 @@ func validateOpenRouterProvider(raw any) error {
 			if _, ok := value.(bool); !ok {
 				return errors.New("provider_options.openrouter.provider.allow_fallbacks must be a boolean")
 			}
+		case "order", "only", "ignore":
+			if err := validateOpenRouterProviderSlugList(key, value); err != nil {
+				return err
+			}
 		case "data_collection":
 			collection, ok := value.(string)
 			if !ok {
@@ -441,6 +445,42 @@ func validateOpenRouterProvider(raw any) error {
 		}
 	}
 	return nil
+}
+
+func validateOpenRouterProviderSlugList(field string, raw any) error {
+	values, ok := raw.([]any)
+	if !ok || len(values) == 0 || len(values) > 32 {
+		return fmt.Errorf("provider_options.openrouter.provider.%s must be a non-empty array of up to 32 provider slugs", field)
+	}
+	seen := map[string]bool{}
+	for _, rawValue := range values {
+		value, ok := rawValue.(string)
+		if !ok || !isOpenRouterProviderSlug(value) {
+			return fmt.Errorf("provider_options.openrouter.provider.%s must contain only provider slug strings", field)
+		}
+		if seen[value] {
+			return fmt.Errorf("provider_options.openrouter.provider.%s must not contain duplicate provider slugs", field)
+		}
+		seen[value] = true
+	}
+	return nil
+}
+
+func isOpenRouterProviderSlug(value string) bool {
+	if value == "" || len(value) > 128 {
+		return false
+	}
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '_' || r == '-' || r == '.' || r == '/':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func isOpenRouterReasoningEffort(value string) bool {

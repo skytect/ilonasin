@@ -74,7 +74,7 @@ func ManageCheck(opts Options) error {
 	}
 	var buf bytes.Buffer
 	tokenClient := management.NewUnixLocalTokenClient(management.SocketPath(rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database))
-	if err := tui.Check(rt.Config, rt.Registry, tokenClient, tokenClient, tokenClient, tokenClient, nil, nil, rt.Store, &buf, rt.Logger); err != nil {
+	if err := tui.Check(rt.Config, rt.Registry, tokenClient, tokenClient, tokenClient, tokenClient, nil, nil, tokenClient, &buf, rt.Logger); err != nil {
 		return err
 	}
 	afterSnapshot, err := selectedHomeSnapshot(context.Background(), rt.Store, rt.ConfigPath)
@@ -112,6 +112,8 @@ func assertProductionUpstreamMutationWiring() error {
 		{path: "internal/tui/tui.go", forbidden: "oauthLogin       " + "credentials.OAuthDeviceLoginController"},
 		{path: "internal/tui/tui.go", forbidden: "func Run(cfg config.Config, registry provider.Registry, snapshot management.SnapshotClient, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, oauth " + "credentials.OAuthMetadataReader"},
 		{path: "internal/tui/tui.go", forbidden: "func Check(cfg config.Config, registry provider.Registry, snapshot management.SnapshotClient, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, oauth " + "credentials.OAuthMetadataReader"},
+		{path: "internal/tui/tui.go", forbidden: "func Run(cfg config.Config, registry provider.Registry, snapshot management.SnapshotClient, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, oauth management.OAuthClient, modelCache ModelCacheReader, observability ObservabilityReader, pruner " + "TelemetryPruner"},
+		{path: "internal/tui/tui.go", forbidden: "func Check(cfg config.Config, registry provider.Registry, snapshot management.SnapshotClient, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, oauth management.OAuthClient, modelCache ModelCacheReader, observability ObservabilityReader, pruner " + "TelemetryPruner"},
 	}
 	for _, check := range checks {
 		body, err := os.ReadFile(filepath.Join(root, check.path))
@@ -155,7 +157,7 @@ func assertTUIUpstreamArg(path, name string) error {
 			return true
 		}
 		found = true
-		if len(call.Args) < 6 || !identName(call.Args[4], "tokenClient") || !identName(call.Args[5], "tokenClient") {
+		if len(call.Args) < 9 || !identName(call.Args[4], "tokenClient") || !identName(call.Args[5], "tokenClient") || !identName(call.Args[8], "tokenClient") {
 			invalid = true
 		}
 		return true

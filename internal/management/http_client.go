@@ -110,6 +110,14 @@ func (c HTTPTokenClient) RefreshOAuthCredential(ctx context.Context, req Refresh
 	return out, nil
 }
 
+func (c HTTPTokenClient) PruneTelemetry(ctx context.Context, req PruneTelemetryRequest) (PruneTelemetryResponse, error) {
+	var out PruneTelemetryResponse
+	if err := c.doWithClient(ctx, c.longPollClient(), http.MethodPost, PathTelemetryPrune, req, &out); err != nil {
+		return PruneTelemetryResponse{}, err
+	}
+	return out, nil
+}
+
 func (c HTTPTokenClient) do(ctx context.Context, method, path string, body any, out any) error {
 	client := c.Client
 	if client == nil {

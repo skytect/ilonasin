@@ -1549,7 +1549,20 @@ func exerciseTelemetryPruneCheck(ctx context.Context, registry provider.Registry
 	}
 
 	expected := metadata.PruneResult{Cutoff: cutoff, Requests: 1, Streams: 1, Fallbacks: 3, Health: 1, Quotas: 1}
-	if err := tui.ExerciseTelemetryPrune(ctx, cfg, registry, store, store, func() time.Time { return now }, expected); err != nil {
+	mgmt, err := startManagementServerWithService(ctx, checkDBDir, configPath, filepath.Join(checkDBDir, "ilonasin.sqlite"), management.Service{
+		Registry:      registry,
+		Observability: store,
+		Pruner:        store,
+	})
+	if err != nil {
+		return err
+	}
+	defer mgmt.Close(ctx)
+	client := management.NewUnixLocalTokenClient(mgmt.socketPath)
+	if err := exerciseTelemetryPruneManagementSafety(ctx, checkDBDir, configPath); err != nil {
+		return err
+	}
+	if err := tui.ExerciseTelemetryPrune(ctx, cfg, registry, store, client, func() time.Time { return now }, expected); err != nil {
 		return err
 	}
 	afterProtected, err := protectedStateSnapshot(ctx, store, configPath)
@@ -1578,6 +1591,9 @@ func exerciseTelemetryPruneCheck(ctx context.Context, registry provider.Registry
 		{"old health", `SELECT COUNT(*) FROM health_events WHERE occurred_at < ?`, []any{cutoff.Format(time.RFC3339Nano)}, 0},
 		{"recent health", `SELECT COUNT(*) FROM health_events WHERE occurred_at > ?`, []any{cutoff.Format(time.RFC3339Nano)}, 1},
 		{"exact health", `SELECT COUNT(*) FROM health_events WHERE occurred_at = ?`, []any{cutoff.Format(time.RFC3339Nano)}, 1},
+		{"old request quota", `SELECT COUNT(*) FROM quota_events WHERE request_metadata_id = ?`, []any{oldRequestID}, 0},
+		{"recent quota", `SELECT COUNT(*) FROM quota_events WHERE request_metadata_id = ?`, []any{recentRequestID}, 1},
+		{"exact quota", `SELECT COUNT(*) FROM quota_events WHERE request_metadata_id = ?`, []any{exactRequestID}, 1},
 		{"recent marker", `SELECT COUNT(*) FROM request_metadata WHERE requested_model LIKE '%raw-provider-payload%'`, nil, 1},
 	} {
 		var got int
@@ -1589,6 +1605,100 @@ func exerciseTelemetryPruneCheck(ctx context.Context, registry provider.Registry
 		}
 	}
 	return nil
+}
+
+func exerciseTelemetryPruneManagementSafety(ctx context.Context, homeDir, configPath string) error {
+	dbPath := filepath.Join(homeDir, "prune-safety.sqlite")
+	cancelStore, err := sqlite.Open(ctx, dbPath)
+	if err != nil {
+		return err
+	}
+	defer cancelStore.Close()
+	blocking := blockingTelemetryPruner{delay: 20 * time.Millisecond}
+	mgmt, err := startManagementServerWithService(ctx, homeDir, configPath, dbPath, management.Service{Pruner: blocking})
+	if err != nil {
+		return err
+	}
+	client := management.NewUnixLocalTokenClient(mgmt.socketPath)
+	client.Client = management.HTTPClientWithTimeout(mgmt.socketPath, time.Nanosecond)
+	client.LongPollClient = management.LongPollHTTPClient(mgmt.socketPath)
+	if _, err := client.PruneTelemetry(ctx, management.PruneTelemetryRequest{Cutoff: time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC)}); err != nil {
+		mgmt.Close(ctx)
+		return fmt.Errorf("management prune long operation failed: %w", err)
+	}
+	cancelCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := client.PruneTelemetry(cancelCtx, management.PruneTelemetryRequest{Cutoff: time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC)}); !errors.Is(err, context.Canceled) {
+		mgmt.Close(ctx)
+		return fmt.Errorf("management prune cancellation err=%v", err)
+	}
+	mgmt.Close(ctx)
+
+	failPath := filepath.Join(homeDir, "prune-failure.sqlite")
+	failStore, err := sqlite.Open(ctx, failPath)
+	if err != nil {
+		return err
+	}
+	defer failStore.Close()
+	mgmt, err = startManagementServerWithService(ctx, homeDir, configPath, failPath, management.Service{Pruner: failingManagementPruner{}})
+	if err != nil {
+		return err
+	}
+	defer mgmt.Close(ctx)
+	client = management.NewUnixLocalTokenClient(mgmt.socketPath)
+	body := []byte(`{"cutoff":"2026-04-30T12:00:00Z"}`)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, client.BaseURL+management.PathTelemetryPrune, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode < 400 {
+		return fmt.Errorf("management prune failure returned status=%d", resp.StatusCode)
+	}
+	for _, forbidden := range []string{
+		"sk-prune-secret",
+		"raw-provider-payload",
+		"prompt marker",
+		"completion marker",
+		"body marker",
+		"acct_",
+		"req_",
+		"balance",
+		"credit",
+	} {
+		if strings.Contains(string(respBody), forbidden) {
+			return fmt.Errorf("management prune failure leaked forbidden marker")
+		}
+	}
+	return nil
+}
+
+type blockingTelemetryPruner struct {
+	delay time.Duration
+}
+
+func (b blockingTelemetryPruner) PruneTelemetryBefore(ctx context.Context, cutoff time.Time) (metadata.PruneResult, error) {
+	select {
+	case <-ctx.Done():
+		return metadata.PruneResult{}, ctx.Err()
+	case <-time.After(b.delay):
+		return metadata.PruneResult{Cutoff: cutoff.UTC()}, nil
+	}
+}
+
+type failingManagementPruner struct{}
+
+func (failingManagementPruner) PruneTelemetryBefore(context.Context, time.Time) (metadata.PruneResult, error) {
+	return metadata.PruneResult{}, fmt.Errorf("sk-prune-secret raw-provider-payload prompt marker")
 }
 
 func assertOAuthStorageSafety(ctx context.Context, store *sqlite.Store) error {

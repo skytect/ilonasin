@@ -24,6 +24,7 @@ type HandlerService interface {
 	SnapshotClient
 	UpstreamCredentialClient
 	OAuthClient
+	TelemetryPruneClient
 }
 
 func Handler(service HandlerService) http.Handler {
@@ -164,6 +165,19 @@ func Handler(service HandlerService) http.Handler {
 		resp, err := service.RefreshOAuthCredential(r.Context(), req)
 		if err != nil {
 			writeOAuthManagementError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+	})
+	mux.HandleFunc("POST "+PathTelemetryPrune, func(w http.ResponseWriter, r *http.Request) {
+		var req PruneTelemetryRequest
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest)
+			return
+		}
+		resp, err := service.PruneTelemetry(r.Context(), req)
+		if err != nil {
+			writeError(w, http.StatusBadGateway)
 			return
 		}
 		writeJSON(w, http.StatusOK, resp)

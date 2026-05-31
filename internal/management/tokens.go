@@ -55,6 +55,7 @@ type Service struct {
 	OAuthMutations    OAuthMutationManager
 	ModelCache        ModelCacheReader
 	Observability     ObservabilityReader
+	Pruner            TelemetryPruner
 }
 
 type UpstreamMetadataReader interface {

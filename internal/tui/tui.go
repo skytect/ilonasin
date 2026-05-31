@@ -34,7 +34,7 @@ type Model struct {
 	oauth            management.OAuthClient
 	modelCache       ModelCacheReader
 	observability    ObservabilityReader
-	pruner           TelemetryPruner
+	pruner           management.TelemetryPruneClient
 	logger           *slog.Logger
 	now              func() time.Time
 	tokenRows        []management.LocalToken
@@ -86,11 +86,11 @@ type TelemetryPruner interface {
 	PruneTelemetryBefore(ctx context.Context, cutoff time.Time) (metadata.PruneResult, error)
 }
 
-func NewModel(cfg config.Config, registry provider.Registry, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, upstreamReader management.UpstreamMetadataReader, oauthReader credentials.OAuthMetadataReader, oauth management.OAuthClient, modelCache ModelCacheReader, observability ObservabilityReader, pruner TelemetryPruner, now func() time.Time, loggers ...*slog.Logger) Model {
+func NewModel(cfg config.Config, registry provider.Registry, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, upstreamReader management.UpstreamMetadataReader, oauthReader credentials.OAuthMetadataReader, oauth management.OAuthClient, modelCache ModelCacheReader, observability ObservabilityReader, pruner management.TelemetryPruneClient, now func() time.Time, loggers ...*slog.Logger) Model {
 	return Model{cfg: cfg, registry: registry, tokens: tokens, upstreams: upstreams, upstreamReader: upstreamReader, oauthReader: oauthReader, oauth: oauth, modelCache: modelCache, observability: observability, pruner: pruner, now: now, logger: firstLogger(loggers)}
 }
 
-func newCheckModel(cfg config.Config, registry provider.Registry, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, upstreamReader management.UpstreamMetadataReader, oauthReader credentials.OAuthMetadataReader, oauth management.OAuthClient, modelCache ModelCacheReader, observability ObservabilityReader, pruner TelemetryPruner, now func() time.Time, loggers ...*slog.Logger) Model {
+func newCheckModel(cfg config.Config, registry provider.Registry, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, upstreamReader management.UpstreamMetadataReader, oauthReader credentials.OAuthMetadataReader, oauth management.OAuthClient, modelCache ModelCacheReader, observability ObservabilityReader, pruner management.TelemetryPruneClient, now func() time.Time, loggers ...*slog.Logger) Model {
 	return Model{cfg: cfg, registry: registry, tokens: tokens, upstreams: upstreams, upstreamReader: upstreamReader, oauthReader: oauthReader, oauth: oauth, modelCache: modelCache, observability: observability, pruner: pruner, now: now, logger: firstLogger(loggers), quitOnInit: true, checkMode: true}
 }
 
@@ -336,7 +336,7 @@ func (m Model) View() string {
 	return b.String()
 }
 
-func Run(cfg config.Config, registry provider.Registry, snapshot management.SnapshotClient, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, oauth management.OAuthClient, modelCache ModelCacheReader, observability ObservabilityReader, pruner TelemetryPruner, loggers ...*slog.Logger) error {
+func Run(cfg config.Config, registry provider.Registry, snapshot management.SnapshotClient, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, oauth management.OAuthClient, modelCache ModelCacheReader, observability ObservabilityReader, pruner management.TelemetryPruneClient, loggers ...*slog.Logger) error {
 	if snapshot == nil {
 		return fmt.Errorf("management snapshot client is required")
 	}
@@ -349,7 +349,7 @@ func Run(cfg config.Config, registry provider.Registry, snapshot management.Snap
 	return err
 }
 
-func Check(cfg config.Config, registry provider.Registry, snapshot management.SnapshotClient, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, oauth management.OAuthClient, modelCache ModelCacheReader, observability ObservabilityReader, pruner TelemetryPruner, out io.Writer, loggers ...*slog.Logger) error {
+func Check(cfg config.Config, registry provider.Registry, snapshot management.SnapshotClient, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, oauth management.OAuthClient, modelCache ModelCacheReader, observability ObservabilityReader, pruner management.TelemetryPruneClient, out io.Writer, loggers ...*slog.Logger) error {
 	if snapshot == nil {
 		return fmt.Errorf("management snapshot client is required")
 	}
@@ -679,7 +679,7 @@ func ExerciseObservabilitySummary(ctx context.Context, cfg config.Config, regist
 	return nil
 }
 
-func ExerciseTelemetryPrune(ctx context.Context, cfg config.Config, registry provider.Registry, observability ObservabilityReader, pruner TelemetryPruner, now func() time.Time, expected metadata.PruneResult) error {
+func ExerciseTelemetryPrune(ctx context.Context, cfg config.Config, registry provider.Registry, observability ObservabilityReader, pruner management.TelemetryPruneClient, now func() time.Time, expected metadata.PruneResult) error {
 	model := newCheckModel(cfg, registry, nil, nil, nil, nil, nil, nil, observability, pruner, now)
 	_ = model.reload()
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
@@ -721,7 +721,7 @@ func ExerciseTelemetryPrune(ctx context.Context, cfg config.Config, registry pro
 			return fmt.Errorf("telemetry prune summary leaked forbidden marker")
 		}
 	}
-	failing := newCheckModel(cfg, registry, nil, nil, nil, nil, nil, nil, observability, failingTelemetryPruner{}, now)
+	failing := newCheckModel(cfg, registry, nil, nil, nil, nil, nil, nil, observability, directTelemetryPruner{failingTelemetryPruner{}}, now)
 	updated, _ = failing.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
 	failed := updated.(Model)
 	failedView := failed.View()
@@ -738,6 +738,25 @@ type failingTelemetryPruner struct{}
 
 func (failingTelemetryPruner) PruneTelemetryBefore(context.Context, time.Time) (metadata.PruneResult, error) {
 	return metadata.PruneResult{}, fmt.Errorf("sk-prune-secret raw-provider-payload")
+}
+
+type directTelemetryPruner struct {
+	pruner TelemetryPruner
+}
+
+func (d directTelemetryPruner) PruneTelemetry(ctx context.Context, req management.PruneTelemetryRequest) (management.PruneTelemetryResponse, error) {
+	result, err := d.pruner.PruneTelemetryBefore(ctx, req.Cutoff)
+	if err != nil {
+		return management.PruneTelemetryResponse{}, err
+	}
+	return management.PruneTelemetryResponse{Result: management.PruneResult{
+		Cutoff:    result.Cutoff,
+		Requests:  result.Requests,
+		Streams:   result.Streams,
+		Fallbacks: result.Fallbacks,
+		Health:    result.Health,
+		Quotas:    result.Quotas,
+	}}, nil
 }
 
 func ExerciseOAuthSummary(ctx context.Context, cfg config.Config, registry provider.Registry, oauth credentials.OAuthMetadataReader) error {
@@ -1626,10 +1645,11 @@ func (m *Model) pruneTelemetry() error {
 		return nil
 	}
 	cutoff := m.nowTime().Add(-30 * 24 * time.Hour).UTC()
-	result, err := m.pruner.PruneTelemetryBefore(context.Background(), cutoff)
+	resp, err := m.pruner.PruneTelemetry(context.Background(), management.PruneTelemetryRequest{Cutoff: cutoff})
 	if err != nil {
 		return err
 	}
+	result := pruneResultFromManagement(resp.Result)
 	m.pruneResult = &result
 	m.logInfo(context.Background(), "tui_telemetry_pruned",
 		slog.Int("requests", result.Requests),
@@ -1638,6 +1658,17 @@ func (m *Model) pruneTelemetry() error {
 		slog.Int("health", result.Health),
 	)
 	return nil
+}
+
+func pruneResultFromManagement(result management.PruneResult) metadata.PruneResult {
+	return metadata.PruneResult{
+		Cutoff:    result.Cutoff,
+		Requests:  result.Requests,
+		Streams:   result.Streams,
+		Fallbacks: result.Fallbacks,
+		Health:    result.Health,
+		Quotas:    result.Quotas,
+	}
 }
 
 func (m Model) startOAuthLoginCmd(ctx context.Context, providerInstanceID string) tea.Cmd {

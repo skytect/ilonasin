@@ -627,6 +627,10 @@ func (inertPruner) PruneTelemetryBefore(context.Context, time.Time) (metadata.Pr
 	return metadata.PruneResult{}, fmt.Errorf("not used")
 }
 
+func (inertPruner) PruneTelemetry(context.Context, management.PruneTelemetryRequest) (management.PruneTelemetryResponse, error) {
+	return management.PruneTelemetryResponse{}, fmt.Errorf("not used")
+}
+
 type sanitizeTokens struct{ now time.Time }
 
 func (s sanitizeTokens) Create(context.Context, string) (credentials.CreatedLocalToken, error) {

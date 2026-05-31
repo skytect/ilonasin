@@ -41,6 +41,7 @@ func startManagementServer(ctx context.Context, homeDir, configPath, databasePat
 		OAuthMutations:    upstreams,
 		ModelCache:        store,
 		Observability:     store,
+		Pruner:            store,
 	})
 }
 

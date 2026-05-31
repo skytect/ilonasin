@@ -2536,10 +2536,32 @@ func newServeCheckUpstream() *serveCheckUpstream {
 				return
 			}
 		}
-		if model == "provider-options" {
+		if strings.HasPrefix(model, "provider-") {
 			if err := validateServeCheckProviderOptions(r.URL.Path, body); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
+			}
+			if model == "provider-options-combined" {
+				if err := validateServeCheckOpenRouterRequireParameters(r.URL.Path, body); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				if err := validateServeCheckJSONSchemaResponseFormat(r.URL.Path, body); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				if err := validateServeCheckLogprobs(r.URL.Path, "logprobs-top", body); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				if err := validateServeCheckLogitBias(r.URL.Path, "logit-bias-combined", body); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				if err := validateServeCheckFunctionTools(body); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
 			}
 		}
 		if model == "max-completion-limit" {
@@ -2618,9 +2640,20 @@ func validateServeCheckProviderOptions(path string, body map[string]any) error {
 			return fmt.Errorf("unexpected OpenRouter reasoning for DeepSeek")
 		}
 	case "/api/v1/chat/completions":
-		reasoning, ok := body["reasoning"].(map[string]any)
-		if !ok || reasoning["effort"] != "high" || reasoning["exclude"] != true {
-			return fmt.Errorf("missing OpenRouter reasoning translation")
+		if reasoning, ok := body["reasoning"].(map[string]any); ok {
+			if reasoning["effort"] != "high" || reasoning["exclude"] != true {
+				return fmt.Errorf("missing OpenRouter reasoning translation")
+			}
+		}
+		if provider, ok := body["provider"].(map[string]any); ok {
+			if err := validateServeCheckOpenRouterRequireParameters(path, map[string]any{"provider": provider}); err != nil {
+				return err
+			}
+		}
+		if _, hasReasoning := body["reasoning"]; !hasReasoning {
+			if _, hasProvider := body["provider"]; !hasProvider {
+				return fmt.Errorf("missing OpenRouter provider option translation")
+			}
 		}
 		if _, ok := body["thinking"]; ok {
 			return fmt.Errorf("unexpected DeepSeek thinking for OpenRouter")
@@ -2630,6 +2663,21 @@ func validateServeCheckProviderOptions(path string, body map[string]any) error {
 		}
 	default:
 		return fmt.Errorf("unexpected provider option path %s", path)
+	}
+	return nil
+}
+
+func validateServeCheckOpenRouterRequireParameters(path string, body map[string]any) error {
+	if path != "/api/v1/chat/completions" {
+		return fmt.Errorf("OpenRouter require_parameters reached unsupported provider")
+	}
+	provider, ok := body["provider"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("missing OpenRouter require_parameters translation")
+	}
+	require, ok := provider["require_parameters"].(bool)
+	if !ok || !require || len(provider) != 1 {
+		return fmt.Errorf("missing OpenRouter require_parameters translation")
 	}
 	return nil
 }
@@ -3320,7 +3368,7 @@ func (u *serveCheckUpstream) handleServeCheckStream(w http.ResponseWriter, r *ht
 		http.Error(w, "provider_options wrapper was forwarded", http.StatusBadRequest)
 		return
 	}
-	if model == "stream-provider-options" {
+	if strings.HasPrefix(model, "stream-provider-") {
 		if err := validateServeCheckProviderOptions(r.URL.Path, body); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -4701,6 +4749,14 @@ func providerOptionsExtra(providerType string) string {
 	return `"provider_options":{"deepseek":{"thinking":{"type":"disabled"},"reasoning_effort":"max"}}`
 }
 
+func openRouterRequireParametersExtra() string {
+	return `"provider_options":{"openrouter":{"provider":{"require_parameters":true}}}`
+}
+
+func openRouterReasoningRequireParametersExtra() string {
+	return `"provider_options":{"openrouter":{"reasoning":{"effort":"high","exclude":true},"provider":{"require_parameters":true}}}`
+}
+
 func providerOptionInvalidCases(providerType string) []providerOptionInvalidCase {
 	if providerType == "openrouter" {
 		return []providerOptionInvalidCase{
@@ -4712,16 +4768,23 @@ func providerOptionInvalidCases(providerType string) []providerOptionInvalidCase
 			{name: "bad-effort", extra: `"provider_options":{"openrouter":{"reasoning":{"effort":"provider-option-private-marker"}}}`},
 			{name: "bad-max-tokens", extra: `"provider_options":{"openrouter":{"reasoning":{"max_tokens":0}}}`},
 			{name: "conflicting-reasoning", extra: `"provider_options":{"openrouter":{"reasoning":{"effort":"high","max_tokens":12}}}`},
+			{name: "bad-provider", extra: `"provider_options":{"openrouter":{"provider":true}}`},
+			{name: "empty-provider", extra: `"provider_options":{"openrouter":{"provider":{}}}`},
+			{name: "bad-require-parameters", extra: `"provider_options":{"openrouter":{"provider":{"require_parameters":"true"}}}`},
+			{name: "provider-extra", extra: `"provider_options":{"openrouter":{"provider":{"require_parameters":true,"` + providerOptionPrivacyMarker + `":true}}}`},
+			{name: "top-level-provider", extra: `"provider":{"require_parameters":true}`},
 		}
 	}
 	return []providerOptionInvalidCase{
 		{name: "null", extra: `"provider_options":null`},
 		{name: "wrong-namespace", extra: `"provider_options":{"openrouter":{"reasoning":{"effort":"high"}}}`},
+		{name: "openrouter-require-parameters", extra: openRouterRequireParametersExtra()},
 		{name: "extra-namespace", extra: `"provider_options":{"deepseek":{"thinking":{"type":"disabled"}},"openrouter":{"reasoning":{"effort":"high"}}}`},
 		{name: "unknown-key", extra: `"provider_options":{"deepseek":{"provider-option-private-marker":true}}`},
 		{name: "bad-thinking", extra: `"provider_options":{"deepseek":{"thinking":true}}`},
 		{name: "bad-thinking-type", extra: `"provider_options":{"deepseek":{"thinking":{"type":"provider-option-private-marker"}}}`},
 		{name: "bad-effort", extra: `"provider_options":{"deepseek":{"reasoning_effort":"provider-option-private-marker"}}`},
+		{name: "top-level-provider", extra: `"provider":{"require_parameters":true}`},
 	}
 }
 
@@ -4966,6 +5029,29 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 	}
 	if !fakeUpstream.sawExpected(expectedPath, "provider-options") {
 		return fmt.Errorf("provider_options did not reach upstream provider=%s", instance.ID)
+	}
+	if instance.Type == "openrouter" {
+		requireBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-require-parameters", openRouterRequireParametersExtra()))
+		if status, _, err := postJSON(base+"/v1/chat/completions", token, requireBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("provider require_parameters provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if !fakeUpstream.sawExpected(expectedPath, "provider-require-parameters") {
+			return fmt.Errorf("provider require_parameters did not reach upstream provider=%s", instance.ID)
+		}
+		combinedExtra := openRouterReasoningRequireParametersExtra() + `,` + openRouterJSONSchemaResponseFormatExtra() + `,"logprobs":true,"top_logprobs":20,"logit_bias":{"50256":` + logitBiasDecimalMarker + `},"max_completion_tokens":2,` + functionToolsExtra(`"auto"`)
+		combinedBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-options-combined", combinedExtra))
+		status, respBody, err := postJSON(base+"/v1/chat/completions", token, combinedBody)
+		if err != nil || status != http.StatusOK {
+			return fmt.Errorf("provider options combined provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		for _, marker := range []string{providerOptionPrivacyMarker, responseFormatPrivacyMarker, responseFormatSchemaMarker, logprobTokenMarker, logitBiasDecimalMarker, toolDescriptionMarker, toolSchemaNumberMarker} {
+			if bytes.Contains(respBody, []byte(marker)) {
+				return fmt.Errorf("provider options combined echoed private marker")
+			}
+		}
+		if !fakeUpstream.sawExpected(expectedPath, "provider-options-combined") {
+			return fmt.Errorf("provider options combined did not reach upstream provider=%s", instance.ID)
+		}
 	}
 	maxCompletionBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"max_completion_tokens":2}`, instance.ID+"/max-completion-limit"))
 	if status, _, err := postJSON(base+"/v1/chat/completions", token, maxCompletionBody); err != nil || status != http.StatusOK {
@@ -5313,6 +5399,15 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 	}
 	if !fakeUpstream.sawExpectedStream(expectedPath, "stream-provider-options") {
 		return fmt.Errorf("stream provider_options did not reach upstream provider=%s", instance.ID)
+	}
+	if instance.Type == "openrouter" {
+		requireBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/stream-provider-require-parameters", openRouterRequireParametersExtra()))
+		if status, _, _, _, err := postStream(base+"/v1/chat/completions", token, requireBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("stream provider require_parameters provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if !fakeUpstream.sawExpectedStream(expectedPath, "stream-provider-require-parameters") {
+			return fmt.Errorf("stream provider require_parameters did not reach upstream provider=%s", instance.ID)
+		}
 	}
 	maxCompletionBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},"max_completion_tokens":2}`, instance.ID+"/stream-max-completion-limit"))
 	if status, _, _, _, err := postStream(base+"/v1/chat/completions", token, maxCompletionBody); err != nil || status != http.StatusOK {
@@ -5912,6 +6007,14 @@ func exerciseCodexNoEligibleCacheCheck(ctx context.Context, registry provider.Re
 	if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, unsupportedToolMessageBody, fakeUpstream, "/responses", "codex-noeligible-tool-messages", "codex noeligible tool messages"); err != nil {
 		return err
 	}
+	unsupportedProviderOptionsBody := []byte(`{"model":"codex/codex-noeligible-openrouter-provider-options","messages":[{"role":"user","content":"check"}],` + openRouterRequireParametersExtra() + `}`)
+	if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, unsupportedProviderOptionsBody, fakeUpstream, "/responses", "codex-noeligible-openrouter-provider-options", "codex noeligible openrouter provider_options"); err != nil {
+		return err
+	}
+	unsupportedTopLevelProviderBody := []byte(`{"model":"codex/codex-noeligible-top-level-provider","messages":[{"role":"user","content":"check"}],"provider":{"require_parameters":true}}`)
+	if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, unsupportedTopLevelProviderBody, fakeUpstream, "/responses", "codex-noeligible-top-level-provider", "codex noeligible top-level provider"); err != nil {
+		return err
+	}
 	for _, tc := range []struct {
 		name  string
 		extra string
@@ -6052,6 +6155,13 @@ func exerciseSamplingPenaltyNoEligibleCheck(ctx context.Context, registry provid
 			upstreamModel := "noeligible-invalid-logit-bias-" + tc.name
 			body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
 			if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, body, fakeUpstream, expectedPath, upstreamModel, "noeligible "+instance.ID+" logit_bias "+tc.name); err != nil {
+				return err
+			}
+		}
+		for _, tc := range providerOptionInvalidCases(instance.Type) {
+			upstreamModel := "noeligible-invalid-options-" + tc.name
+			body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+			if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, body, fakeUpstream, expectedPath, upstreamModel, "noeligible "+instance.ID+" provider_options "+tc.name); err != nil {
 				return err
 			}
 		}

@@ -316,14 +316,28 @@ func validateOpenRouterOptions(raw any) error {
 	if !ok || opts == nil {
 		return errors.New("provider_options.openrouter must be an object")
 	}
-	if len(opts) != 1 {
-		return errors.New("provider_options.openrouter only supports reasoning")
+	if len(opts) == 0 {
+		return errors.New("provider_options.openrouter must not be empty")
 	}
-	rawReasoning, ok := opts["reasoning"]
-	if !ok {
-		return errors.New("provider_options.openrouter.reasoning is required")
+	for key, value := range opts {
+		switch key {
+		case "reasoning":
+			if err := validateOpenRouterReasoning(value); err != nil {
+				return err
+			}
+		case "provider":
+			if err := validateOpenRouterProvider(value); err != nil {
+				return err
+			}
+		default:
+			return errors.New("provider_options.openrouter contains an unsupported field")
+		}
 	}
-	reasoning, ok := rawReasoning.(map[string]any)
+	return nil
+}
+
+func validateOpenRouterReasoning(raw any) error {
+	reasoning, ok := raw.(map[string]any)
 	if !ok || reasoning == nil {
 		return errors.New("provider_options.openrouter.reasoning must be an object")
 	}
@@ -358,6 +372,24 @@ func validateOpenRouterOptions(raw any) error {
 	}
 	if hasEffort && hasMaxTokens {
 		return errors.New("provider_options.openrouter.reasoning.effort and max_tokens are mutually exclusive")
+	}
+	return nil
+}
+
+func validateOpenRouterProvider(raw any) error {
+	provider, ok := raw.(map[string]any)
+	if !ok || provider == nil {
+		return errors.New("provider_options.openrouter.provider must be an object")
+	}
+	if len(provider) != 1 {
+		return errors.New("provider_options.openrouter.provider only supports require_parameters")
+	}
+	value, ok := provider["require_parameters"]
+	if !ok {
+		return errors.New("provider_options.openrouter.provider.require_parameters is required")
+	}
+	if _, ok := value.(bool); !ok {
+		return errors.New("provider_options.openrouter.provider.require_parameters must be a boolean")
 	}
 	return nil
 }
@@ -418,7 +450,12 @@ func marshalChatCompletionsRequest(providerType string, req openai.ChatCompletio
 			}
 		case "openrouter":
 			opts := req.ReasoningOptions["openrouter"].(map[string]any)
-			out["reasoning"] = opts["reasoning"]
+			if reasoning, ok := opts["reasoning"]; ok {
+				out["reasoning"] = reasoning
+			}
+			if provider, ok := opts["provider"]; ok {
+				out["provider"] = provider
+			}
 		default:
 			return nil, fmt.Errorf("provider_options is not supported for %s", providerType)
 		}

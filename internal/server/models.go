@@ -150,10 +150,20 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request, _ credenti
 	})
 	data := make([]model, 0, len(all))
 	codexModels := make([]codexModelInfo, 0, len(all))
+	codexModelCounts := map[string]int{}
+	for _, row := range all {
+		if hasCapability(capabilityList(row.CapabilityFlags), "responses") {
+			codexModelCounts[row.ModelID]++
+		}
+	}
 	for _, row := range all {
 		id := row.ProviderInstanceID + "/" + row.ModelID
 		capabilities := capabilityList(row.CapabilityFlags)
 		isCodexModelRow := hasCapability(capabilities, "responses")
+		codexSlug := id
+		if isCodexModelRow && codexModelCounts[row.ModelID] == 1 {
+			codexSlug = row.ModelID
+		}
 		serviceTiers := row.ServiceTiers
 		if isCodexModelRow && len(serviceTiers) == 0 && hasCapability(capabilities, "service_tier") {
 			serviceTiers = []provider.ModelServiceTier{codexFastServiceTier()}
@@ -183,8 +193,8 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request, _ credenti
 		})
 		if isCodexModelRow {
 			codexModels = append(codexModels, codexModelInfo{
-				Slug:                       id,
-				DisplayName:                displayNameOrID(row.DisplayName, id),
+				Slug:                       codexSlug,
+				DisplayName:                displayNameOrID(row.DisplayName, codexSlug),
 				Description:                "",
 				DefaultReasoningLevel:      defaultReasoningEffort,
 				SupportedReasoningLevels:   reasoningEfforts,

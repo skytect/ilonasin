@@ -77,7 +77,7 @@ type UpstreamCredentialRepository interface {
 	UpdateOAuthTokens(ctx context.Context, credentialID int64, update OAuthTokenUpdate) error
 	ListFallbackPolicies(ctx context.Context) ([]FallbackPolicyMetadata, error)
 	SetFallbackGroupEnabled(ctx context.Context, providerInstanceID, credentialKind, groupLabel string, enabled bool, now time.Time) error
-	InsertOAuthCredential(ctx context.Context, meta NewOAuthCredential, accessToken, refreshToken string) (OAuthCredentialMetadata, error)
+	UpsertOAuthCredentialForAccountHash(ctx context.Context, meta NewOAuthCredential, accessToken, refreshToken string) (OAuthCredentialMetadata, error)
 	ListOAuthCredentials(ctx context.Context) ([]OAuthCredentialMetadata, error)
 	ListProviderAccounts(ctx context.Context) ([]ProviderAccountMetadata, error)
 	MarkOAuthRefreshFailure(ctx context.Context, credentialID int64, failureClass, failureDescription string, now time.Time) error
@@ -346,7 +346,7 @@ func (s *UpstreamService) AddOAuthCredential(ctx context.Context, input NewOAuth
 		ExpiresAt:           input.ExpiresAt,
 		CreatedAt:           s.now(),
 	}
-	created, err := s.Repo.InsertOAuthCredential(ctx, meta, accessToken, refreshToken)
+	created, err := s.Repo.UpsertOAuthCredentialForAccountHash(ctx, meta, accessToken, refreshToken)
 	if err == nil {
 		s.logInfo(ctx, "credential_created", slog.String("kind", "oauth"), slog.String("provider_instance", input.ProviderInstanceID), slog.Int64("credential_id", created.ID))
 	}

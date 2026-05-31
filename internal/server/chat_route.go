@@ -8,7 +8,6 @@ import (
 	"ilonasin/internal/credentials"
 	"ilonasin/internal/metadata"
 	"ilonasin/internal/openai"
-	"ilonasin/internal/routing"
 )
 
 const maxRequestBodyBytes = 1 << 20
@@ -27,7 +26,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "unsupported_request")
 		return
 	}
-	addr, err := routing.ParseModelAddress(req.Model)
+	addr, err := s.resolveModelAddress(r.Context(), req.Model)
 	if err != nil {
 		s.logHTTP(r, http.StatusBadRequest, "chat_route", "invalid_model")
 		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "invalid_model")

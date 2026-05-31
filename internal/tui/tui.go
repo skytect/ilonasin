@@ -292,7 +292,7 @@ func (m Model) View() string {
 	}
 	m.writeObservability(&b)
 	m.writePruning(&b)
-	b.WriteString("\nPress n to create local token, a to add API key, d to disable local token, x to disable API key, l to login OAuth, o/r to select/refresh OAuth, f/F to mark credential group, p to prune telemetry, q to quit.\n")
+	b.WriteString("\nPress n to create local token, a to add API key, d to disable local token, x to disable API key, l to login/relogin OAuth, o/r to select/refresh OAuth, f/F to mark credential group, p to prune telemetry, q to quit.\n")
 	return b.String()
 }
 

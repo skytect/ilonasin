@@ -203,17 +203,27 @@ func rawResponsesInputItems(raw json.RawMessage) ([]json.RawMessage, error) {
 	if len(bytes.TrimSpace(raw)) == 0 || isJSONNull(raw) {
 		return nil, errors.New("input is required")
 	}
-	var items []json.RawMessage
+	var items []map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &items); err != nil {
 		return nil, errors.New("input must be an array")
 	}
 	if len(items) == 0 {
 		return nil, errors.New("input must not be empty")
 	}
-	return items, nil
+	out := make([]json.RawMessage, 0, len(items))
+	for i, item := range items {
+		normalized := normalizeResponsesInputItem(item)
+		rawItem, err := json.Marshal(normalized)
+		if err != nil {
+			return nil, fmt.Errorf("input[%d] is invalid", i)
+		}
+		out = append(out, rawItem)
+	}
+	return out, nil
 }
 
 func parseResponsesInputItem(raw map[string]json.RawMessage, index int) (ResponseInputItem, error) {
+	raw = normalizeResponsesInputItem(raw)
 	typ, err := requiredRawString(raw["type"], fmt.Sprintf("input[%d].type", index))
 	if err != nil {
 		return ResponseInputItem{}, err
@@ -236,6 +246,35 @@ func parseResponsesInputItem(raw map[string]json.RawMessage, index int) (Respons
 	default:
 		return ResponseInputItem{Type: typ}, nil
 	}
+}
+
+func normalizeResponsesInputItem(raw map[string]json.RawMessage) map[string]json.RawMessage {
+	rawType, hasType := raw["type"]
+	if hasType && !isJSONNull(rawType) {
+		return raw
+	}
+	if _, ok := raw["role"]; !ok {
+		return raw
+	}
+	content, ok := raw["content"]
+	if !ok || isJSONNull(content) {
+		return raw
+	}
+	out := make(map[string]json.RawMessage, len(raw)+1)
+	for key, value := range raw {
+		out[key] = value
+	}
+	out["type"] = mustRawJSONString("message")
+	if text, ok := rawJSONStringValue(content); ok {
+		part := []map[string]string{{
+			"type": "input_text",
+			"text": text,
+		}}
+		if rawContent, err := json.Marshal(part); err == nil {
+			out["content"] = rawContent
+		}
+	}
+	return out
 }
 
 func parseResponsesMessageItem(raw map[string]json.RawMessage, index int, typ string) (ResponseInputItem, error) {

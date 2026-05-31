@@ -34,6 +34,7 @@ type ChatCompletionRequest struct {
 	Tools               []map[string]any       `json:"tools,omitempty"`
 	ToolChoice          any                    `json:"tool_choice,omitempty"`
 	ParallelToolCalls   *bool                  `json:"parallel_tool_calls,omitempty"`
+	User                *string                `json:"user,omitempty"`
 	Logprobs            *bool                  `json:"logprobs,omitempty"`
 	TopLogprobs         *int                   `json:"top_logprobs,omitempty"`
 	LogitBias           map[string]json.Number `json:"logit_bias,omitempty"`
@@ -91,6 +92,9 @@ func DecodeChatCompletion(r io.Reader) (ChatCompletionRequest, error) {
 		return ChatCompletionRequest{}, err
 	}
 	if err := validateRawParallelToolCalls(raw); err != nil {
+		return ChatCompletionRequest{}, err
+	}
+	if err := validateRawUser(raw); err != nil {
 		return ChatCompletionRequest{}, err
 	}
 	toolNames, hasTools, err := validateRawTools(raw)
@@ -323,6 +327,9 @@ func MarshalUpstreamChatRequest(req ChatCompletionRequest, upstreamModel string)
 	}
 	if req.ParallelToolCalls != nil {
 		out["parallel_tool_calls"] = *req.ParallelToolCalls
+	}
+	if req.User != nil {
+		out["user"] = *req.User
 	}
 	if req.Stream {
 		out["stream"] = true
@@ -564,6 +571,7 @@ func validateTopLevelKeys(raw map[string]json.RawMessage) error {
 		"tools":                 true,
 		"tool_choice":           true,
 		"parallel_tool_calls":   true,
+		"user":                  true,
 		"logprobs":              true,
 		"top_logprobs":          true,
 		"logit_bias":            true,
@@ -578,6 +586,25 @@ func validateTopLevelKeys(raw map[string]json.RawMessage) error {
 		if !allowed[key] {
 			return fmt.Errorf("unknown field %q", key)
 		}
+	}
+	return nil
+}
+
+func validateRawUser(raw map[string]json.RawMessage) error {
+	value, ok := raw["user"]
+	if !ok {
+		return nil
+	}
+	trimmed := bytes.TrimSpace(value)
+	if len(trimmed) == 0 || isJSONNull(trimmed) {
+		return errors.New("user must be a non-empty string")
+	}
+	var out string
+	if err := json.Unmarshal(trimmed, &out); err != nil {
+		return errors.New("user must be a non-empty string")
+	}
+	if out == "" || len(out) > 512 {
+		return errors.New("user must be a non-empty string up to 512 bytes")
 	}
 	return nil
 }

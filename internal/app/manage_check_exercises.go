@@ -378,7 +378,11 @@ func exerciseModelCacheCheck(ctx context.Context, registry provider.Registry, cf
 	}}); err != nil {
 		return err
 	}
-	return tui.ExerciseModelCacheSummary(ctx, cfg, registry, store)
+	snapshot, err := management.Service{Registry: registry, ModelCache: store}.LoadManagementSnapshot(ctx)
+	if err != nil {
+		return err
+	}
+	return tui.ExerciseModelCacheSummary(ctx, cfg, registry, &snapshotCheckClient{resp: snapshot})
 }
 
 func exerciseObservabilityCheck(ctx context.Context, registry provider.Registry, cfg config.Config) error {
@@ -527,7 +531,11 @@ func exerciseObservabilityCheck(ctx context.Context, registry provider.Registry,
 	}); err != nil {
 		return fmt.Errorf("seed observability quota: %w", err)
 	}
-	return tui.ExerciseObservabilitySummary(ctx, cfg, registry, store)
+	snapshot, err := management.Service{Registry: registry, Observability: store}.LoadManagementSnapshot(ctx)
+	if err != nil {
+		return err
+	}
+	return tui.ExerciseObservabilitySummary(ctx, cfg, registry, &snapshotCheckClient{resp: snapshot})
 }
 
 func exerciseOAuthCheck(ctx context.Context, registry provider.Registry, cfg config.Config) error {
@@ -1562,7 +1570,11 @@ func exerciseTelemetryPruneCheck(ctx context.Context, registry provider.Registry
 	if err := exerciseTelemetryPruneManagementSafety(ctx, checkDBDir, configPath); err != nil {
 		return err
 	}
-	if err := tui.ExerciseTelemetryPrune(ctx, cfg, registry, store, client, func() time.Time { return now }, expected); err != nil {
+	snapshot, err := management.Service{Registry: registry, Observability: store, Pruner: store}.LoadManagementSnapshot(ctx)
+	if err != nil {
+		return err
+	}
+	if err := tui.ExerciseTelemetryPrune(ctx, cfg, registry, &snapshotCheckClient{resp: snapshot}, client, func() time.Time { return now }, expected); err != nil {
 		return err
 	}
 	afterProtected, err := protectedStateSnapshot(ctx, store, configPath)

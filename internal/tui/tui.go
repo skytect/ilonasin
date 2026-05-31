@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -32,8 +33,6 @@ type Model struct {
 	upstreamReader   management.UpstreamMetadataReader
 	oauthReader      credentials.OAuthMetadataReader
 	oauth            management.OAuthClient
-	modelCache       ModelCacheReader
-	observability    ObservabilityReader
 	pruner           management.TelemetryPruneClient
 	logger           *slog.Logger
 	now              func() time.Time
@@ -68,30 +67,16 @@ type Model struct {
 	checkMode        bool
 }
 
-type ModelCacheReader interface {
-	ListModelCache(ctx context.Context) ([]provider.ModelMetadata, error)
-}
-
-type ObservabilityReader interface {
-	RecentRequests(ctx context.Context, limit int) ([]metadata.RequestSummary, error)
-	UsageByProvider(ctx context.Context) ([]metadata.UsageSummary, error)
-	LatencyByProvider(ctx context.Context) ([]metadata.LatencySummary, error)
-	StreamSummary(ctx context.Context) ([]metadata.StreamSummary, error)
-	LatestHealth(ctx context.Context) ([]metadata.HealthSummary, error)
-	RecentFallbacks(ctx context.Context, limit int) ([]metadata.FallbackSummary, error)
-	QuotaByProvider(ctx context.Context) ([]metadata.QuotaSummary, error)
-}
-
 type TelemetryPruner interface {
 	PruneTelemetryBefore(ctx context.Context, cutoff time.Time) (metadata.PruneResult, error)
 }
 
-func NewModel(cfg config.Config, registry provider.Registry, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, upstreamReader management.UpstreamMetadataReader, oauthReader credentials.OAuthMetadataReader, oauth management.OAuthClient, modelCache ModelCacheReader, observability ObservabilityReader, pruner management.TelemetryPruneClient, now func() time.Time, loggers ...*slog.Logger) Model {
-	return Model{cfg: cfg, registry: registry, tokens: tokens, upstreams: upstreams, upstreamReader: upstreamReader, oauthReader: oauthReader, oauth: oauth, modelCache: modelCache, observability: observability, pruner: pruner, now: now, logger: firstLogger(loggers)}
+func NewModel(cfg config.Config, registry provider.Registry, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, upstreamReader management.UpstreamMetadataReader, oauthReader credentials.OAuthMetadataReader, oauth management.OAuthClient, pruner management.TelemetryPruneClient, now func() time.Time, loggers ...*slog.Logger) Model {
+	return Model{cfg: cfg, registry: registry, tokens: tokens, upstreams: upstreams, upstreamReader: upstreamReader, oauthReader: oauthReader, oauth: oauth, pruner: pruner, now: now, logger: firstLogger(loggers)}
 }
 
-func newCheckModel(cfg config.Config, registry provider.Registry, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, upstreamReader management.UpstreamMetadataReader, oauthReader credentials.OAuthMetadataReader, oauth management.OAuthClient, modelCache ModelCacheReader, observability ObservabilityReader, pruner management.TelemetryPruneClient, now func() time.Time, loggers ...*slog.Logger) Model {
-	return Model{cfg: cfg, registry: registry, tokens: tokens, upstreams: upstreams, upstreamReader: upstreamReader, oauthReader: oauthReader, oauth: oauth, modelCache: modelCache, observability: observability, pruner: pruner, now: now, logger: firstLogger(loggers), quitOnInit: true, checkMode: true}
+func newCheckModel(cfg config.Config, registry provider.Registry, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, upstreamReader management.UpstreamMetadataReader, oauthReader credentials.OAuthMetadataReader, oauth management.OAuthClient, pruner management.TelemetryPruneClient, now func() time.Time, loggers ...*slog.Logger) Model {
+	return Model{cfg: cfg, registry: registry, tokens: tokens, upstreams: upstreams, upstreamReader: upstreamReader, oauthReader: oauthReader, oauth: oauth, pruner: pruner, now: now, logger: firstLogger(loggers), quitOnInit: true, checkMode: true}
 }
 
 func (m Model) Init() tea.Cmd {
@@ -336,11 +321,11 @@ func (m Model) View() string {
 	return b.String()
 }
 
-func Run(cfg config.Config, registry provider.Registry, snapshot management.SnapshotClient, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, oauth management.OAuthClient, modelCache ModelCacheReader, observability ObservabilityReader, pruner management.TelemetryPruneClient, loggers ...*slog.Logger) error {
+func Run(cfg config.Config, registry provider.Registry, snapshot management.SnapshotClient, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, oauth management.OAuthClient, pruner management.TelemetryPruneClient, loggers ...*slog.Logger) error {
 	if snapshot == nil {
 		return fmt.Errorf("management snapshot client is required")
 	}
-	model := NewModel(cfg, registry, tokens, upstreams, nil, nil, oauth, modelCache, observability, pruner, nil, loggers...)
+	model := NewModel(cfg, registry, tokens, upstreams, nil, nil, oauth, pruner, nil, loggers...)
 	model.snapshot = snapshot
 	if err := model.reload(); err != nil {
 		return err
@@ -349,11 +334,11 @@ func Run(cfg config.Config, registry provider.Registry, snapshot management.Snap
 	return err
 }
 
-func Check(cfg config.Config, registry provider.Registry, snapshot management.SnapshotClient, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, oauth management.OAuthClient, modelCache ModelCacheReader, observability ObservabilityReader, pruner management.TelemetryPruneClient, out io.Writer, loggers ...*slog.Logger) error {
+func Check(cfg config.Config, registry provider.Registry, snapshot management.SnapshotClient, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, oauth management.OAuthClient, pruner management.TelemetryPruneClient, out io.Writer, loggers ...*slog.Logger) error {
 	if snapshot == nil {
 		return fmt.Errorf("management snapshot client is required")
 	}
-	model := newCheckModel(cfg, registry, tokens, upstreams, nil, nil, oauth, modelCache, observability, pruner, nil, loggers...)
+	model := newCheckModel(cfg, registry, tokens, upstreams, nil, nil, oauth, pruner, nil, loggers...)
 	model.snapshot = snapshot
 	if err := model.reload(); err != nil {
 		return err
@@ -367,7 +352,7 @@ func Check(cfg config.Config, registry provider.Registry, snapshot management.Sn
 }
 
 func ExerciseTokenLifecycle(ctx context.Context, tokens management.LocalTokenClient) error {
-	model := NewModel(config.Config{}, provider.Registry{}, tokens, nil, nil, nil, nil, nil, nil, nil, nil)
+	model := NewModel(config.Config{}, provider.Registry{}, tokens, nil, nil, nil, nil, nil, nil)
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
 	m := updated.(Model)
 	if m.reveal == "" || m.revealTokenID == 0 {
@@ -407,7 +392,7 @@ func ExerciseUpstreamCredentialLifecycle(ctx context.Context, cfg config.Config,
 	if !ok {
 		return nil
 	}
-	model := newCheckModel(cfg, registry, nil, upstreams, reader, nil, nil, nil, nil, nil, nil)
+	model := newCheckModel(cfg, registry, nil, upstreams, reader, nil, nil, nil, nil)
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
 	m := updated.(Model)
 	_ = m.reload()
@@ -437,7 +422,7 @@ func ExerciseFallbackPolicyLifecycle(ctx context.Context, cfg config.Config, reg
 	if !ok {
 		return nil
 	}
-	model := newCheckModel(cfg, registry, nil, upstreams, reader, nil, nil, nil, nil, nil, nil)
+	model := newCheckModel(cfg, registry, nil, upstreams, reader, nil, nil, nil, nil)
 	_ = model.reload()
 	view := model.View()
 	if !strings.Contains(view, "Fallback policies") ||
@@ -489,7 +474,7 @@ func ExerciseFallbackPolicyLifecycle(ctx context.Context, cfg config.Config, reg
 		return fmt.Errorf("fallback policy disable resolved %d credentials", len(resolved))
 	}
 	failingManager := failingFallbackPolicyManager{}
-	failing := newCheckModel(cfg, registry, nil, directUpstreamMutations{failingManager}, failingManager, nil, nil, nil, nil, nil, nil)
+	failing := newCheckModel(cfg, registry, nil, directUpstreamMutations{failingManager}, failingManager, nil, nil, nil, nil)
 	_ = failing.reload()
 	updated, _ = failing.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
 	failed := updated.(Model)
@@ -514,7 +499,7 @@ func ExerciseOAuthFallbackPolicySummary(ctx context.Context, cfg config.Config, 
 	if codexID == "" {
 		return nil
 	}
-	model := newCheckModel(cfg, registry, nil, directUpstreamMutations{upstreams}, upstreams, nil, nil, nil, nil, nil, nil)
+	model := newCheckModel(cfg, registry, nil, directUpstreamMutations{upstreams}, upstreams, nil, nil, nil, nil)
 	_ = model.reload()
 	view := model.View()
 	if !strings.Contains(view, codexID+" default disabled credentials 2") {
@@ -620,10 +605,12 @@ func (failingFallbackPolicyManager) DisableFallbackGroup(context.Context, string
 	return fmt.Errorf("sk-fallback-policy raw-provider-payload")
 }
 
-func ExerciseModelCacheSummary(ctx context.Context, cfg config.Config, registry provider.Registry, cache ModelCacheReader) error {
-	model := newCheckModel(cfg, registry, nil, nil, nil, nil, nil, cache, nil, nil, nil)
-	_ = model.reload()
-	view := model.View()
+func ExerciseModelCacheSummary(ctx context.Context, cfg config.Config, registry provider.Registry, snapshot management.SnapshotClient) error {
+	var out bytes.Buffer
+	if err := Check(cfg, registry, snapshot, nil, nil, nil, nil, &out); err != nil {
+		return err
+	}
+	view := out.String()
 	if !strings.Contains(view, "Model cache") || !strings.Contains(view, "deepseek 1 models") || !strings.Contains(view, "2026-05-30T12:00:00Z") {
 		return fmt.Errorf("model cache summary missing")
 	}
@@ -635,10 +622,12 @@ func ExerciseModelCacheSummary(ctx context.Context, cfg config.Config, registry 
 	return nil
 }
 
-func ExerciseObservabilitySummary(ctx context.Context, cfg config.Config, registry provider.Registry, observability ObservabilityReader) error {
-	model := newCheckModel(cfg, registry, nil, nil, nil, nil, nil, nil, observability, nil, nil)
-	_ = model.reload()
-	view := model.View()
+func ExerciseObservabilitySummary(ctx context.Context, cfg config.Config, registry provider.Registry, snapshot management.SnapshotClient) error {
+	var out bytes.Buffer
+	if err := Check(cfg, registry, snapshot, nil, nil, nil, nil, &out); err != nil {
+		return err
+	}
+	view := out.String()
 	required := []string{
 		"Recent requests",
 		"Usage totals",
@@ -679,9 +668,12 @@ func ExerciseObservabilitySummary(ctx context.Context, cfg config.Config, regist
 	return nil
 }
 
-func ExerciseTelemetryPrune(ctx context.Context, cfg config.Config, registry provider.Registry, observability ObservabilityReader, pruner management.TelemetryPruneClient, now func() time.Time, expected metadata.PruneResult) error {
-	model := newCheckModel(cfg, registry, nil, nil, nil, nil, nil, nil, observability, pruner, now)
-	_ = model.reload()
+func ExerciseTelemetryPrune(ctx context.Context, cfg config.Config, registry provider.Registry, snapshot management.SnapshotClient, pruner management.TelemetryPruneClient, now func() time.Time, expected metadata.PruneResult) error {
+	model := newCheckModel(cfg, registry, nil, nil, nil, nil, nil, pruner, now)
+	model.snapshot = snapshot
+	if err := model.reload(); err != nil {
+		return err
+	}
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
 	m := updated.(Model)
 	if m.pruneResult == nil {
@@ -721,7 +713,8 @@ func ExerciseTelemetryPrune(ctx context.Context, cfg config.Config, registry pro
 			return fmt.Errorf("telemetry prune summary leaked forbidden marker")
 		}
 	}
-	failing := newCheckModel(cfg, registry, nil, nil, nil, nil, nil, nil, observability, directTelemetryPruner{failingTelemetryPruner{}}, now)
+	failing := newCheckModel(cfg, registry, nil, nil, nil, nil, nil, directTelemetryPruner{failingTelemetryPruner{}}, now)
+	failing.snapshot = snapshot
 	updated, _ = failing.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
 	failed := updated.(Model)
 	failedView := failed.View()
@@ -760,7 +753,7 @@ func (d directTelemetryPruner) PruneTelemetry(ctx context.Context, req managemen
 }
 
 func ExerciseOAuthSummary(ctx context.Context, cfg config.Config, registry provider.Registry, oauth credentials.OAuthMetadataReader) error {
-	model := newCheckModel(cfg, registry, nil, nil, nil, oauth, nil, nil, nil, nil, nil)
+	model := newCheckModel(cfg, registry, nil, nil, nil, oauth, nil, nil, nil)
 	_ = model.reload()
 	view := model.View()
 	for _, text := range []string{
@@ -794,7 +787,7 @@ func ExerciseOAuthSummary(ctx context.Context, cfg config.Config, registry provi
 }
 
 func ExerciseOAuthRefresh(ctx context.Context, cfg config.Config, registry provider.Registry, oauth credentials.OAuthMetadataReader, refresher management.OAuthClient) error {
-	model := newCheckModel(cfg, registry, nil, nil, nil, oauth, refresher, nil, nil, nil, nil)
+	model := newCheckModel(cfg, registry, nil, nil, nil, oauth, refresher, nil, nil)
 	_ = model.reload()
 	if len(model.oauthRows) < 2 {
 		return fmt.Errorf("oauth refresh check needs at least two oauth credentials")
@@ -824,7 +817,7 @@ func ExerciseOAuthRefresh(ctx context.Context, cfg config.Config, registry provi
 			return fmt.Errorf("oauth refresh view leaked forbidden marker")
 		}
 	}
-	failing := newCheckModel(cfg, registry, nil, nil, nil, oauth, directOAuthMutations{refresher: failingOAuthRefreshController{}}, nil, nil, nil, nil)
+	failing := newCheckModel(cfg, registry, nil, nil, nil, oauth, directOAuthMutations{refresher: failingOAuthRefreshController{}}, nil, nil)
 	_ = failing.reload()
 	failing.oauthSelected = 1
 	updated, _ = failing.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
@@ -901,7 +894,7 @@ func (d directOAuthMutations) RefreshOAuthCredential(ctx context.Context, req ma
 }
 
 func ExerciseOAuthDeviceLogin(ctx context.Context, cfg config.Config, registry provider.Registry, oauth credentials.OAuthMetadataReader, login management.OAuthClient) error {
-	model := newCheckModel(cfg, registry, nil, nil, nil, oauth, login, nil, nil, nil, nil)
+	model := newCheckModel(cfg, registry, nil, nil, nil, oauth, login, nil, nil)
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
 	if cmd == nil {
 		return fmt.Errorf("oauth login did not start")
@@ -959,7 +952,7 @@ func ExerciseOAuthDeviceLogin(ctx context.Context, cfg config.Config, registry p
 			return fmt.Errorf("oauth login view leaked %q", forbidden)
 		}
 	}
-	failing := newCheckModel(cfg, registry, nil, nil, nil, oauth, directOAuthMutations{login: failingOAuthLoginController{}}, nil, nil, nil, nil)
+	failing := newCheckModel(cfg, registry, nil, nil, nil, oauth, directOAuthMutations{login: failingOAuthLoginController{}}, nil, nil)
 	updated, cmd = failing.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
 	if cmd != nil {
 		updated, _ = updated.(Model).Update(cmd())
@@ -967,7 +960,7 @@ func ExerciseOAuthDeviceLogin(ctx context.Context, cfg config.Config, registry p
 	if !strings.Contains(updated.(Model).View(), "Error: OAuth login failed") {
 		return fmt.Errorf("oauth login failure message missing")
 	}
-	eventFailing := newCheckModel(cfg, registry, nil, nil, nil, oauth, directOAuthMutations{login: eventOAuthLoginController{}}, nil, nil, nil, nil)
+	eventFailing := newCheckModel(cfg, registry, nil, nil, nil, oauth, directOAuthMutations{login: eventOAuthLoginController{}}, nil, nil)
 	updated, cmd = eventFailing.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
 	if cmd != nil {
 		updated, _ = updated.(Model).Update(cmd())
@@ -976,7 +969,7 @@ func ExerciseOAuthDeviceLogin(ctx context.Context, cfg config.Config, registry p
 		return fmt.Errorf("oauth login event id message missing")
 	}
 	cancelAware := &cancelAwareOAuthLoginController{}
-	cancelModel := newCheckModel(cfg, registry, nil, nil, nil, nil, directOAuthMutations{login: cancelAware}, nil, nil, nil, nil)
+	cancelModel := newCheckModel(cfg, registry, nil, nil, nil, nil, directOAuthMutations{login: cancelAware}, nil, nil)
 	updated, cmd = cancelModel.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
 	if cmd == nil {
 		return fmt.Errorf("oauth login cancel check did not start")
@@ -998,7 +991,7 @@ func ExerciseOAuthDeviceLogin(ctx context.Context, cfg config.Config, registry p
 }
 
 func ExerciseOAuthDeviceLoginFailure(ctx context.Context, cfg config.Config, registry provider.Registry, oauth credentials.OAuthMetadataReader, login management.OAuthClient, wantClass string) (string, error) {
-	model := newCheckModel(cfg, registry, nil, nil, nil, oauth, login, nil, nil, nil, nil)
+	model := newCheckModel(cfg, registry, nil, nil, nil, oauth, login, nil, nil)
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
 	if cmd == nil {
 		return "", fmt.Errorf("oauth login failure check did not start")
@@ -1125,58 +1118,6 @@ func (m *Model) reloadDirect() error {
 			return err
 		}
 		m.accountRows = accountRows
-	}
-	if m.modelCache != nil {
-		rows, err := m.modelCache.ListModelCache(context.Background())
-		if err != nil {
-			m.err = err.Error()
-			return err
-		}
-		m.modelRows = rows
-	}
-	if m.observability != nil {
-		requestRows, err := m.observability.RecentRequests(context.Background(), 5)
-		if err != nil {
-			m.err = err.Error()
-			return err
-		}
-		m.requestRows = requestRows
-		usageRows, err := m.observability.UsageByProvider(context.Background())
-		if err != nil {
-			m.err = err.Error()
-			return err
-		}
-		m.usageRows = usageRows
-		latencyRows, err := m.observability.LatencyByProvider(context.Background())
-		if err != nil {
-			m.err = err.Error()
-			return err
-		}
-		m.latencyRows = latencyRows
-		streamRows, err := m.observability.StreamSummary(context.Background())
-		if err != nil {
-			m.err = err.Error()
-			return err
-		}
-		m.streamRows = streamRows
-		healthRows, err := m.observability.LatestHealth(context.Background())
-		if err != nil {
-			m.err = err.Error()
-			return err
-		}
-		m.healthRows = healthRows
-		fallbackRows, err := m.observability.RecentFallbacks(context.Background(), 5)
-		if err != nil {
-			m.err = err.Error()
-			return err
-		}
-		m.fallbackRows = fallbackRows
-		quotaRows, err := m.observability.QuotaByProvider(context.Background())
-		if err != nil {
-			m.err = err.Error()
-			return err
-		}
-		m.quotaRows = quotaRows
 	}
 	if m.selected >= len(m.tokenRows) {
 		m.selected = len(m.tokenRows) - 1
@@ -1537,7 +1478,7 @@ func (m Model) writeFallbackPolicies(b *strings.Builder) {
 }
 
 func (m Model) writeObservability(b *strings.Builder) {
-	if m.observability == nil && m.snapshot == nil {
+	if m.snapshot == nil {
 		return
 	}
 	b.WriteString("\nRecent requests\n")

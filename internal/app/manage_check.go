@@ -79,7 +79,7 @@ func ManageCheck(opts Options) error {
 	}
 	var buf bytes.Buffer
 	tokenClient := management.NewUnixLocalTokenClient(management.SocketPath(rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database))
-	if err := tui.Check(rt.Config, rt.Registry, tokenClient, tokenClient, tokenClient, tokenClient, nil, nil, tokenClient, &buf, rt.Logger); err != nil {
+	if err := tui.Check(rt.Config, rt.Registry, tokenClient, tokenClient, tokenClient, tokenClient, tokenClient, &buf, rt.Logger); err != nil {
 		return err
 	}
 	afterSnapshot, err := selectedHomeSnapshot(context.Background(), rt.Store, rt.ConfigPath)
@@ -122,6 +122,23 @@ func assertProductionUpstreamMutationWiring() error {
 		{path: "internal/tui/tui.go", forbidden: "func Check(cfg config.Config, registry provider.Registry, snapshot management.SnapshotClient, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, oauth " + "credentials.OAuthMetadataReader"},
 		{path: "internal/tui/tui.go", forbidden: "func Run(cfg config.Config, registry provider.Registry, snapshot management.SnapshotClient, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, oauth management.OAuthClient, modelCache ModelCacheReader, observability ObservabilityReader, pruner " + "TelemetryPruner"},
 		{path: "internal/tui/tui.go", forbidden: "func Check(cfg config.Config, registry provider.Registry, snapshot management.SnapshotClient, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, oauth management.OAuthClient, modelCache ModelCacheReader, observability ObservabilityReader, pruner " + "TelemetryPruner"},
+		{path: "internal/tui/tui.go", forbidden: "ModelCacheReader"},
+		{path: "internal/tui/tui.go", forbidden: "ObservabilityReader"},
+		{path: "internal/tui/tui.go", forbidden: "modelCache       "},
+		{path: "internal/tui/tui.go", forbidden: "observability    "},
+		{path: "internal/tui/tui.go", forbidden: "m.modelCache"},
+		{path: "internal/tui/tui.go", forbidden: "m.observability"},
+		{path: "internal/tui/tui.go", forbidden: "ListModelCache(context.Background())"},
+		{path: "internal/tui/tui.go", forbidden: "RecentRequests(context.Background()"},
+		{path: "internal/tui/tui.go", forbidden: "UsageByProvider(context.Background())"},
+		{path: "internal/tui/tui.go", forbidden: "LatencyByProvider(context.Background())"},
+		{path: "internal/tui/tui.go", forbidden: "StreamSummary(context.Background())"},
+		{path: "internal/tui/tui.go", forbidden: "LatestHealth(context.Background())"},
+		{path: "internal/tui/tui.go", forbidden: "RecentFallbacks(context.Background()"},
+		{path: "internal/tui/tui.go", forbidden: "QuotaByProvider(context.Background())"},
+		{path: "internal/app/manage_check_exercises.go", forbidden: "tui.ExerciseModelCacheSummary(ctx, cfg, registry, store)"},
+		{path: "internal/app/manage_check_exercises.go", forbidden: "tui.ExerciseObservabilitySummary(ctx, cfg, registry, store)"},
+		{path: "internal/app/manage_check_exercises.go", forbidden: "tui.ExerciseTelemetryPrune(ctx, cfg, registry, store,"},
 	}
 	for _, check := range checks {
 		body, err := os.ReadFile(filepath.Join(root, check.path))
@@ -277,7 +294,12 @@ func assertTUIUpstreamArg(path, name string) error {
 			return true
 		}
 		found = true
-		if len(call.Args) < 9 || !identName(call.Args[4], "tokenClient") || !identName(call.Args[5], "tokenClient") || !identName(call.Args[8], "tokenClient") {
+		if len(call.Args) < 7 ||
+			!identName(call.Args[2], "tokenClient") ||
+			!identName(call.Args[3], "tokenClient") ||
+			!identName(call.Args[4], "tokenClient") ||
+			!identName(call.Args[5], "tokenClient") ||
+			!identName(call.Args[6], "tokenClient") {
 			invalid = true
 		}
 		return true
@@ -286,7 +308,7 @@ func assertTUIUpstreamArg(path, name string) error {
 		return fmt.Errorf("production tui.%s call missing in %s", name, path)
 	}
 	if invalid {
-		return fmt.Errorf("production tui.%s mutation arguments are not the management client", name)
+		return fmt.Errorf("production tui.%s management arguments are not the management client", name)
 	}
 	return nil
 }

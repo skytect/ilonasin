@@ -65,5 +65,5 @@ func Manage(opts Options) error {
 	if _, err := tokenClient.LoadManagementSnapshot(context.Background()); err != nil {
 		return err
 	}
-	return tui.Run(rt.Config, rt.Registry, tokenClient, tokenClient, tokenClient, tokenClient, nil, nil, tokenClient, rt.Logger)
+	return tui.Run(rt.Config, rt.Registry, tokenClient, tokenClient, tokenClient, tokenClient, tokenClient, rt.Logger)
 }

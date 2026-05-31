@@ -203,7 +203,7 @@ func exerciseManagementSnapshotTUIReload(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := tui.Check(cfg, registry, client, failingTokenClient{}, nil, nil, nil, nil, nil, &out); err != nil {
+	if err := tui.Check(cfg, registry, client, failingTokenClient{}, nil, nil, nil, &out); err != nil {
 		return err
 	}
 	if client.calls != 1 {
@@ -238,7 +238,7 @@ func exerciseManagementSnapshotTUIReload(ctx context.Context) error {
 		return fmt.Errorf("snapshot TUI view used local registry provider")
 	}
 	failing := &snapshotCheckClient{err: fmt.Errorf("snapshot failure")}
-	if err := tui.Check(cfg, registry, failing, failingTokenClient{}, nil, nil, inertModelCache{}, inertObservability{}, inertPruner{}, &out); err == nil {
+	if err := tui.Check(cfg, registry, failing, failingTokenClient{}, nil, nil, nil, &out); err == nil {
 		return fmt.Errorf("snapshot reload failure fell back to direct readers")
 	}
 	return nil
@@ -304,7 +304,7 @@ func exerciseManagementSnapshotSanitization(ctx context.Context) error {
 		return fmt.Errorf("management snapshot leaked base URL query or fragment")
 	}
 	var out bytes.Buffer
-	if err := tui.Check(config.Default("/tmp/ilonasin-snapshot-sanitize"), registry, &snapshotCheckClient{resp: resp}, failingTokenClient{}, nil, nil, nil, nil, nil, &out); err != nil {
+	if err := tui.Check(config.Default("/tmp/ilonasin-snapshot-sanitize"), registry, &snapshotCheckClient{resp: resp}, failingTokenClient{}, nil, nil, nil, &out); err != nil {
 		return err
 	}
 	view := out.String()
@@ -561,74 +561,6 @@ func hasUpstreamCredential(rows []management.UpstreamCredential, label string) b
 		}
 	}
 	return false
-}
-
-type inertUpstreams struct{}
-
-func (inertUpstreams) AddAPIKey(context.Context, string, string, string) (credentials.UpstreamCredentialMetadata, error) {
-	return credentials.UpstreamCredentialMetadata{}, fmt.Errorf("not used")
-}
-func (inertUpstreams) List(context.Context) ([]credentials.UpstreamCredentialMetadata, error) {
-	return nil, fmt.Errorf("direct upstream list should not be used")
-}
-func (inertUpstreams) ListFallbackPolicies(context.Context) ([]credentials.FallbackPolicyMetadata, error) {
-	return nil, fmt.Errorf("direct fallback list should not be used")
-}
-func (inertUpstreams) Disable(context.Context, int64) error { return fmt.Errorf("not used") }
-func (inertUpstreams) EnableFallbackGroup(context.Context, string, string, string) error {
-	return fmt.Errorf("not used")
-}
-func (inertUpstreams) DisableFallbackGroup(context.Context, string, string, string) error {
-	return fmt.Errorf("not used")
-}
-
-type inertOAuth struct{}
-
-func (inertOAuth) ListOAuthCredentials(context.Context) ([]credentials.OAuthCredentialMetadata, error) {
-	return nil, fmt.Errorf("direct oauth list should not be used")
-}
-func (inertOAuth) ListProviderAccounts(context.Context) ([]credentials.ProviderAccountMetadata, error) {
-	return nil, fmt.Errorf("direct account list should not be used")
-}
-
-type inertModelCache struct{}
-
-func (inertModelCache) ListModelCache(context.Context) ([]provider.ModelMetadata, error) {
-	return nil, fmt.Errorf("direct model cache list should not be used")
-}
-
-type inertObservability struct{}
-
-func (inertObservability) RecentRequests(context.Context, int) ([]metadata.RequestSummary, error) {
-	return nil, fmt.Errorf("direct request list should not be used")
-}
-func (inertObservability) UsageByProvider(context.Context) ([]metadata.UsageSummary, error) {
-	return nil, fmt.Errorf("direct usage list should not be used")
-}
-func (inertObservability) LatencyByProvider(context.Context) ([]metadata.LatencySummary, error) {
-	return nil, fmt.Errorf("direct latency list should not be used")
-}
-func (inertObservability) StreamSummary(context.Context) ([]metadata.StreamSummary, error) {
-	return nil, fmt.Errorf("direct stream list should not be used")
-}
-func (inertObservability) LatestHealth(context.Context) ([]metadata.HealthSummary, error) {
-	return nil, fmt.Errorf("direct health list should not be used")
-}
-func (inertObservability) RecentFallbacks(context.Context, int) ([]metadata.FallbackSummary, error) {
-	return nil, fmt.Errorf("direct fallback list should not be used")
-}
-func (inertObservability) QuotaByProvider(context.Context) ([]metadata.QuotaSummary, error) {
-	return nil, fmt.Errorf("direct quota list should not be used")
-}
-
-type inertPruner struct{}
-
-func (inertPruner) PruneTelemetryBefore(context.Context, time.Time) (metadata.PruneResult, error) {
-	return metadata.PruneResult{}, fmt.Errorf("not used")
-}
-
-func (inertPruner) PruneTelemetry(context.Context, management.PruneTelemetryRequest) (management.PruneTelemetryResponse, error) {
-	return management.PruneTelemetryResponse{}, fmt.Errorf("not used")
 }
 
 type sanitizeTokens struct{ now time.Time }

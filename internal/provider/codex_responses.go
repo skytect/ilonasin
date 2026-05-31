@@ -893,10 +893,29 @@ func (state *codexResponseParseState) addCodexFunctionCall(key, callID, name, na
 		return fmt.Errorf("conflicting codex function_call")
 	}
 	if len(arguments) != 0 && !bytes.Equal(bytes.TrimSpace(arguments), []byte("null")) {
+		argumentText, err := codexFunctionArgumentsText(arguments)
+		if err != nil {
+			return err
+		}
 		call.Arguments.Reset()
-		call.Arguments.Write(bytes.TrimSpace(arguments))
+		call.Arguments.WriteString(argumentText)
 	}
 	return nil
+}
+
+func codexFunctionArgumentsText(raw json.RawMessage) (string, error) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return "", nil
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return text, nil
+	}
+	if raw[0] != '{' && raw[0] != '[' {
+		return "", codexEventFailure{class: "upstream_invalid_response"}
+	}
+	return string(raw), nil
 }
 
 func (state *codexResponseParseState) appendCodexFunctionCallArguments(key, delta string) error {

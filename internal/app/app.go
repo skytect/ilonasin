@@ -3697,7 +3697,7 @@ func (u *serveCheckUpstream) handleServeCheckModels(w http.ResponseWriter, r *ht
 		return
 	}
 	if r.URL.Path == "/api/v1/models" {
-		_, _ = w.Write([]byte(`{"data":[{"id":"deepseek/deepseek-v4-pro","name":"DeepSeek V4 Pro","description":"raw description marker","pricing":{"prompt":"secret"},"context_length":1000000,"supported_parameters":["tools","tool_choice","response_format","reasoning","logprobs","top_logprobs","logit_bias"]},{"id":"","name":"bad"}]}`))
+		_, _ = w.Write([]byte(`{"data":[{"id":"deepseek/deepseek-v4-pro","name":"DeepSeek V4 Pro","description":"raw description marker","pricing":{"prompt":"secret"},"context_length":1000000,"supported_parameters":["tools","tool_choice","response_format","reasoning","logprobs","top_logprobs","logit_bias","temperature","top_p","top_k","min_p","top_a","repetition_penalty","seed","parallel_tool_calls","prediction","stream","user","service_tier","session_id","metadata","models","route","plugins","cache_control","modalities","image_config","stop_server_tools_when","trace","debug","raw-supported-parameter-marker"],"raw_provider_payload":"raw model private marker"},{"id":"","name":"bad"}]}`))
 		return
 	}
 	_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"deepseek-v4-pro","object":"model","owned_by":"deepseek"},{"id":"","object":"model"}]}`))
@@ -7001,8 +7001,18 @@ func exerciseModelDiscoveryCheck(ctx context.Context, base, token string, instan
 	if err := assertModelCacheRows(ctx, store); err != nil {
 		return err
 	}
-	if bytes.Contains(respBody, []byte("raw description marker")) || bytes.Contains(respBody, []byte("pricing")) || bytes.Contains(respBody, []byte("raw_provider_payload")) {
-		return fmt.Errorf("model discovery leaked raw provider metadata")
+	for _, forbidden := range [][]byte{
+		[]byte("raw description marker"),
+		[]byte("pricing"),
+		[]byte("raw_provider_payload"),
+		[]byte("raw model private marker"),
+		[]byte("raw-supported-parameter-marker"),
+		[]byte("cache_control"),
+		[]byte("stop_server_tools_when"),
+	} {
+		if bytes.Contains(respBody, forbidden) {
+			return fmt.Errorf("model discovery leaked raw provider metadata")
+		}
 	}
 	if err := assertServeCheckOAuthMarkerPlacement(ctx, store); err != nil {
 		return err
@@ -8170,11 +8180,28 @@ func assertModelCacheRows(ctx context.Context, store *sqlite.Store) error {
 	deepseekFound := false
 	for _, row := range rows {
 		if row.ProviderInstanceID == "openrouter" && row.ModelID == "deepseek/deepseek-v4-pro" {
-			if row.DisplayName != "DeepSeek V4 Pro" || row.ContextLength != 1000000 || row.CapabilityFlags != "chat,json_object,logit_bias,logprobs,reasoning,tools" {
+			if row.DisplayName != "DeepSeek V4 Pro" || row.ContextLength != 1000000 || row.CapabilityFlags != "advanced_sampling,chat,json_object,logit_bias,logprobs,metadata,parallel_tool_calls,prediction,reasoning,sampling,service_tier,session_id,stream,tools,user" {
 				return fmt.Errorf("openrouter model cache metadata missing")
 			}
-			if strings.Contains(row.DisplayName, "raw description marker") || strings.Contains(row.CapabilityFlags, "pricing") {
-				return fmt.Errorf("model cache leaked raw provider metadata")
+			for _, forbidden := range []string{
+				"raw description marker",
+				"pricing",
+				"raw_provider_payload",
+				"raw model private marker",
+				"raw-supported-parameter-marker",
+				"models",
+				"route",
+				"plugins",
+				"cache_control",
+				"modalities",
+				"image_config",
+				"stop_server_tools_when",
+				"trace",
+				"debug",
+			} {
+				if strings.Contains(row.DisplayName, forbidden) || strings.Contains(row.CapabilityFlags, forbidden) {
+					return fmt.Errorf("model cache leaked raw provider metadata")
+				}
 			}
 		}
 		if row.ProviderInstanceID == "deepseek" && row.ModelID == "deepseek-v4-pro" {

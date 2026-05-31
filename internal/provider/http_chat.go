@@ -1727,10 +1727,18 @@ func openRouterCapabilityFlags(item map[string]any) string {
 			continue
 		}
 		switch param {
+		case "temperature", "top_p", "frequency_penalty", "presence_penalty", "stop":
+			flags["sampling"] = true
+		case "top_k", "min_p", "top_a", "repetition_penalty", "seed":
+			flags["advanced_sampling"] = true
 		case "response_format":
 			flags["json_object"] = true
 		case "tools", "tool_choice":
 			flags["tools"] = true
+		case "parallel_tool_calls":
+			flags["parallel_tool_calls"] = true
+		case "prediction":
+			flags["prediction"] = true
 		case "logprobs", "top_logprobs":
 			flags["logprobs"] = true
 		case "logit_bias":
@@ -1739,6 +1747,14 @@ func openRouterCapabilityFlags(item map[string]any) string {
 			flags["reasoning"] = true
 		case "stream":
 			flags["stream"] = true
+		case "user":
+			flags["user"] = true
+		case "service_tier":
+			flags["service_tier"] = true
+		case "session_id":
+			flags["session_id"] = true
+		case "metadata":
+			flags["metadata"] = true
 		}
 	}
 	out := make([]string, 0, len(flags))

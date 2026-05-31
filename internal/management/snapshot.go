@@ -286,7 +286,7 @@ func sanitizeSnapshot(out *ManagementSnapshotResponse) {
 		out.OAuthCredentials[i].AccountDisplayLabel = safeSnapshotString(out.OAuthCredentials[i].AccountDisplayLabel)
 		out.OAuthCredentials[i].PlanLabel = safeSnapshotString(out.OAuthCredentials[i].PlanLabel)
 		out.OAuthCredentials[i].Scopes = safeSnapshotString(out.OAuthCredentials[i].Scopes)
-		out.OAuthCredentials[i].RefreshFailureClass = safeSnapshotString(out.OAuthCredentials[i].RefreshFailureClass)
+		out.OAuthCredentials[i].RefreshFailureClass = safeRefreshFailureClass(out.OAuthCredentials[i].RefreshFailureClass)
 		out.OAuthCredentials[i].RefreshFailureDescription = safeRefreshFailureDescription(out.OAuthCredentials[i].RefreshFailureDescription)
 	}
 	for i := range out.ProviderAccounts {
@@ -382,6 +382,14 @@ func safeRefreshFailureDescription(value string) string {
 		return string(runes[:maxRunes])
 	}
 	return value
+}
+
+func safeRefreshFailureClass(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	return safeErrorToken(value)
 }
 
 func safeMachineString(value string) string {

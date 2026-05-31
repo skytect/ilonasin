@@ -111,7 +111,7 @@ func oauthCredentialFromCredentials(row credentials.OAuthCredentialMetadata) OAu
 		Scopes:                    safeSnapshotString(row.Scopes),
 		ExpiresAt:                 row.ExpiresAt,
 		LastRefreshAt:             row.LastRefreshAt,
-		RefreshFailureClass:       safeSnapshotString(row.RefreshFailureClass),
+		RefreshFailureClass:       safeRefreshFailureClass(row.RefreshFailureClass),
 		RefreshFailureDescription: safeRefreshFailureDescription(row.RefreshFailureDescription),
 		CreatedAt:                 row.CreatedAt,
 		DisabledAt:                row.DisabledAt,

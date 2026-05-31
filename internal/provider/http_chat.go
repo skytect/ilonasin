@@ -109,7 +109,7 @@ func NewHTTPChatAdapter(client *http.Client) HTTPChatAdapter {
 
 func (a HTTPChatAdapter) ValidateChatRequest(instance Instance, req openai.ChatCompletionRequest) error {
 	commonUnsupported := []string{"tools", "tool_choice"}
-	openRouterSamplingFields := []string{"top_k", "min_p", "top_a", "repetition_penalty", "seed"}
+	openRouterOnlyFields := []string{"top_k", "min_p", "top_a", "repetition_penalty", "seed", "logit_bias"}
 	switch instance.Type {
 	case "deepseek", "openrouter":
 		if err := rejectPresentFields(req, commonUnsupported...); err != nil {
@@ -119,7 +119,7 @@ func (a HTTPChatAdapter) ValidateChatRequest(instance Instance, req openai.ChatC
 			if err := rejectPresentFields(req, "presence_penalty", "frequency_penalty"); err != nil {
 				return err
 			}
-			if err := rejectPresentFields(req, openRouterSamplingFields...); err != nil {
+			if err := rejectPresentFields(req, openRouterOnlyFields...); err != nil {
 				return err
 			}
 		}
@@ -129,7 +129,7 @@ func (a HTTPChatAdapter) ValidateChatRequest(instance Instance, req openai.ChatC
 		return validateProviderOptions(instance.Type, req)
 	case "codex":
 		unsupported := append(commonUnsupported, "logprobs", "top_logprobs", "provider_options", "max_tokens", "max_completion_tokens", "temperature", "top_p", "presence_penalty", "frequency_penalty", "stop", "response_format")
-		unsupported = append(unsupported, openRouterSamplingFields...)
+		unsupported = append(unsupported, openRouterOnlyFields...)
 		if err := rejectPresentFields(req, unsupported...); err != nil {
 			return err
 		}
@@ -1489,6 +1489,8 @@ func openRouterCapabilityFlags(item map[string]any) string {
 			flags["json_object"] = true
 		case "logprobs", "top_logprobs":
 			flags["logprobs"] = true
+		case "logit_bias":
+			flags["logit_bias"] = true
 		case "reasoning":
 			flags["reasoning"] = true
 		case "stream":

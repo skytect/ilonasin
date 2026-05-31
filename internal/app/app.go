@@ -2566,6 +2566,12 @@ func newServeCheckUpstream() *serveCheckUpstream {
 				return
 			}
 		}
+		if strings.HasPrefix(model, "logit-bias-") {
+			if err := validateServeCheckLogitBias(r.URL.Path, model, body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
 		if body["stream"] == nil {
 			up.mu.Lock()
 			up.observed[r.URL.Path+" "+model] = true
@@ -2743,6 +2749,54 @@ func validateServeCheckAdvancedSampling(path, model string, body map[string]any)
 		}
 	}
 	return fmt.Errorf("unexpected advanced sampling model")
+}
+
+func validateServeCheckLogitBias(path, model string, body map[string]any) error {
+	if path != "/api/v1/chat/completions" {
+		return fmt.Errorf("logit_bias reached unsupported provider")
+	}
+	bias, ok := body["logit_bias"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("missing logit_bias")
+	}
+	switch model {
+	case "logit-bias-values":
+		return validateOnlyLogitBiasFields(bias, map[string]string{
+			"0":                   "-100",
+			"17":                  logitBiasExponentMarker,
+			"50256":               logitBiasDecimalMarker,
+			"9223372036854775807": "100",
+		})
+	case "logit-bias-empty":
+		if len(bias) != 0 {
+			return fmt.Errorf("invalid empty logit_bias forwarding")
+		}
+	case "logit-bias-combined":
+		if err := validateOnlyLogitBiasFields(bias, map[string]string{"50256": logitBiasDecimalMarker}); err != nil {
+			return err
+		}
+		if err := validateServeCheckMaxCompletionTokens(path, body); err != nil {
+			return err
+		}
+		if err := validateServeCheckProviderOptions(path, body); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("unexpected logit_bias model")
+	}
+	return nil
+}
+
+func validateOnlyLogitBiasFields(bias map[string]any, want map[string]string) error {
+	if len(bias) != len(want) {
+		return fmt.Errorf("invalid logit_bias forwarding")
+	}
+	for key, value := range want {
+		if !jsonNumberEquals(bias[key], value) {
+			return fmt.Errorf("invalid logit_bias forwarding")
+		}
+	}
+	return nil
 }
 
 func validateOnlyAdvancedSamplingFields(body map[string]any, want map[string]string) error {
@@ -3082,7 +3136,7 @@ func (u *serveCheckUpstream) handleServeCheckModels(w http.ResponseWriter, r *ht
 		return
 	}
 	if r.URL.Path == "/api/v1/models" {
-		_, _ = w.Write([]byte(`{"data":[{"id":"deepseek/deepseek-v4-pro","name":"DeepSeek V4 Pro","description":"raw description marker","pricing":{"prompt":"secret"},"context_length":1000000,"supported_parameters":["tools","response_format","reasoning","logprobs","top_logprobs"]},{"id":"","name":"bad"}]}`))
+		_, _ = w.Write([]byte(`{"data":[{"id":"deepseek/deepseek-v4-pro","name":"DeepSeek V4 Pro","description":"raw description marker","pricing":{"prompt":"secret"},"context_length":1000000,"supported_parameters":["tools","response_format","reasoning","logprobs","top_logprobs","logit_bias"]},{"id":"","name":"bad"}]}`))
 		return
 	}
 	_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"deepseek-v4-pro","object":"model","owned_by":"deepseek"},{"id":"","object":"model"}]}`))
@@ -3174,6 +3228,13 @@ func (u *serveCheckUpstream) handleServeCheckStream(w http.ResponseWriter, r *ht
 	if strings.HasPrefix(model, "stream-advanced-sampling-") {
 		checkModel := strings.TrimPrefix(model, "stream-")
 		if err := validateServeCheckAdvancedSampling(r.URL.Path, checkModel, body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	if strings.HasPrefix(model, "stream-logit-bias-") {
+		checkModel := strings.TrimPrefix(model, "stream-")
+		if err := validateServeCheckLogitBias(r.URL.Path, checkModel, body); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -3355,7 +3416,7 @@ func assertUnsupportedChatNoUpstream(base, token string, body []byte, fakeUpstre
 	if (strings.Contains(name, "sampling_penalty") || strings.Contains(name, "advanced_sampling")) && (bytes.Contains(respBody, []byte("invalid request JSON")) || bytes.Contains(respBody, []byte("cannot unmarshal"))) {
 		return fmt.Errorf("unsupported %s returned raw decode wording", name)
 	}
-	for _, marker := range []string{providerOptionPrivacyMarker, responseFormatPrivacyMarker, responseFormatSchemaMarker, logprobTokenMarker, "1.75", "-1.25", penaltyOverflowMarker, "2.01", "-2.01", "2.0000000000000001", "-2.0000000000000001", "2.000000000000000000000000000000000000000000000000000000000000000000000000000000001", "9223372036854775807", "-9223372036854775808", "9223372036854775808", "-9223372036854775809", "1.0000000000000001", "2.0000000000000001"} {
+	for _, marker := range []string{providerOptionPrivacyMarker, responseFormatPrivacyMarker, responseFormatSchemaMarker, logprobTokenMarker, logitBiasDecimalMarker, logitBiasExponentMarker, logitBiasOverflowMarker, "1.75", "-1.25", penaltyOverflowMarker, "2.01", "-2.01", "2.0000000000000001", "-2.0000000000000001", "2.000000000000000000000000000000000000000000000000000000000000000000000000000000001", "9223372036854775807", "-9223372036854775808", "9223372036854775808", "-9223372036854775809", "1.0000000000000001", "2.0000000000000001", "100.0000000000000001", "-100.0000000000000001"} {
 		if bytes.Contains(respBody, []byte(marker)) {
 			return fmt.Errorf("unsupported %s leaked private marker", name)
 		}
@@ -3416,6 +3477,7 @@ func exerciseCodexChatCheck(ctx context.Context, base, token string, fakeUpstrea
 		{name: "seed", extra: advancedSamplingExtra("seed")},
 		{name: "logprobs", extra: `"logprobs":true`},
 		{name: "top_logprobs", extra: `"logprobs":true,"top_logprobs":20`},
+		{name: "logit_bias", extra: logitBiasExtra()},
 		{name: "stop", extra: `"stop":"x"`},
 		{name: "provider_options", extra: `"provider_options":{"codex":{"reasoning_effort":"high"}}`},
 	} {
@@ -4311,6 +4373,11 @@ type advancedSamplingInvalidCase struct {
 	extra string
 }
 
+type logitBiasInvalidCase struct {
+	name  string
+	extra string
+}
+
 const providerOptionPrivacyMarker = "provider-option-private-marker"
 const responseFormatPrivacyMarker = "response-format-private-marker"
 const responseFormatSchemaMarker = "schema-secret-marker"
@@ -4319,6 +4386,9 @@ const penaltyFrequencyMarkerValue = -1.25
 const penaltyOverflowMarker = "1e309"
 const advancedSamplingOverflowMarker = "1e309"
 const logprobTokenMarker = "logprob-token-marker"
+const logitBiasDecimalMarker = "33.333333333333333333"
+const logitBiasExponentMarker = "1e-1"
+const logitBiasOverflowMarker = "1e309"
 
 func advancedSamplingFields() []string {
 	return []string{"top_k", "min_p", "top_a", "repetition_penalty", "seed"}
@@ -4363,6 +4433,42 @@ func logprobsInvalidCases() []providerOptionInvalidCase {
 		{name: "top-without-logprobs", extra: `"top_logprobs":20`},
 		{name: "top-with-logprobs-false", extra: `"logprobs":false,"top_logprobs":20`},
 	}
+}
+
+func logitBiasExtra() string {
+	return `"logit_bias":{"0":-100,"17":` + logitBiasExponentMarker + `,"50256":` + logitBiasDecimalMarker + `,"9223372036854775807":100}`
+}
+
+func logitBiasInvalidCases() []logitBiasInvalidCase {
+	return []logitBiasInvalidCase{
+		{name: "null", extra: `"logit_bias":null`},
+		{name: "string", extra: `"logit_bias":"33"`},
+		{name: "bool", extra: `"logit_bias":true`},
+		{name: "array", extra: `"logit_bias":[33]`},
+		{name: "value-null", extra: `"logit_bias":{"50256":null}`},
+		{name: "value-string", extra: `"logit_bias":{"50256":"33"}`},
+		{name: "value-bool", extra: `"logit_bias":{"50256":false}`},
+		{name: "value-object", extra: `"logit_bias":{"50256":{"value":33}}`},
+		{name: "value-array", extra: `"logit_bias":{"50256":[33]}`},
+		{name: "value-low", extra: `"logit_bias":{"50256":-100.0000000000000001}`},
+		{name: "value-high", extra: `"logit_bias":{"50256":100.0000000000000001}`},
+		{name: "value-overflow", extra: `"logit_bias":{"50256":` + logitBiasOverflowMarker + `}`},
+		{name: "key-empty", extra: `"logit_bias":{"":0}`},
+		{name: "key-signed", extra: `"logit_bias":{"-1":0}`},
+		{name: "key-decimal", extra: `"logit_bias":{"1.0":0}`},
+		{name: "key-exponent", extra: `"logit_bias":{"1e3":0}`},
+		{name: "key-space", extra: `"logit_bias":{" 1":0}`},
+		{name: "key-alpha", extra: `"logit_bias":{"abc":0}`},
+		{name: "key-leading-zero", extra: `"logit_bias":{"01":0}`},
+		{name: "key-high", extra: `"logit_bias":{"9223372036854775808":0}`},
+	}
+}
+
+func logitBiasUnsupportedCases(providerType string) []logitBiasInvalidCase {
+	if providerType == "openrouter" {
+		return nil
+	}
+	return []logitBiasInvalidCase{{name: "logit_bias", extra: logitBiasExtra()}}
 }
 
 func providerOptionsExtra(providerType string) string {
@@ -4721,6 +4827,26 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 				return fmt.Errorf("advanced sampling did not reach upstream provider=%s model=%s", instance.ID, tc.model)
 			}
 		}
+		for _, tc := range []struct {
+			model string
+			extra string
+		}{
+			{"logit-bias-values", logitBiasExtra()},
+			{"logit-bias-empty", `"logit_bias":{}`},
+			{"logit-bias-combined", `"logit_bias":{"50256":` + logitBiasDecimalMarker + `},"max_completion_tokens":2,` + providerOptionsExtra("openrouter")},
+		} {
+			body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+tc.model, tc.extra))
+			status, respBody, err := postJSON(base+"/v1/chat/completions", token, body)
+			if err != nil || status != http.StatusOK {
+				return fmt.Errorf("logit_bias provider=%s model=%s status=%d err=%v", instance.ID, tc.model, status, err)
+			}
+			if bytes.Contains(respBody, []byte(logitBiasDecimalMarker)) || bytes.Contains(respBody, []byte(logitBiasExponentMarker)) {
+				return fmt.Errorf("logit_bias echoed private marker")
+			}
+			if !fakeUpstream.sawExpected(expectedPath, tc.model) {
+				return fmt.Errorf("logit_bias did not reach upstream provider=%s model=%s", instance.ID, tc.model)
+			}
+		}
 	}
 	for _, tc := range []struct {
 		name  string
@@ -4777,6 +4903,13 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 			return err
 		}
 	}
+	for _, tc := range logitBiasInvalidCases() {
+		upstreamModel := "invalid-logit-bias-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" logit_bias "+tc.name); err != nil {
+			return err
+		}
+	}
 	for _, tc := range samplingPenaltyUnsupportedCases(instance.Type) {
 		upstreamModel := "unsupported-penalty-" + tc.name
 		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
@@ -4791,6 +4924,13 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 			return err
 		}
 	}
+	for _, tc := range logitBiasUnsupportedCases(instance.Type) {
+		upstreamModel := "unsupported-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" logit_bias unsupported "+tc.name); err != nil {
+			return err
+		}
+	}
 	if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, providerOptionPrivacyMarker); err != nil {
 		return err
 	}
@@ -4799,7 +4939,7 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 			return err
 		}
 	}
-	for _, marker := range []string{"1.75", "-1.25", penaltyOverflowMarker, "9223372036854775807", "-9223372036854775808", advancedSamplingOverflowMarker} {
+	for _, marker := range []string{"1.75", "-1.25", penaltyOverflowMarker, "9223372036854775807", "-9223372036854775808", advancedSamplingOverflowMarker, logitBiasDecimalMarker, logitBiasExponentMarker, logitBiasOverflowMarker} {
 		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
 			return err
 		}
@@ -4983,6 +5123,26 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 				return fmt.Errorf("stream advanced sampling did not reach upstream provider=%s model=%s", instance.ID, tc.model)
 			}
 		}
+		for _, tc := range []struct {
+			model string
+			extra string
+		}{
+			{"stream-logit-bias-values", logitBiasExtra()},
+			{"stream-logit-bias-empty", `"logit_bias":{}`},
+			{"stream-logit-bias-combined", `"logit_bias":{"50256":` + logitBiasDecimalMarker + `},"max_completion_tokens":2,` + providerOptionsExtra("openrouter")},
+		} {
+			body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/"+tc.model, tc.extra))
+			status, _, _, raw, err := postStream(base+"/v1/chat/completions", token, body)
+			if err != nil || status != http.StatusOK {
+				return fmt.Errorf("stream logit_bias provider=%s model=%s status=%d err=%v", instance.ID, tc.model, status, err)
+			}
+			if bytes.Contains(raw, []byte(logitBiasDecimalMarker)) || bytes.Contains(raw, []byte(logitBiasExponentMarker)) {
+				return fmt.Errorf("stream logit_bias echoed private marker")
+			}
+			if !fakeUpstream.sawExpectedStream(expectedPath, tc.model) {
+				return fmt.Errorf("stream logit_bias did not reach upstream provider=%s model=%s", instance.ID, tc.model)
+			}
+		}
 	}
 	if status, err := postStatus(base+"/v1/chat/completions", token, []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream_options":{"include_usage":true}}`, model))); err != nil || status != http.StatusBadRequest {
 		return fmt.Errorf("stream_options without stream provider=%s status=%d err=%v", instance.ID, status, err)
@@ -5058,6 +5218,13 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 			return err
 		}
 	}
+	for _, tc := range logitBiasInvalidCases() {
+		upstreamModel := "stream-invalid-logit-bias-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" stream logit_bias "+tc.name); err != nil {
+			return err
+		}
+	}
 	for _, tc := range samplingPenaltyUnsupportedCases(instance.Type) {
 		upstreamModel := "stream-unsupported-penalty-" + tc.name
 		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/"+upstreamModel, tc.extra))
@@ -5072,6 +5239,13 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 			return err
 		}
 	}
+	for _, tc := range logitBiasUnsupportedCases(instance.Type) {
+		upstreamModel := "stream-unsupported-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" stream logit_bias unsupported "+tc.name); err != nil {
+			return err
+		}
+	}
 	if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, providerOptionPrivacyMarker); err != nil {
 		return err
 	}
@@ -5080,7 +5254,7 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 			return err
 		}
 	}
-	for _, marker := range []string{"1.75", "-1.25", penaltyOverflowMarker, logprobTokenMarker} {
+	for _, marker := range []string{"1.75", "-1.25", penaltyOverflowMarker, logprobTokenMarker, logitBiasDecimalMarker, logitBiasExponentMarker, logitBiasOverflowMarker} {
 		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
 			return err
 		}
@@ -5436,6 +5610,7 @@ func exerciseCodexNoEligibleCacheCheck(ctx context.Context, registry provider.Re
 		{name: "codex-max-completion", extra: `"max_completion_tokens":2`},
 		{name: "codex-logprobs", extra: `"logprobs":true`},
 		{name: "codex-top-logprobs", extra: `"logprobs":true,"top_logprobs":20`},
+		{name: "codex-logit-bias", extra: logitBiasExtra()},
 	} {
 		upstreamModel := "codex-noeligible-" + tc.name
 		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, "codex/"+upstreamModel, tc.extra))
@@ -5559,6 +5734,13 @@ func exerciseSamplingPenaltyNoEligibleCheck(ctx context.Context, registry provid
 				return err
 			}
 		}
+		for _, tc := range logitBiasInvalidCases() {
+			upstreamModel := "noeligible-invalid-logit-bias-" + tc.name
+			body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+			if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, body, fakeUpstream, expectedPath, upstreamModel, "noeligible "+instance.ID+" logit_bias "+tc.name); err != nil {
+				return err
+			}
+		}
 		for _, tc := range samplingPenaltyUnsupportedCases(instance.Type) {
 			upstreamModel := "noeligible-unsupported-penalty-" + tc.name
 			body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
@@ -5570,6 +5752,13 @@ func exerciseSamplingPenaltyNoEligibleCheck(ctx context.Context, registry provid
 			upstreamModel := "noeligible-unsupported-advanced-sampling-" + tc.name
 			body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
 			if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, body, fakeUpstream, expectedPath, upstreamModel, "noeligible "+instance.ID+" advanced_sampling unsupported "+tc.name); err != nil {
+				return err
+			}
+		}
+		for _, tc := range logitBiasUnsupportedCases(instance.Type) {
+			upstreamModel := "noeligible-unsupported-" + tc.name
+			body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+			if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, body, fakeUpstream, expectedPath, upstreamModel, "noeligible "+instance.ID+" logit_bias unsupported "+tc.name); err != nil {
 				return err
 			}
 		}
@@ -5594,7 +5783,14 @@ func exerciseSamplingPenaltyNoEligibleCheck(ctx context.Context, registry provid
 			return err
 		}
 	}
-	for _, marker := range []string{"1.75", "-1.25", penaltyOverflowMarker, "9223372036854775807", "-9223372036854775808", advancedSamplingOverflowMarker, logprobTokenMarker} {
+	for _, tc := range logitBiasUnsupportedCases("codex") {
+		upstreamModel := "codex-noeligible-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, "codex/"+upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, body, fakeUpstream, "/responses", upstreamModel, "codex noeligible logit_bias "+tc.name); err != nil {
+			return err
+		}
+	}
+	for _, marker := range []string{"1.75", "-1.25", penaltyOverflowMarker, "9223372036854775807", "-9223372036854775808", advancedSamplingOverflowMarker, logprobTokenMarker, logitBiasDecimalMarker, logitBiasExponentMarker, logitBiasOverflowMarker} {
 		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
 			return err
 		}
@@ -6183,7 +6379,7 @@ func assertModelCacheRows(ctx context.Context, store *sqlite.Store) error {
 	deepseekFound := false
 	for _, row := range rows {
 		if row.ProviderInstanceID == "openrouter" && row.ModelID == "deepseek/deepseek-v4-pro" {
-			if row.DisplayName != "DeepSeek V4 Pro" || row.ContextLength != 1000000 || row.CapabilityFlags != "chat,json_object,logprobs,reasoning" {
+			if row.DisplayName != "DeepSeek V4 Pro" || row.ContextLength != 1000000 || row.CapabilityFlags != "chat,json_object,logit_bias,logprobs,reasoning" {
 				return fmt.Errorf("openrouter model cache metadata missing")
 			}
 			if strings.Contains(row.DisplayName, "raw description marker") || strings.Contains(row.CapabilityFlags, "pricing") {

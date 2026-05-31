@@ -14,29 +14,30 @@ import (
 )
 
 type ChatCompletionRequest struct {
-	Model               string           `json:"model"`
-	Messages            []Message        `json:"messages"`
-	Stream              bool             `json:"stream,omitempty"`
-	MaxTokens           *int             `json:"max_tokens,omitempty"`
-	MaxCompletionTokens *int             `json:"max_completion_tokens,omitempty"`
-	Temperature         *float64         `json:"temperature,omitempty"`
-	TopP                *float64         `json:"top_p,omitempty"`
-	TopK                *json.Number     `json:"top_k,omitempty"`
-	MinP                *json.Number     `json:"min_p,omitempty"`
-	TopA                *json.Number     `json:"top_a,omitempty"`
-	RepetitionPenalty   *json.Number     `json:"repetition_penalty,omitempty"`
-	Seed                *json.Number     `json:"seed,omitempty"`
-	PresencePenalty     *float64         `json:"presence_penalty,omitempty"`
-	FrequencyPenalty    *float64         `json:"frequency_penalty,omitempty"`
-	Stop                any              `json:"stop,omitempty"`
-	StreamOptions       map[string]any   `json:"stream_options,omitempty"`
-	ResponseFormat      map[string]any   `json:"response_format,omitempty"`
-	Tools               []map[string]any `json:"tools,omitempty"`
-	ToolChoice          any              `json:"tool_choice,omitempty"`
-	Logprobs            *bool            `json:"logprobs,omitempty"`
-	TopLogprobs         *int             `json:"top_logprobs,omitempty"`
-	ReasoningOptions    map[string]any   `json:"provider_options,omitempty"`
-	PresentFields       map[string]bool  `json:"-"`
+	Model               string                 `json:"model"`
+	Messages            []Message              `json:"messages"`
+	Stream              bool                   `json:"stream,omitempty"`
+	MaxTokens           *int                   `json:"max_tokens,omitempty"`
+	MaxCompletionTokens *int                   `json:"max_completion_tokens,omitempty"`
+	Temperature         *float64               `json:"temperature,omitempty"`
+	TopP                *float64               `json:"top_p,omitempty"`
+	TopK                *json.Number           `json:"top_k,omitempty"`
+	MinP                *json.Number           `json:"min_p,omitempty"`
+	TopA                *json.Number           `json:"top_a,omitempty"`
+	RepetitionPenalty   *json.Number           `json:"repetition_penalty,omitempty"`
+	Seed                *json.Number           `json:"seed,omitempty"`
+	PresencePenalty     *float64               `json:"presence_penalty,omitempty"`
+	FrequencyPenalty    *float64               `json:"frequency_penalty,omitempty"`
+	Stop                any                    `json:"stop,omitempty"`
+	StreamOptions       map[string]any         `json:"stream_options,omitempty"`
+	ResponseFormat      map[string]any         `json:"response_format,omitempty"`
+	Tools               []map[string]any       `json:"tools,omitempty"`
+	ToolChoice          any                    `json:"tool_choice,omitempty"`
+	Logprobs            *bool                  `json:"logprobs,omitempty"`
+	TopLogprobs         *int                   `json:"top_logprobs,omitempty"`
+	LogitBias           map[string]json.Number `json:"logit_bias,omitempty"`
+	ReasoningOptions    map[string]any         `json:"provider_options,omitempty"`
+	PresentFields       map[string]bool        `json:"-"`
 }
 
 type Message struct {
@@ -83,6 +84,9 @@ func DecodeChatCompletion(r io.Reader) (ChatCompletionRequest, error) {
 		return ChatCompletionRequest{}, err
 	}
 	if err := validateRawLogprobs(raw); err != nil {
+		return ChatCompletionRequest{}, err
+	}
+	if err := validateRawLogitBias(raw); err != nil {
 		return ChatCompletionRequest{}, err
 	}
 	var req ChatCompletionRequest
@@ -136,6 +140,9 @@ func (r ChatCompletionRequest) Validate() error {
 		return err
 	}
 	if err := validateLogprobsValues(r); err != nil {
+		return err
+	}
+	if err := validateLogitBiasValues(r); err != nil {
 		return err
 	}
 	for i, msg := range r.Messages {
@@ -271,6 +278,9 @@ func MarshalUpstreamChatRequest(req ChatCompletionRequest, upstreamModel string)
 	}
 	if req.TopLogprobs != nil {
 		out["top_logprobs"] = *req.TopLogprobs
+	}
+	if req.HasField("logit_bias") {
+		out["logit_bias"] = req.LogitBias
 	}
 	if req.Stream {
 		out["stream"] = true
@@ -513,6 +523,7 @@ func validateTopLevelKeys(raw map[string]json.RawMessage) error {
 		"tool_choice":           true,
 		"logprobs":              true,
 		"top_logprobs":          true,
+		"logit_bias":            true,
 		"provider_options":      true,
 	}
 	keys := make([]string, 0, len(raw))
@@ -561,6 +572,34 @@ func validateRawLogprobs(raw map[string]json.RawMessage) error {
 	return nil
 }
 
+func validateRawLogitBias(raw map[string]json.RawMessage) error {
+	value, ok := raw["logit_bias"]
+	if !ok {
+		return nil
+	}
+	if isJSONNull(value) {
+		return errors.New("logit_bias must be an object")
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(value, &obj); err != nil {
+		return errors.New("logit_bias must be an object")
+	}
+	keys := make([]string, 0, len(obj))
+	for key := range obj {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if err := validateLogitBiasTokenID(key); err != nil {
+			return err
+		}
+		if _, err := parseLogitBiasNumber(obj[key]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func parseRawLogprobs(raw map[string]json.RawMessage) (bool, bool, error) {
 	value, ok := raw["logprobs"]
 	if !ok {
@@ -594,6 +633,40 @@ func parseRawTopLogprobs(raw map[string]json.RawMessage) (int, bool, error) {
 		return 0, true, errors.New("top_logprobs must be an integer between 0 and 20")
 	}
 	return int(parsed.Int64()), true, nil
+}
+
+func validateLogitBiasTokenID(key string) error {
+	if key == "" {
+		return errors.New("logit_bias token IDs must be supported integers")
+	}
+	if len(key) > 1 && key[0] == '0' {
+		return errors.New("logit_bias token IDs must be supported integers")
+	}
+	for _, r := range key {
+		if r < '0' || r > '9' {
+			return errors.New("logit_bias token IDs must be supported integers")
+		}
+	}
+	value, ok := new(big.Int).SetString(key, 10)
+	if !ok || value.Cmp(big.NewInt(0)) < 0 || value.Cmp(new(big.Int).SetInt64(math.MaxInt64)) > 0 {
+		return errors.New("logit_bias token IDs must be supported integers")
+	}
+	return nil
+}
+
+func parseLogitBiasNumber(raw json.RawMessage) (json.Number, error) {
+	num, err := parseJSONNumberToken("logit_bias", raw, "a number between -100 and 100")
+	if err != nil {
+		return "", err
+	}
+	precise, ok := new(big.Rat).SetString(num.String())
+	if !ok || precise.Cmp(big.NewRat(-100, 1)) < 0 || precise.Cmp(big.NewRat(100, 1)) > 0 {
+		return "", errors.New("logit_bias must be a number between -100 and 100")
+	}
+	if value, err := num.Float64(); err != nil || math.IsInf(value, 0) || math.IsNaN(value) {
+		return "", errors.New("logit_bias must be a number between -100 and 100")
+	}
+	return num, nil
 }
 
 type advancedSamplingSpec struct {
@@ -761,6 +834,29 @@ func validateLogprobsValues(r ChatCompletionRequest) error {
 		}
 		if r.Logprobs == nil || !*r.Logprobs {
 			return errors.New("top_logprobs requires logprobs: true")
+		}
+	}
+	return nil
+}
+
+func validateLogitBiasValues(r ChatCompletionRequest) error {
+	if !r.HasField("logit_bias") {
+		return nil
+	}
+	if r.LogitBias == nil {
+		return errors.New("logit_bias must be an object")
+	}
+	keys := make([]string, 0, len(r.LogitBias))
+	for key := range r.LogitBias {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if err := validateLogitBiasTokenID(key); err != nil {
+			return err
+		}
+		if _, err := parseLogitBiasNumber(json.RawMessage(r.LogitBias[key].String())); err != nil {
+			return err
 		}
 	}
 	return nil

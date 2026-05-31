@@ -14,6 +14,8 @@ import (
 
 type nonStreamContext struct {
 	start       time.Time
+	endpoint    string
+	stream      bool
 	token       credentials.VerifiedLocalToken
 	address     routing.ModelAddress
 	instance    provider.Instance
@@ -33,6 +35,7 @@ type nonStreamExecution struct {
 	fallbackEvents    []metadata.FallbackEvent
 	quotaObservations []metadata.QuotaObservation
 	authRetries       int
+	attemptCount      int
 }
 
 func (s *Server) executeNonStreamingChat(r *http.Request, nc nonStreamContext) nonStreamExecution {
@@ -51,6 +54,7 @@ func (s *Server) executeNonStreamingChat(r *http.Request, nc nonStreamContext) n
 		return exec
 	}
 	for i, credential := range plan.attempts {
+		exec.attemptCount++
 		result, err := nc.adapter.CompleteChat(r.Context(), provider.ChatRequest{
 			Instance:        nc.instance,
 			UpstreamModel:   nc.address.ProviderModelID,
@@ -70,6 +74,7 @@ func (s *Server) executeNonStreamingChat(r *http.Request, nc nonStreamContext) n
 					credential = refreshed
 				}
 				exec.authRetries++
+				exec.attemptCount++
 				result, err = nc.adapter.CompleteChat(r.Context(), provider.ChatRequest{
 					Instance:        nc.instance,
 					UpstreamModel:   nc.address.ProviderModelID,
@@ -93,6 +98,7 @@ func (s *Server) executeNonStreamingChat(r *http.Request, nc nonStreamContext) n
 					modelCredential = refreshed
 				}
 				exec.authRetries++
+				exec.attemptCount++
 				result, err = nc.adapter.CompleteChat(r.Context(), provider.ChatRequest{
 					Instance:        nc.instance,
 					UpstreamModel:   nc.address.ProviderModelID,
@@ -152,28 +158,31 @@ func (s *Server) executeNonStreamingChat(r *http.Request, nc nonStreamContext) n
 func (s *Server) recordNonStreamingChat(r *http.Request, nc nonStreamContext, exec nonStreamExecution, status int, errorClass string) int64 {
 	recordCtx, cancel := nonStreamRecordContext(r, errorClass)
 	defer cancel()
-	requestID, _ := s.recordWithID(recordCtx, metadata.Request{
-		StartedAt:                 nc.start,
-		ClientTokenID:             nc.token.ID,
-		CredentialID:              exec.final.credential.ID,
-		RequestedProviderInstance: nc.address.ProviderInstanceID,
-		RequestedModel:            nc.address.ProviderModelID,
-		ResolvedProviderInstance:  nc.address.ProviderInstanceID,
-		ResolvedModel:             resolvedChatModel(nc.address.ProviderModelID, exec.final.result.ResolvedModel),
-		HTTPStatus:                status,
-		ErrorClass:                errorClass,
-		RetryCount:                exec.authRetries + len(exec.fallbackEvents),
-		FallbackCount:             len(exec.fallbackEvents),
-		FallbackReason:            fallbackReason(exec.fallbackEvents),
-		PromptTokens:              exec.final.result.Usage.PromptTokens,
-		CompletionTokens:          exec.final.result.Usage.CompletionTokens,
-		TotalTokens:               exec.final.result.Usage.TotalTokens,
-		ReasoningTokens:           exec.final.result.Usage.ReasoningTokens,
-		CacheHitTokens:            exec.final.result.Usage.CachedTokens,
-		CacheWriteTokens:          exec.final.result.Usage.CacheWriteTokens,
-		CostMicrounits:            exec.final.result.Usage.CostMicrounits,
-		TotalLatencyMS:            time.Since(nc.start).Milliseconds(),
-	})
+	requestMeta := requestMetadataBase(nc.start, nc.token, nc.address, nc.instance, nc.request, nc.endpoint, nc.stream)
+	requestMeta.CredentialID = exec.final.credential.ID
+	requestMeta.ResolvedModel = resolvedChatModel(nc.address.ProviderModelID, exec.final.result.ResolvedModel)
+	requestMeta.HTTPStatus = status
+	requestMeta.ErrorClass = errorClass
+	requestMeta.RetryCount = exec.authRetries + len(exec.fallbackEvents)
+	requestMeta.AuthRetryCount = exec.authRetries
+	requestMeta.AttemptCount = exec.attemptCount
+	requestMeta.FallbackCount = len(exec.fallbackEvents)
+	requestMeta.FallbackReason = fallbackReason(exec.fallbackEvents)
+	requestMeta.PromptTokens = exec.final.result.Usage.PromptTokens
+	requestMeta.CompletionTokens = exec.final.result.Usage.CompletionTokens
+	requestMeta.TotalTokens = exec.final.result.Usage.TotalTokens
+	requestMeta.ReasoningTokens = exec.final.result.Usage.ReasoningTokens
+	requestMeta.CacheHitTokens = exec.final.result.Usage.CachedTokens
+	requestMeta.CacheWriteTokens = exec.final.result.Usage.CacheWriteTokens
+	requestMeta.CostMicrounits = exec.final.result.Usage.CostMicrounits
+	requestMeta.TotalLatencyMS = time.Since(nc.start).Milliseconds()
+	requestMeta.UpstreamLatencyMS = exec.final.result.Latency.Milliseconds()
+	if exec.final.result.EffectiveServiceTier != "" {
+		requestMeta.EffectiveServiceTier = exec.final.result.EffectiveServiceTier
+	}
+	requestMeta.OutputTokensPerSecondTotal = outputTPS(requestMeta.CompletionTokens, requestMeta.TotalLatencyMS)
+	requestMeta.OutputTokensPerSecond = requestMeta.OutputTokensPerSecondTotal
+	requestID, _ := s.recordWithID(recordCtx, requestMeta)
 	s.recordQuotaObservations(recordCtx, requestID, exec.quotaObservations)
 	s.recordFallbacks(recordCtx, requestID, exec.fallbackEvents)
 	return requestID

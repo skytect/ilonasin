@@ -462,29 +462,52 @@ func (m Model) writeObservability(b *strings.Builder) {
 		if row.FallbackReason != "" {
 			fallbackReason = " reason " + safeDisplay(row.FallbackReason)
 		}
-		fmt.Fprintf(b, "- %s %s status %d %s %s retry %d fallback %d%s latency %dms\n",
-			formatTime(row.StartedAt), requestModelDisplay(row),
-			row.HTTPStatus, safeDisplay(row.ErrorClass), credential, row.RetryCount,
-			row.FallbackCount, fallbackReason, row.TotalLatencyMS)
+		route := safeEndpointDisplay(row.Endpoint)
+		if row.Stream {
+			route += " stream"
+		}
+		options := ""
+		if row.RequestedServiceTier != "" {
+			options += " service_tier " + safeDisplay(row.RequestedServiceTier)
+		}
+		if row.EffectiveServiceTier != "" && row.EffectiveServiceTier != row.RequestedServiceTier {
+			options += " effective_tier " + safeDisplay(row.EffectiveServiceTier)
+		}
+		if row.ReasoningEffort != "" {
+			options += " reasoning " + safeDisplay(row.ReasoningEffort)
+		}
+		if row.ThinkingType != "" {
+			options += " thinking " + safeDisplay(row.ThinkingType)
+		}
+		fmt.Fprintf(b, "- %s %s %s status %d %s %s attempts %d auth_retry %d fallback %d%s msg %d tools %d images %d%s prompt %d completion %d total %d reasoning %d reasoning_rate %.2f cache_hit %d cache_hit_rate %.2f cache_miss %d cache_miss_rate %.2f cache_write %d cache_write_rate %.2f latency %dms upstream %dms ttft %dms tps_total %.2f tps_after_ttft %.2f\n",
+			formatTime(row.StartedAt), route, requestModelDisplay(row),
+			row.HTTPStatus, safeDisplay(row.ErrorClass), credential, row.AttemptCount, row.AuthRetryCount,
+			row.FallbackCount, fallbackReason, row.MessageCount, row.ToolCount, row.ImageCount, options,
+			row.PromptTokens, row.CompletionTokens, row.TotalTokens, row.ReasoningTokens, row.ReasoningTokenRate,
+			row.CacheHitTokens, row.CacheHitRate, row.CacheMissTokens, row.CacheMissRate, row.CacheWriteTokens, row.CacheWriteRate,
+			row.TotalLatencyMS, row.UpstreamLatencyMS, row.TimeToFirstTokenMS,
+			row.OutputTokensPerSecondTotal, row.OutputTokensPerSecondAfterTTFT)
 	}
 	b.WriteString("\nUsage totals\n")
 	if len(m.usageRows) == 0 {
 		b.WriteString("No usage metadata.\n")
 	}
 	for _, row := range m.usageRows {
-		fmt.Fprintf(b, "- %s %d req prompt %d completion %d total %d reasoning %d cache_hit %d cache_write %d cost_microunits %d\n",
+		fmt.Fprintf(b, "- %s %d req prompt %d completion %d total %d reasoning %d reasoning_rate %.2f cache_hit %d cache_hit_rate %.2f cache_miss %d cache_miss_rate %.2f cache_write %d cache_write_rate %.2f cost_microunits %d\n",
 			safeDisplay(row.ProviderInstanceID), row.RequestCount, row.PromptTokens,
 			row.CompletionTokens, row.TotalTokens, row.ReasoningTokens,
-			row.CacheHitTokens, row.CacheWriteTokens, row.CostMicrounits)
+			row.ReasoningTokenRate, row.CacheHitTokens, row.CacheHitRate, row.CacheMissTokens, row.CacheMissRate,
+			row.CacheWriteTokens, row.CacheWriteRate, row.CostMicrounits)
 	}
 	b.WriteString("\nLatency\n")
 	if len(m.latencyRows) == 0 {
 		b.WriteString("No latency metadata.\n")
 	}
 	for _, row := range m.latencyRows {
-		fmt.Fprintf(b, "- %s %d req avg latency %dms ttft %dms tps %.2f\n",
+		fmt.Fprintf(b, "- %s %d req avg latency %dms upstream %dms ttft %dms tps %.2f tps_total %.2f tps_after_ttft %.2f\n",
 			safeDisplay(row.ProviderInstanceID), row.RequestCount, row.AverageLatencyMS,
-			row.AverageTimeToFirstTokenMS, row.AverageOutputTPS)
+			row.AverageUpstreamLatencyMS, row.AverageTimeToFirstTokenMS, row.AverageOutputTPS,
+			row.AverageOutputTPSTotal, row.AverageOutputTPSAfterTTFT)
 	}
 	b.WriteString("\nStreams\n")
 	if len(m.streamRows) == 0 {
@@ -794,6 +817,16 @@ func safeDisplay(value string) string {
 		return string(runes[:maxDisplayRunes]) + "..."
 	}
 	return value
+}
+
+func safeEndpointDisplay(value string) string {
+	value = strings.TrimSpace(value)
+	switch value {
+	case "chat_completions", "responses":
+		return value
+	default:
+		return ""
+	}
 }
 
 func safeRefreshFailureDescriptionDisplay(value string) string {

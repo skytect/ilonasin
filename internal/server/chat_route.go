@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"ilonasin/internal/credentials"
-	"ilonasin/internal/metadata"
 	"ilonasin/internal/openai"
 )
 
@@ -48,50 +47,32 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 		return
 	}
 	if !instance.Chat || (!instance.APIKey && !instance.OAuth) || (instance.Placeholder && instance.Type != "codex") {
-		_ = s.record(r.Context(), metadata.Request{
-			StartedAt:                 start,
-			ClientTokenID:             token.ID,
-			RequestedProviderInstance: addr.ProviderInstanceID,
-			RequestedModel:            addr.ProviderModelID,
-			ResolvedProviderInstance:  addr.ProviderInstanceID,
-			ResolvedModel:             addr.ProviderModelID,
-			HTTPStatus:                http.StatusNotImplemented,
-			ErrorClass:                "provider_unimplemented",
-			TotalLatencyMS:            time.Since(start).Milliseconds(),
-		})
+		requestMeta := requestMetadataBase(start, token, addr, instance, req, metadataEndpointChatCompletions, req.Stream)
+		requestMeta.HTTPStatus = http.StatusNotImplemented
+		requestMeta.ErrorClass = "provider_unimplemented"
+		requestMeta.TotalLatencyMS = time.Since(start).Milliseconds()
+		_ = s.record(r.Context(), requestMeta)
 		s.logHTTP(r, http.StatusNotImplemented, "chat_route", "provider_unimplemented")
 		writeError(w, http.StatusNotImplemented, "provider credential type is not implemented in this slice", "invalid_request_error", "provider_unimplemented")
 		return
 	}
 	if s.adapters == nil {
-		_ = s.record(r.Context(), metadata.Request{
-			StartedAt:                 start,
-			ClientTokenID:             token.ID,
-			RequestedProviderInstance: addr.ProviderInstanceID,
-			RequestedModel:            addr.ProviderModelID,
-			ResolvedProviderInstance:  addr.ProviderInstanceID,
-			ResolvedModel:             addr.ProviderModelID,
-			HTTPStatus:                http.StatusNotImplemented,
-			ErrorClass:                "provider_unimplemented",
-			TotalLatencyMS:            time.Since(start).Milliseconds(),
-		})
+		requestMeta := requestMetadataBase(start, token, addr, instance, req, metadataEndpointChatCompletions, req.Stream)
+		requestMeta.HTTPStatus = http.StatusNotImplemented
+		requestMeta.ErrorClass = "provider_unimplemented"
+		requestMeta.TotalLatencyMS = time.Since(start).Milliseconds()
+		_ = s.record(r.Context(), requestMeta)
 		s.logHTTP(r, http.StatusNotImplemented, "chat_route", "provider_unimplemented")
 		writeError(w, http.StatusNotImplemented, "provider adapter is not implemented", "invalid_request_error", "provider_unimplemented")
 		return
 	}
 	adapter, ok := s.adapters.ForProvider(instance.Type)
 	if !ok {
-		_ = s.record(r.Context(), metadata.Request{
-			StartedAt:                 start,
-			ClientTokenID:             token.ID,
-			RequestedProviderInstance: addr.ProviderInstanceID,
-			RequestedModel:            addr.ProviderModelID,
-			ResolvedProviderInstance:  addr.ProviderInstanceID,
-			ResolvedModel:             addr.ProviderModelID,
-			HTTPStatus:                http.StatusNotImplemented,
-			ErrorClass:                "provider_unimplemented",
-			TotalLatencyMS:            time.Since(start).Milliseconds(),
-		})
+		requestMeta := requestMetadataBase(start, token, addr, instance, req, metadataEndpointChatCompletions, req.Stream)
+		requestMeta.HTTPStatus = http.StatusNotImplemented
+		requestMeta.ErrorClass = "provider_unimplemented"
+		requestMeta.TotalLatencyMS = time.Since(start).Milliseconds()
+		_ = s.record(r.Context(), requestMeta)
 		s.logHTTP(r, http.StatusNotImplemented, "chat_route", "provider_unimplemented")
 		writeError(w, http.StatusNotImplemented, "provider adapter is not implemented", "invalid_request_error", "provider_unimplemented")
 		return
@@ -111,17 +92,11 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 	}
 	credentialsSet, err := s.resolveModelCredentials(r.Context(), instance)
 	if err != nil {
-		_ = s.record(r.Context(), metadata.Request{
-			StartedAt:                 start,
-			ClientTokenID:             token.ID,
-			RequestedProviderInstance: addr.ProviderInstanceID,
-			RequestedModel:            addr.ProviderModelID,
-			ResolvedProviderInstance:  addr.ProviderInstanceID,
-			ResolvedModel:             addr.ProviderModelID,
-			HTTPStatus:                http.StatusUnauthorized,
-			ErrorClass:                "credential_unavailable",
-			TotalLatencyMS:            time.Since(start).Milliseconds(),
-		})
+		requestMeta := requestMetadataBase(start, token, addr, instance, req, metadataEndpointChatCompletions, req.Stream)
+		requestMeta.HTTPStatus = http.StatusUnauthorized
+		requestMeta.ErrorClass = "credential_unavailable"
+		requestMeta.TotalLatencyMS = time.Since(start).Milliseconds()
+		_ = s.record(r.Context(), requestMeta)
 		writeError(w, http.StatusUnauthorized, "no eligible upstream credential is available", "invalid_request_error", "credential_unavailable")
 		return
 	}
@@ -136,6 +111,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 	if req.Stream {
 		s.handleStreamingChat(w, r, streamContext{
 			start:       start,
+			endpoint:    metadataEndpointChatCompletions,
 			token:       token,
 			address:     addr,
 			instance:    instance,
@@ -147,6 +123,8 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 	}
 	s.handleNonStreamingChat(w, r, nonStreamContext{
 		start:       start,
+		endpoint:    metadataEndpointChatCompletions,
+		stream:      false,
 		token:       token,
 		address:     addr,
 		instance:    instance,

@@ -106,53 +106,86 @@ type ModelMetadata struct {
 }
 
 type RequestSummary struct {
-	ID                     int64     `json:"id"`
-	StartedAt              time.Time `json:"started_at"`
-	ProviderInstanceID     string    `json:"provider_instance_id"`
-	ModelID                string    `json:"model_id"`
-	RequestedProviderID    string    `json:"requested_provider_id"`
-	RequestedModelID       string    `json:"requested_model_id"`
-	ResolvedProviderID     string    `json:"resolved_provider_id"`
-	ResolvedModelID        string    `json:"resolved_model_id"`
-	CredentialID           int64     `json:"credential_id"`
-	CredentialLabel        string    `json:"credential_label"`
-	HTTPStatus             int       `json:"http_status"`
-	ErrorClass             string    `json:"error_class"`
-	RetryCount             int       `json:"retry_count"`
-	FallbackCount          int       `json:"fallback_count"`
-	FallbackReason         string    `json:"fallback_reason"`
-	PromptTokens           int       `json:"prompt_tokens"`
-	CompletionTokens       int       `json:"completion_tokens"`
-	TotalTokens            int       `json:"total_tokens"`
-	ReasoningTokens        int       `json:"reasoning_tokens"`
-	CacheHitTokens         int       `json:"cache_hit_tokens"`
-	CacheWriteTokens       int       `json:"cache_write_tokens"`
-	CostMicrounits         int64     `json:"cost_microunits"`
-	TotalLatencyMS         int64     `json:"total_latency_ms"`
-	TimeToFirstTokenMS     int64     `json:"time_to_first_token_ms"`
-	OutputTokensPerSecond  float64   `json:"output_tokens_per_second"`
-	StreamCompletionStatus string    `json:"stream_completion_status"`
-	StreamChunkCount       int       `json:"stream_chunk_count"`
+	ID                             int64     `json:"id"`
+	StartedAt                      time.Time `json:"started_at"`
+	ProviderInstanceID             string    `json:"provider_instance_id"`
+	ModelID                        string    `json:"model_id"`
+	Endpoint                       string    `json:"endpoint"`
+	Stream                         bool      `json:"stream"`
+	ProviderType                   string    `json:"provider_type"`
+	MessageCount                   int       `json:"message_count"`
+	ToolCount                      int       `json:"tool_count"`
+	ImageCount                     int       `json:"image_count"`
+	RequestedServiceTier           string    `json:"requested_service_tier"`
+	EffectiveServiceTier           string    `json:"effective_service_tier"`
+	ReasoningEffort                string    `json:"reasoning_effort"`
+	ReasoningSummary               string    `json:"reasoning_summary"`
+	ReasoningMaxTokens             int       `json:"reasoning_max_tokens"`
+	ReasoningEnabled               bool      `json:"reasoning_enabled"`
+	ReasoningExclude               bool      `json:"reasoning_exclude"`
+	ThinkingType                   string    `json:"thinking_type"`
+	MaxOutputTokens                int       `json:"max_output_tokens"`
+	RequestedProviderID            string    `json:"requested_provider_id"`
+	RequestedModelID               string    `json:"requested_model_id"`
+	ResolvedProviderID             string    `json:"resolved_provider_id"`
+	ResolvedModelID                string    `json:"resolved_model_id"`
+	CredentialID                   int64     `json:"credential_id"`
+	CredentialLabel                string    `json:"credential_label"`
+	HTTPStatus                     int       `json:"http_status"`
+	ErrorClass                     string    `json:"error_class"`
+	RetryCount                     int       `json:"retry_count"`
+	AuthRetryCount                 int       `json:"auth_retry_count"`
+	AttemptCount                   int       `json:"attempt_count"`
+	FallbackCount                  int       `json:"fallback_count"`
+	FallbackReason                 string    `json:"fallback_reason"`
+	PromptTokens                   int       `json:"prompt_tokens"`
+	CompletionTokens               int       `json:"completion_tokens"`
+	TotalTokens                    int       `json:"total_tokens"`
+	ReasoningTokens                int       `json:"reasoning_tokens"`
+	CacheHitTokens                 int       `json:"cache_hit_tokens"`
+	CacheMissTokens                int       `json:"cache_miss_tokens"`
+	CacheWriteTokens               int       `json:"cache_write_tokens"`
+	ReasoningTokenRate             float64   `json:"reasoning_token_rate"`
+	CacheHitRate                   float64   `json:"cache_hit_rate"`
+	CacheMissRate                  float64   `json:"cache_miss_rate"`
+	CacheWriteRate                 float64   `json:"cache_write_rate"`
+	CostMicrounits                 int64     `json:"cost_microunits"`
+	TotalLatencyMS                 int64     `json:"total_latency_ms"`
+	UpstreamLatencyMS              int64     `json:"upstream_latency_ms"`
+	TimeToFirstTokenMS             int64     `json:"time_to_first_token_ms"`
+	OutputTokensPerSecond          float64   `json:"output_tokens_per_second"`
+	OutputTokensPerSecondTotal     float64   `json:"output_tokens_per_second_total"`
+	OutputTokensPerSecondAfterTTFT float64   `json:"output_tokens_per_second_after_ttft"`
+	StreamCompletionStatus         string    `json:"stream_completion_status"`
+	StreamChunkCount               int       `json:"stream_chunk_count"`
 }
 
 type UsageSummary struct {
-	ProviderInstanceID string `json:"provider_instance_id"`
-	RequestCount       int    `json:"request_count"`
-	PromptTokens       int    `json:"prompt_tokens"`
-	CompletionTokens   int    `json:"completion_tokens"`
-	TotalTokens        int    `json:"total_tokens"`
-	ReasoningTokens    int    `json:"reasoning_tokens"`
-	CacheHitTokens     int    `json:"cache_hit_tokens"`
-	CacheWriteTokens   int    `json:"cache_write_tokens"`
-	CostMicrounits     int64  `json:"cost_microunits"`
+	ProviderInstanceID string  `json:"provider_instance_id"`
+	RequestCount       int     `json:"request_count"`
+	PromptTokens       int     `json:"prompt_tokens"`
+	CompletionTokens   int     `json:"completion_tokens"`
+	TotalTokens        int     `json:"total_tokens"`
+	ReasoningTokens    int     `json:"reasoning_tokens"`
+	CacheHitTokens     int     `json:"cache_hit_tokens"`
+	CacheMissTokens    int     `json:"cache_miss_tokens"`
+	CacheWriteTokens   int     `json:"cache_write_tokens"`
+	ReasoningTokenRate float64 `json:"reasoning_token_rate"`
+	CacheHitRate       float64 `json:"cache_hit_rate"`
+	CacheMissRate      float64 `json:"cache_miss_rate"`
+	CacheWriteRate     float64 `json:"cache_write_rate"`
+	CostMicrounits     int64   `json:"cost_microunits"`
 }
 
 type LatencySummary struct {
 	ProviderInstanceID        string  `json:"provider_instance_id"`
 	RequestCount              int     `json:"request_count"`
 	AverageLatencyMS          int64   `json:"average_latency_ms"`
+	AverageUpstreamLatencyMS  int64   `json:"average_upstream_latency_ms"`
 	AverageTimeToFirstTokenMS int64   `json:"average_time_to_first_token_ms"`
 	AverageOutputTPS          float64 `json:"average_output_tps"`
+	AverageOutputTPSTotal     float64 `json:"average_output_tps_total"`
+	AverageOutputTPSAfterTTFT float64 `json:"average_output_tps_after_ttft"`
 }
 
 type StreamSummary struct {
@@ -303,6 +336,13 @@ func sanitizeSnapshot(out *ManagementSnapshotResponse) {
 	for i := range out.RecentRequests {
 		out.RecentRequests[i].ProviderInstanceID = safeMachineString(out.RecentRequests[i].ProviderInstanceID)
 		out.RecentRequests[i].ModelID = safeSnapshotString(out.RecentRequests[i].ModelID)
+		out.RecentRequests[i].Endpoint = safeEndpointString(out.RecentRequests[i].Endpoint)
+		out.RecentRequests[i].ProviderType = safeSnapshotString(out.RecentRequests[i].ProviderType)
+		out.RecentRequests[i].RequestedServiceTier = safeSnapshotString(out.RecentRequests[i].RequestedServiceTier)
+		out.RecentRequests[i].EffectiveServiceTier = safeSnapshotString(out.RecentRequests[i].EffectiveServiceTier)
+		out.RecentRequests[i].ReasoningEffort = safeSnapshotString(out.RecentRequests[i].ReasoningEffort)
+		out.RecentRequests[i].ReasoningSummary = safeSnapshotString(out.RecentRequests[i].ReasoningSummary)
+		out.RecentRequests[i].ThinkingType = safeSnapshotString(out.RecentRequests[i].ThinkingType)
 		out.RecentRequests[i].RequestedProviderID = safeMachineString(out.RecentRequests[i].RequestedProviderID)
 		out.RecentRequests[i].RequestedModelID = safeSnapshotString(out.RecentRequests[i].RequestedModelID)
 		out.RecentRequests[i].ResolvedProviderID = safeMachineString(out.RecentRequests[i].ResolvedProviderID)
@@ -363,6 +403,16 @@ func safeSnapshotString(value string) string {
 		return string(runes[:maxRunes]) + "..."
 	}
 	return value
+}
+
+func safeEndpointString(value string) string {
+	value = strings.TrimSpace(value)
+	switch value {
+	case "chat_completions", "responses":
+		return value
+	default:
+		return ""
+	}
 }
 
 func safeRefreshFailureDescription(value string) string {
@@ -661,33 +711,58 @@ func requestSummariesFromMetadata(rows []metadata.RequestSummary) []RequestSumma
 	out := make([]RequestSummary, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, RequestSummary{
-			ID:                     row.ID,
-			StartedAt:              row.StartedAt,
-			ProviderInstanceID:     row.ProviderInstanceID,
-			ModelID:                row.ModelID,
-			RequestedProviderID:    row.RequestedProviderID,
-			RequestedModelID:       row.RequestedModelID,
-			ResolvedProviderID:     row.ResolvedProviderID,
-			ResolvedModelID:        row.ResolvedModelID,
-			CredentialID:           row.CredentialID,
-			CredentialLabel:        row.CredentialLabel,
-			HTTPStatus:             row.HTTPStatus,
-			ErrorClass:             row.ErrorClass,
-			RetryCount:             row.RetryCount,
-			FallbackCount:          row.FallbackCount,
-			FallbackReason:         row.FallbackReason,
-			PromptTokens:           row.PromptTokens,
-			CompletionTokens:       row.CompletionTokens,
-			TotalTokens:            row.TotalTokens,
-			ReasoningTokens:        row.ReasoningTokens,
-			CacheHitTokens:         row.CacheHitTokens,
-			CacheWriteTokens:       row.CacheWriteTokens,
-			CostMicrounits:         row.CostMicrounits,
-			TotalLatencyMS:         row.TotalLatencyMS,
-			TimeToFirstTokenMS:     row.TimeToFirstTokenMS,
-			OutputTokensPerSecond:  row.OutputTokensPerSecond,
-			StreamCompletionStatus: row.StreamCompletionStatus,
-			StreamChunkCount:       row.StreamChunkCount,
+			ID:                             row.ID,
+			StartedAt:                      row.StartedAt,
+			ProviderInstanceID:             row.ProviderInstanceID,
+			ModelID:                        row.ModelID,
+			Endpoint:                       row.Endpoint,
+			Stream:                         row.Stream,
+			ProviderType:                   row.ProviderType,
+			MessageCount:                   row.MessageCount,
+			ToolCount:                      row.ToolCount,
+			ImageCount:                     row.ImageCount,
+			RequestedServiceTier:           row.RequestedServiceTier,
+			EffectiveServiceTier:           row.EffectiveServiceTier,
+			ReasoningEffort:                row.ReasoningEffort,
+			ReasoningSummary:               row.ReasoningSummary,
+			ReasoningMaxTokens:             row.ReasoningMaxTokens,
+			ReasoningEnabled:               row.ReasoningEnabled,
+			ReasoningExclude:               row.ReasoningExclude,
+			ThinkingType:                   row.ThinkingType,
+			MaxOutputTokens:                row.MaxOutputTokens,
+			RequestedProviderID:            row.RequestedProviderID,
+			RequestedModelID:               row.RequestedModelID,
+			ResolvedProviderID:             row.ResolvedProviderID,
+			ResolvedModelID:                row.ResolvedModelID,
+			CredentialID:                   row.CredentialID,
+			CredentialLabel:                row.CredentialLabel,
+			HTTPStatus:                     row.HTTPStatus,
+			ErrorClass:                     row.ErrorClass,
+			RetryCount:                     row.RetryCount,
+			AuthRetryCount:                 row.AuthRetryCount,
+			AttemptCount:                   row.AttemptCount,
+			FallbackCount:                  row.FallbackCount,
+			FallbackReason:                 row.FallbackReason,
+			PromptTokens:                   row.PromptTokens,
+			CompletionTokens:               row.CompletionTokens,
+			TotalTokens:                    row.TotalTokens,
+			ReasoningTokens:                row.ReasoningTokens,
+			CacheHitTokens:                 row.CacheHitTokens,
+			CacheMissTokens:                row.CacheMissTokens,
+			CacheWriteTokens:               row.CacheWriteTokens,
+			ReasoningTokenRate:             row.ReasoningTokenRate,
+			CacheHitRate:                   row.CacheHitRate,
+			CacheMissRate:                  row.CacheMissRate,
+			CacheWriteRate:                 row.CacheWriteRate,
+			CostMicrounits:                 row.CostMicrounits,
+			TotalLatencyMS:                 row.TotalLatencyMS,
+			UpstreamLatencyMS:              row.UpstreamLatencyMS,
+			TimeToFirstTokenMS:             row.TimeToFirstTokenMS,
+			OutputTokensPerSecond:          row.OutputTokensPerSecond,
+			OutputTokensPerSecondTotal:     row.OutputTokensPerSecondTotal,
+			OutputTokensPerSecondAfterTTFT: row.OutputTokensPerSecondAfterTTFT,
+			StreamCompletionStatus:         row.StreamCompletionStatus,
+			StreamChunkCount:               row.StreamChunkCount,
 		})
 	}
 	return out
@@ -704,7 +779,12 @@ func usageSummariesFromMetadata(rows []metadata.UsageSummary) []UsageSummary {
 			TotalTokens:        row.TotalTokens,
 			ReasoningTokens:    row.ReasoningTokens,
 			CacheHitTokens:     row.CacheHitTokens,
+			CacheMissTokens:    row.CacheMissTokens,
 			CacheWriteTokens:   row.CacheWriteTokens,
+			ReasoningTokenRate: row.ReasoningTokenRate,
+			CacheHitRate:       row.CacheHitRate,
+			CacheMissRate:      row.CacheMissRate,
+			CacheWriteRate:     row.CacheWriteRate,
 			CostMicrounits:     row.CostMicrounits,
 		})
 	}
@@ -718,8 +798,11 @@ func latencySummariesFromMetadata(rows []metadata.LatencySummary) []LatencySumma
 			ProviderInstanceID:        row.ProviderInstanceID,
 			RequestCount:              row.RequestCount,
 			AverageLatencyMS:          row.AverageLatencyMS,
+			AverageUpstreamLatencyMS:  row.AverageUpstreamLatencyMS,
 			AverageTimeToFirstTokenMS: row.AverageTimeToFirstTokenMS,
 			AverageOutputTPS:          row.AverageOutputTPS,
+			AverageOutputTPSTotal:     row.AverageOutputTPSTotal,
+			AverageOutputTPSAfterTTFT: row.AverageOutputTPSAfterTTFT,
 		})
 	}
 	return out

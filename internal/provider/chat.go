@@ -104,6 +104,7 @@ type ChatResult struct {
 	ErrorClass           string
 	ResponsesOutputItems []openai.ResponsesOutputItem
 	Latency              time.Duration
+	EffectiveServiceTier string
 	RetryAfter           *time.Time
 	InvalidBody          bool
 	BodyTruncated        bool
@@ -127,11 +128,18 @@ type ChatStreamSummary struct {
 	ChunkCount            int
 	TimeToFirstTokenMS    int64
 	OutputTokensPerSecond float64
+	Latency               time.Duration
+	EffectiveServiceTier  string
 	RetryAfter            *time.Time
 	Started               bool
 	Done                  bool
 	PreStreamError        bool
 	NormalizedErrorSent   bool
+}
+
+func withStreamLatency(start time.Time, summary ChatStreamSummary) ChatStreamSummary {
+	summary.Latency = time.Since(start)
+	return summary
 }
 
 type StaticChatAdapters map[string]ChatAdapter

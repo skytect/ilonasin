@@ -29,17 +29,17 @@ func (a HTTPChatAdapter) StreamChat(ctx context.Context, req ChatRequest, sink C
 	}
 	body, err := marshalChatCompletionsRequest(req.Instance.Type, req.Request, req.UpstreamModel)
 	if err != nil {
-		return ChatStreamSummary{ErrorClass: "invalid_request", CompletionStatus: "upstream_invalid"}, err
+		return withStreamLatency(start, ChatStreamSummary{ErrorClass: "invalid_request", CompletionStatus: "upstream_invalid"}), err
 	}
 	endpoint, err := chatCompletionsURL(req.Instance.BaseURL)
 	if err != nil {
-		return ChatStreamSummary{ErrorClass: "provider_config_error", CompletionStatus: "upstream_invalid"}, err
+		return withStreamLatency(start, ChatStreamSummary{ErrorClass: "provider_config_error", CompletionStatus: "upstream_invalid"}), err
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	httpReq, err := http.NewRequestWithContext(streamCtx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return ChatStreamSummary{ErrorClass: "upstream_request_error", CompletionStatus: "upstream_invalid"}, err
+		return withStreamLatency(start, ChatStreamSummary{ErrorClass: "upstream_request_error", CompletionStatus: "upstream_invalid"}), err
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+req.Credential.BearerToken)
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -57,12 +57,12 @@ func (a HTTPChatAdapter) StreamChat(ctx context.Context, req ChatRequest, sink C
 			slog.Int64("duration_ms", durationMS(start)),
 			slog.String("error_class", errorClass),
 		)
-		return ChatStreamSummary{
+		return withStreamLatency(start, ChatStreamSummary{
 			StatusCode:       http.StatusBadGateway,
 			ErrorClass:       errorClass,
 			CompletionStatus: streamStatusForError(errorClass),
 			PreStreamError:   true,
-		}, err
+		}), err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -76,13 +76,13 @@ func (a HTTPChatAdapter) StreamChat(ctx context.Context, req ChatRequest, sink C
 			slog.Int64("duration_ms", durationMS(start)),
 			slog.String("error_class", "upstream_http_error"),
 		)
-		return ChatStreamSummary{
+		return withStreamLatency(start, ChatStreamSummary{
 			StatusCode:       resp.StatusCode,
 			ErrorClass:       "upstream_http_error",
 			CompletionStatus: "upstream_error",
 			RetryAfter:       retryAfterFromHeader(resp.Header, time.Now()),
 			PreStreamError:   true,
-		}, fmt.Errorf("upstream stream status %d", resp.StatusCode)
+		}), fmt.Errorf("upstream stream status %d", resp.StatusCode)
 	}
 
 	summary := ChatStreamSummary{
@@ -113,7 +113,7 @@ func (a HTTPChatAdapter) StreamChat(ctx context.Context, req ChatRequest, sink C
 			slog.String("error_class", summary.ErrorClass),
 			slog.String("stream_status", summary.CompletionStatus),
 		)
-		return summary, err
+		return withStreamLatency(start, summary), err
 	}
 	logProviderHTTP(ctx, a.Logger, slog.LevelInfo, "provider_http",
 		slog.String("endpoint", "chat_completions_stream"),
@@ -126,7 +126,7 @@ func (a HTTPChatAdapter) StreamChat(ctx context.Context, req ChatRequest, sink C
 		slog.String("stream_status", summary.CompletionStatus),
 		slog.Int("chunk_count", summary.ChunkCount),
 	)
-	return summary, nil
+	return withStreamLatency(start, summary), nil
 }
 
 func (a HTTPChatAdapter) streamingClient() *http.Client {

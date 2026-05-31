@@ -34,7 +34,7 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 		}
 		return ChatResult{StatusCode: http.StatusBadGateway, ContentType: "application/json", ErrorClass: "model_discovery_failed", Latency: time.Since(start)}, err
 	}
-	body, err := marshalCodexResponsesRequest(req.Request, req.UpstreamModel, ids, modelMeta)
+	body, effectiveServiceTier, err := marshalCodexResponsesRequest(req.Request, req.UpstreamModel, ids, modelMeta)
 	if err != nil {
 		return ChatResult{StatusCode: http.StatusBadRequest, ContentType: "application/json", Body: []byte("{}"), ErrorClass: "invalid_request", Latency: time.Since(start)}, err
 	}
@@ -182,6 +182,7 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 		ResolvedModel:        req.UpstreamModel,
 		ResponsesOutputItems: parsed.OutputItems,
 		Latency:              time.Since(start),
+		EffectiveServiceTier: effectiveServiceTier,
 	}, nil
 }
 
@@ -237,7 +238,7 @@ type codexContentItem struct {
 	Detail   string `json:"detail,omitempty"`
 }
 
-func marshalCodexResponsesRequest(req openai.ChatCompletionRequest, upstreamModel string, ids codexRequestIDs, model codexResponsesModel) ([]byte, error) {
+func marshalCodexResponsesRequest(req openai.ChatCompletionRequest, upstreamModel string, ids codexRequestIDs, model codexResponsesModel) ([]byte, string, error) {
 	out := codexResponsesRequest{
 		Model:             upstreamModel,
 		Input:             []codexResponseItem{},
@@ -259,7 +260,7 @@ func marshalCodexResponsesRequest(req openai.ChatCompletionRequest, upstreamMode
 	} else {
 		tools, err := codexResponsesTools(req.Tools)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		out.Tools = tools
 	}
@@ -269,7 +270,7 @@ func marshalCodexResponsesRequest(req openai.ChatCompletionRequest, upstreamMode
 	if req.HasField("provider_options") {
 		reasoning, textControls, serviceTier, err := codexRequestOptions(req, model)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		out.Reasoning = reasoning
 		if reasoning != nil {
@@ -285,7 +286,8 @@ func marshalCodexResponsesRequest(req openai.ChatCompletionRequest, upstreamMode
 		} else {
 			out.Instructions = model.BaseInstructions
 		}
-		return json.Marshal(out)
+		body, err := json.Marshal(out)
+		return body, out.ServiceTier, err
 	}
 	var instructions []string
 	inputItems := []codexResponseItem{}
@@ -294,13 +296,13 @@ func marshalCodexResponsesRequest(req openai.ChatCompletionRequest, upstreamMode
 		case "system":
 			text, err := openai.MessageContentString(msg)
 			if err != nil {
-				return nil, err
+				return nil, "", err
 			}
 			instructions = append(instructions, text)
 		case "user":
 			parts, err := openai.MessageContentParts(msg)
 			if err != nil {
-				return nil, err
+				return nil, "", err
 			}
 			inputItems = append(inputItems, codexResponseItem{
 				Type:    "message",
@@ -311,7 +313,7 @@ func marshalCodexResponsesRequest(req openai.ChatCompletionRequest, upstreamMode
 			if !openai.MessageContentIsArray(msg) && len(bytes.TrimSpace(msg.Content)) > 0 && !bytes.Equal(bytes.TrimSpace(msg.Content), []byte("null")) {
 				text, err := openai.MessageContentString(msg)
 				if err != nil {
-					return nil, err
+					return nil, "", err
 				}
 				inputItems = append(inputItems, codexResponseItem{
 					Type:    "message",
@@ -321,13 +323,13 @@ func marshalCodexResponsesRequest(req openai.ChatCompletionRequest, upstreamMode
 			}
 			items, err := codexFunctionCallItems(msg.ToolCalls)
 			if err != nil {
-				return nil, err
+				return nil, "", err
 			}
 			inputItems = append(inputItems, items...)
 		case "tool":
 			text, err := openai.MessageContentString(msg)
 			if err != nil {
-				return nil, err
+				return nil, "", err
 			}
 			inputItems = append(inputItems, codexResponseItem{
 				Type:   "function_call_output",
@@ -335,7 +337,7 @@ func marshalCodexResponsesRequest(req openai.ChatCompletionRequest, upstreamMode
 				Output: text,
 			})
 		default:
-			return nil, fmt.Errorf("unsupported codex message role %q", msg.Role)
+			return nil, "", fmt.Errorf("unsupported codex message role %q", msg.Role)
 		}
 	}
 	if len(instructions) > 0 {
@@ -344,7 +346,8 @@ func marshalCodexResponsesRequest(req openai.ChatCompletionRequest, upstreamMode
 		out.Instructions = model.BaseInstructions
 	}
 	out.Input = inputItems
-	return json.Marshal(out)
+	body, err := json.Marshal(out)
+	return body, out.ServiceTier, err
 }
 
 func codexUserContent(parts []openai.ChatContentPart) []codexContentItem {
@@ -1232,29 +1235,29 @@ func addCodexResponsesHeaders(req *http.Request, ids codexRequestIDs) {
 
 func (a HTTPChatAdapter) streamCodexChat(ctx context.Context, req ChatRequest, sink ChatStreamSink, start time.Time) (ChatStreamSummary, error) {
 	if req.Credential.Kind != CredentialKindOAuthAccess {
-		return ChatStreamSummary{StatusCode: http.StatusUnauthorized, ErrorClass: "credential_unavailable", CompletionStatus: "upstream_error", PreStreamError: true}, fmt.Errorf("codex chat requires oauth access credential")
+		return withStreamLatency(start, ChatStreamSummary{StatusCode: http.StatusUnauthorized, ErrorClass: "credential_unavailable", CompletionStatus: "upstream_error", PreStreamError: true}), fmt.Errorf("codex chat requires oauth access credential")
 	}
 	ids := newCodexRequestIDs()
 	modelMeta, err := a.resolveCodexResponsesModel(ctx, req, start)
 	if err != nil {
 		if errors.Is(err, errCodexModelAuthFailed) {
-			return ChatStreamSummary{StatusCode: http.StatusUnauthorized, ErrorClass: "model_discovery_auth_failed", CompletionStatus: "upstream_error", PreStreamError: true}, err
+			return withStreamLatency(start, ChatStreamSummary{StatusCode: http.StatusUnauthorized, ErrorClass: "model_discovery_auth_failed", CompletionStatus: "upstream_error", PreStreamError: true}), err
 		}
-		return ChatStreamSummary{StatusCode: http.StatusBadGateway, ErrorClass: "model_discovery_failed", CompletionStatus: "upstream_error", PreStreamError: true}, err
+		return withStreamLatency(start, ChatStreamSummary{StatusCode: http.StatusBadGateway, ErrorClass: "model_discovery_failed", CompletionStatus: "upstream_error", PreStreamError: true}), err
 	}
-	body, err := marshalCodexResponsesRequest(req.Request, req.UpstreamModel, ids, modelMeta)
+	body, effectiveServiceTier, err := marshalCodexResponsesRequest(req.Request, req.UpstreamModel, ids, modelMeta)
 	if err != nil {
-		return ChatStreamSummary{StatusCode: http.StatusBadRequest, ErrorClass: "invalid_request", CompletionStatus: "upstream_invalid", PreStreamError: true}, err
+		return withStreamLatency(start, ChatStreamSummary{StatusCode: http.StatusBadRequest, ErrorClass: "invalid_request", CompletionStatus: "upstream_invalid", PreStreamError: true}), err
 	}
 	endpoint, err := joinBasePath(req.Instance.BaseURL, "/responses")
 	if err != nil {
-		return ChatStreamSummary{ErrorClass: "provider_config_error", CompletionStatus: "upstream_invalid", PreStreamError: true}, err
+		return withStreamLatency(start, ChatStreamSummary{ErrorClass: "provider_config_error", CompletionStatus: "upstream_invalid", PreStreamError: true}), err
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	httpReq, err := http.NewRequestWithContext(streamCtx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return ChatStreamSummary{ErrorClass: "upstream_request_error", CompletionStatus: "upstream_invalid", PreStreamError: true}, err
+		return withStreamLatency(start, ChatStreamSummary{ErrorClass: "upstream_request_error", CompletionStatus: "upstream_invalid", PreStreamError: true}), err
 	}
 	addCodexRequestHeaders(httpReq, req.Credential.BearerToken, req.Credential.ChatGPTAccountID, req.Credential.ChatGPTAccountIsFedRAMP)
 	addCodexResponsesHeaders(httpReq, ids)
@@ -1273,12 +1276,12 @@ func (a HTTPChatAdapter) streamCodexChat(ctx context.Context, req ChatRequest, s
 			slog.Int64("duration_ms", durationMS(start)),
 			slog.String("error_class", errorClass),
 		)
-		return ChatStreamSummary{
+		return withStreamLatency(start, ChatStreamSummary{
 			StatusCode:       http.StatusBadGateway,
 			ErrorClass:       errorClass,
 			CompletionStatus: streamStatusForError(errorClass),
 			PreStreamError:   true,
-		}, err
+		}), err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -1309,19 +1312,20 @@ func (a HTTPChatAdapter) streamCodexChat(ctx context.Context, req ChatRequest, s
 		if tooLarge {
 			resp.StatusCode = http.StatusBadGateway
 		}
-		return ChatStreamSummary{
+		return withStreamLatency(start, ChatStreamSummary{
 			StatusCode:       resp.StatusCode,
 			ErrorClass:       errorClass,
 			CompletionStatus: "upstream_error",
 			RetryAfter:       retryAfterFromHeader(resp.Header, time.Now()),
 			PreStreamError:   true,
-		}, fmt.Errorf("codex responses stream status %d", resp.StatusCode)
+		}), fmt.Errorf("codex responses stream status %d", resp.StatusCode)
 	}
 
 	summary := ChatStreamSummary{
-		StatusCode:       http.StatusOK,
-		CompletionStatus: "completed",
-		ResolvedModel:    req.UpstreamModel,
+		StatusCode:           http.StatusOK,
+		CompletionStatus:     "completed",
+		ResolvedModel:        req.UpstreamModel,
+		EffectiveServiceTier: effectiveServiceTier,
 	}
 	state := codexStreamState{
 		id:           localChatCompletionID(),
@@ -1337,7 +1341,7 @@ func (a HTTPChatAdapter) streamCodexChat(ctx context.Context, req ChatRequest, s
 			if writeErr := sink.WriteEvent(ctx, ChatStreamEvent{Data: normalizedStreamErrorData(summary.ErrorClass)}); writeErr != nil {
 				summary.ErrorClass = "client_disconnected"
 				summary.CompletionStatus = "client_disconnected"
-				return summary, writeErr
+				return withStreamLatency(start, summary), writeErr
 			}
 			summary.NormalizedErrorSent = true
 		}
@@ -1350,9 +1354,9 @@ func (a HTTPChatAdapter) streamCodexChat(ctx context.Context, req ChatRequest, s
 		if !summary.Started {
 			summary.PreStreamError = true
 		}
-		return summary, err
+		return withStreamLatency(start, summary), err
 	}
-	return summary, nil
+	return withStreamLatency(start, summary), nil
 }
 
 type codexStreamState struct {

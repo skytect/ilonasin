@@ -1237,20 +1237,30 @@ func isUniqueConstraint(err error) bool {
 }
 
 func (s *Store) RecordRequestMetadata(ctx context.Context, m metadata.Request) (int64, error) {
+	outputTPSTotal := m.OutputTokensPerSecondTotal
+	if outputTPSTotal == 0 {
+		outputTPSTotal = m.OutputTokensPerSecond
+	}
 	res, err := s.DB.ExecContext(ctx, `
 		INSERT INTO request_metadata(
-			started_at, client_token_id, credential_id, requested_provider_instance, requested_model,
+			started_at, client_token_id, credential_id, endpoint, stream, provider_type,
+			message_count, tool_count, image_count, requested_service_tier, effective_service_tier,
+			reasoning_effort, reasoning_summary, reasoning_max_tokens, reasoning_enabled,
+			reasoning_exclude, thinking_type, max_output_tokens, requested_provider_instance, requested_model,
 			resolved_provider_instance, resolved_model, http_status, error_class,
-			retry_count, fallback_count, fallback_reason, prompt_tokens, completion_tokens,
+			retry_count, auth_retry_count, attempt_count, fallback_count, fallback_reason, prompt_tokens, completion_tokens,
 			total_tokens, reasoning_tokens, cache_hit_tokens, cache_write_tokens, cost_microunits,
-			total_latency_ms, time_to_first_token_ms,
-			output_tokens_per_second
-		) VALUES(?, NULLIF(?, 0), NULLIF(?, 0), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, m.StartedAt.UTC().Format(time.RFC3339Nano), m.ClientTokenID, m.CredentialID, m.RequestedProviderInstance,
+			total_latency_ms, upstream_latency_ms, time_to_first_token_ms,
+			output_tokens_per_second, output_tokens_per_second_total, output_tokens_per_second_after_ttft
+		) VALUES(?, NULLIF(?, 0), NULLIF(?, 0), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, m.StartedAt.UTC().Format(time.RFC3339Nano), m.ClientTokenID, m.CredentialID, m.Endpoint, boolToInt(m.Stream), m.ProviderType,
+		m.MessageCount, m.ToolCount, m.ImageCount, m.RequestedServiceTier, m.EffectiveServiceTier, m.ReasoningEffort,
+		m.ReasoningSummary, m.ReasoningMaxTokens, boolToInt(m.ReasoningEnabled), boolToInt(m.ReasoningExclude),
+		m.ThinkingType, m.MaxOutputTokens, m.RequestedProviderInstance,
 		m.RequestedModel, m.ResolvedProviderInstance, m.ResolvedModel, m.HTTPStatus,
-		m.ErrorClass, m.RetryCount, m.FallbackCount, m.FallbackReason, m.PromptTokens, m.CompletionTokens,
-		m.TotalTokens, m.ReasoningTokens, m.CacheHitTokens, m.CacheWriteTokens, m.CostMicrounits, m.TotalLatencyMS, m.TimeToFirstTokenMS,
-		m.OutputTokensPerSecond)
+		m.ErrorClass, m.RetryCount, m.AuthRetryCount, m.AttemptCount, m.FallbackCount, m.FallbackReason, m.PromptTokens, m.CompletionTokens,
+		m.TotalTokens, m.ReasoningTokens, m.CacheHitTokens, m.CacheWriteTokens, m.CostMicrounits, m.TotalLatencyMS, m.UpstreamLatencyMS,
+		m.TimeToFirstTokenMS, outputTPSTotal, outputTPSTotal, m.OutputTokensPerSecondAfterTTFT)
 	if err != nil {
 		return 0, err
 	}
@@ -1262,9 +1272,39 @@ func (s *Store) RecordRequestMetadata(ctx context.Context, m metadata.Request) (
 		s.Logger.LogAttrs(ctx, slog.LevelInfo, "metadata recorded",
 			slog.String("event", "metadata_recorded"),
 			slog.Int64("metadata_id", id),
+			slog.String("endpoint", m.Endpoint),
+			slog.Bool("stream", m.Stream),
 			slog.String("provider_instance", m.ResolvedProviderInstance),
+			slog.String("provider_type", m.ProviderType),
+			slog.String("requested_service_tier", m.RequestedServiceTier),
+			slog.String("effective_service_tier", m.EffectiveServiceTier),
+			slog.String("reasoning_effort", m.ReasoningEffort),
+			slog.String("reasoning_summary", m.ReasoningSummary),
+			slog.Int("message_count", m.MessageCount),
+			slog.Int("tool_count", m.ToolCount),
+			slog.Int("image_count", m.ImageCount),
+			slog.Int("attempt_count", m.AttemptCount),
+			slog.Int("auth_retry_count", m.AuthRetryCount),
+			slog.Int("retry_count", m.RetryCount),
+			slog.Int("fallback_count", m.FallbackCount),
 			slog.Int("status", m.HTTPStatus),
 			slog.String("error_class", m.ErrorClass),
+			slog.Int("prompt_tokens", m.PromptTokens),
+			slog.Int("completion_tokens", m.CompletionTokens),
+			slog.Int("total_tokens", m.TotalTokens),
+			slog.Int("reasoning_tokens", m.ReasoningTokens),
+			slog.Int("cache_hit_tokens", m.CacheHitTokens),
+			slog.Int("cache_miss_tokens", cacheMissTokens(m.PromptTokens, m.CacheHitTokens)),
+			slog.Int("cache_write_tokens", m.CacheWriteTokens),
+			slog.Float64("reasoning_token_rate", tokenRate(m.ReasoningTokens, m.CompletionTokens)),
+			slog.Float64("cache_hit_rate", tokenRate(m.CacheHitTokens, m.PromptTokens)),
+			slog.Float64("cache_miss_rate", tokenRate(cacheMissTokens(m.PromptTokens, m.CacheHitTokens), m.PromptTokens)),
+			slog.Float64("cache_write_rate", tokenRate(m.CacheWriteTokens, m.PromptTokens)),
+			slog.Int64("total_latency_ms", m.TotalLatencyMS),
+			slog.Int64("upstream_latency_ms", m.UpstreamLatencyMS),
+			slog.Int64("time_to_first_token_ms", m.TimeToFirstTokenMS),
+			slog.Float64("output_tokens_per_second_total", outputTPSTotal),
+			slog.Float64("output_tokens_per_second_after_ttft", m.OutputTokensPerSecondAfterTTFT),
 		)
 	}
 	return id, nil
@@ -1595,12 +1635,19 @@ func (s *Store) RecentRequests(ctx context.Context, limit int) ([]metadata.Reque
 	}
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT rm.id, rm.started_at, rm.resolved_provider_instance, rm.resolved_model,
+			rm.endpoint, CASE WHEN rm.stream != 0 OR sm.request_metadata_id IS NOT NULL THEN 1 ELSE 0 END,
+			rm.provider_type, rm.message_count, rm.tool_count, rm.image_count,
+			rm.requested_service_tier, rm.effective_service_tier, rm.reasoning_effort,
+			rm.reasoning_summary, rm.reasoning_max_tokens, rm.reasoning_enabled,
+			rm.reasoning_exclude, rm.thinking_type, rm.max_output_tokens,
 			rm.requested_provider_instance, rm.requested_model, rm.resolved_provider_instance, rm.resolved_model,
 			COALESCE(rm.credential_id, 0), COALESCE(pc.label, ''),
-			rm.http_status, rm.error_class, rm.retry_count, rm.fallback_count,
+			rm.http_status, rm.error_class, rm.retry_count, rm.auth_retry_count, rm.attempt_count, rm.fallback_count,
 			rm.fallback_reason, rm.prompt_tokens, rm.completion_tokens, rm.total_tokens, rm.reasoning_tokens,
 			rm.cache_hit_tokens, rm.cache_write_tokens, rm.cost_microunits,
-			rm.total_latency_ms, rm.time_to_first_token_ms, rm.output_tokens_per_second,
+			rm.total_latency_ms, rm.upstream_latency_ms, rm.time_to_first_token_ms, rm.output_tokens_per_second,
+			COALESCE(NULLIF(rm.output_tokens_per_second_total, 0), rm.output_tokens_per_second),
+			rm.output_tokens_per_second_after_ttft,
 			COALESCE(sm.completion_status, ''), COALESCE(sm.chunk_count, 0)
 		FROM request_metadata rm
 		LEFT JOIN provider_credentials pc ON pc.id = rm.credential_id
@@ -1624,12 +1671,17 @@ func (s *Store) RecentRequests(ctx context.Context, limit int) ([]metadata.Reque
 	for rows.Next() {
 		var row metadata.RequestSummary
 		var started string
+		var stream, reasoningEnabled, reasoningExclude int
 		if err := rows.Scan(&row.ID, &started, &row.ProviderInstanceID, &row.ModelID,
+			&row.Endpoint, &stream, &row.ProviderType, &row.MessageCount, &row.ToolCount, &row.ImageCount,
+			&row.RequestedServiceTier, &row.EffectiveServiceTier, &row.ReasoningEffort, &row.ReasoningSummary,
+			&row.ReasoningMaxTokens, &reasoningEnabled, &reasoningExclude, &row.ThinkingType, &row.MaxOutputTokens,
 			&row.RequestedProviderID, &row.RequestedModelID, &row.ResolvedProviderID, &row.ResolvedModelID,
 			&row.CredentialID, &row.CredentialLabel, &row.HTTPStatus, &row.ErrorClass,
-			&row.RetryCount, &row.FallbackCount, &row.FallbackReason, &row.PromptTokens, &row.CompletionTokens,
+			&row.RetryCount, &row.AuthRetryCount, &row.AttemptCount, &row.FallbackCount, &row.FallbackReason, &row.PromptTokens, &row.CompletionTokens,
 			&row.TotalTokens, &row.ReasoningTokens, &row.CacheHitTokens, &row.CacheWriteTokens, &row.CostMicrounits, &row.TotalLatencyMS,
-			&row.TimeToFirstTokenMS, &row.OutputTokensPerSecond,
+			&row.UpstreamLatencyMS, &row.TimeToFirstTokenMS, &row.OutputTokensPerSecond, &row.OutputTokensPerSecondTotal,
+			&row.OutputTokensPerSecondAfterTTFT,
 			&row.StreamCompletionStatus, &row.StreamChunkCount); err != nil {
 			return nil, err
 		}
@@ -1638,6 +1690,14 @@ func (s *Store) RecentRequests(ctx context.Context, limit int) ([]metadata.Reque
 			return nil, err
 		}
 		row.StartedAt = startedAt
+		row.Stream = stream != 0
+		row.ReasoningEnabled = reasoningEnabled != 0
+		row.ReasoningExclude = reasoningExclude != 0
+		row.ReasoningTokenRate = tokenRate(row.ReasoningTokens, row.CompletionTokens)
+		row.CacheMissTokens = cacheMissTokens(row.PromptTokens, row.CacheHitTokens)
+		row.CacheHitRate = tokenRate(row.CacheHitTokens, row.PromptTokens)
+		row.CacheMissRate = tokenRate(row.CacheMissTokens, row.PromptTokens)
+		row.CacheWriteRate = tokenRate(row.CacheWriteTokens, row.PromptTokens)
 		out = append(out, row)
 	}
 	return out, rows.Err()
@@ -1665,6 +1725,11 @@ func (s *Store) UsageByProvider(ctx context.Context) ([]metadata.UsageSummary, e
 			&row.CacheWriteTokens, &row.CostMicrounits); err != nil {
 			return nil, err
 		}
+		row.ReasoningTokenRate = tokenRate(row.ReasoningTokens, row.CompletionTokens)
+		row.CacheMissTokens = cacheMissTokens(row.PromptTokens, row.CacheHitTokens)
+		row.CacheHitRate = tokenRate(row.CacheHitTokens, row.PromptTokens)
+		row.CacheMissRate = tokenRate(row.CacheMissTokens, row.PromptTokens)
+		row.CacheWriteRate = tokenRate(row.CacheWriteTokens, row.PromptTokens)
 		out = append(out, row)
 	}
 	return out, rows.Err()
@@ -1674,8 +1739,11 @@ func (s *Store) LatencyByProvider(ctx context.Context) ([]metadata.LatencySummar
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT requested_provider_instance, COUNT(*),
 			COALESCE(AVG(total_latency_ms), 0),
+			COALESCE(AVG(NULLIF(upstream_latency_ms, 0)), 0),
 			COALESCE(AVG(NULLIF(time_to_first_token_ms, 0)), 0),
-			COALESCE(AVG(NULLIF(output_tokens_per_second, 0)), 0)
+			COALESCE(AVG(NULLIF(output_tokens_per_second, 0)), 0),
+			COALESCE(AVG(NULLIF(COALESCE(NULLIF(output_tokens_per_second_total, 0), output_tokens_per_second), 0)), 0),
+			COALESCE(AVG(NULLIF(output_tokens_per_second_after_ttft, 0)), 0)
 		FROM request_metadata
 		GROUP BY requested_provider_instance
 		ORDER BY requested_provider_instance ASC
@@ -1687,13 +1755,16 @@ func (s *Store) LatencyByProvider(ctx context.Context) ([]metadata.LatencySummar
 	var out []metadata.LatencySummary
 	for rows.Next() {
 		var row metadata.LatencySummary
-		var latency, ttft, tps float64
-		if err := rows.Scan(&row.ProviderInstanceID, &row.RequestCount, &latency, &ttft, &tps); err != nil {
+		var latency, upstreamLatency, ttft, tps, tpsTotal, tpsAfterTTFT float64
+		if err := rows.Scan(&row.ProviderInstanceID, &row.RequestCount, &latency, &upstreamLatency, &ttft, &tps, &tpsTotal, &tpsAfterTTFT); err != nil {
 			return nil, err
 		}
 		row.AverageLatencyMS = int64(latency + 0.5)
+		row.AverageUpstreamLatencyMS = int64(upstreamLatency + 0.5)
 		row.AverageTimeToFirstTokenMS = int64(ttft + 0.5)
 		row.AverageOutputTPS = tps
+		row.AverageOutputTPSTotal = tpsTotal
+		row.AverageOutputTPSAfterTTFT = tpsAfterTTFT
 		out = append(out, row)
 	}
 	return out, rows.Err()
@@ -2003,6 +2074,28 @@ func nullableInt64(v int64) any {
 		return nil
 	}
 	return v
+}
+
+func boolToInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
+}
+
+func tokenRate(part, total int) float64 {
+	if part <= 0 || total <= 0 {
+		return 0
+	}
+	return float64(part) / float64(total)
+}
+
+func cacheMissTokens(promptTokens, cacheHitTokens int) int {
+	miss := promptTokens - cacheHitTokens
+	if miss < 0 {
+		return 0
+	}
+	return miss
 }
 
 func nullableTime(t *time.Time) any {

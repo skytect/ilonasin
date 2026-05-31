@@ -14,6 +14,7 @@ import (
 
 type streamContext struct {
 	start       time.Time
+	endpoint    string
 	token       credentials.VerifiedLocalToken
 	address     routing.ModelAddress
 	instance    provider.Instance
@@ -94,17 +95,11 @@ func shouldRecordStreamHealth(summary provider.ChatStreamSummary) bool {
 func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc streamContext) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		_ = s.record(r.Context(), metadata.Request{
-			StartedAt:                 sc.start,
-			ClientTokenID:             sc.token.ID,
-			RequestedProviderInstance: sc.address.ProviderInstanceID,
-			RequestedModel:            sc.address.ProviderModelID,
-			ResolvedProviderInstance:  sc.address.ProviderInstanceID,
-			ResolvedModel:             sc.address.ProviderModelID,
-			HTTPStatus:                http.StatusInternalServerError,
-			ErrorClass:                "client_stream_unavailable",
-			TotalLatencyMS:            time.Since(sc.start).Milliseconds(),
-		})
+		requestMeta := requestMetadataBase(sc.start, sc.token, sc.address, sc.instance, sc.request, sc.endpoint, true)
+		requestMeta.HTTPStatus = http.StatusInternalServerError
+		requestMeta.ErrorClass = "client_stream_unavailable"
+		requestMeta.TotalLatencyMS = time.Since(sc.start).Milliseconds()
+		_ = s.record(r.Context(), requestMeta)
 		writeError(w, http.StatusInternalServerError, "streaming is not available for this response writer", "api_error", "client_stream_unavailable")
 		return
 	}
@@ -113,6 +108,7 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 	var fallbackEvents []metadata.FallbackEvent
 	var quotaObservations []metadata.QuotaObservation
 	authRetries := 0
+	attemptCount := 0
 	plan := s.planCredentialAttempts(r.Context(), sc.address, sc.credentials)
 	modelCredential := plan.modelCredential
 	if plan.exhausted {
@@ -125,6 +121,7 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 		}}
 	} else {
 		for i, credential := range plan.attempts {
+			attemptCount++
 			summary, err := sc.adapter.StreamChat(r.Context(), provider.ChatRequest{
 				Instance:        sc.instance,
 				UpstreamModel:   sc.address.ProviderModelID,
@@ -144,6 +141,7 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 						credential = refreshed
 					}
 					authRetries++
+					attemptCount++
 					summary, err = sc.adapter.StreamChat(r.Context(), provider.ChatRequest{
 						Instance:        sc.instance,
 						UpstreamModel:   sc.address.ProviderModelID,
@@ -167,6 +165,7 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 						modelCredential = refreshed
 					}
 					authRetries++
+					attemptCount++
 					summary, err = sc.adapter.StreamChat(r.Context(), provider.ChatRequest{
 						Instance:        sc.instance,
 						UpstreamModel:   sc.address.ProviderModelID,
@@ -257,30 +256,36 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 	if errorClass == "" && status >= 400 {
 		errorClass = "upstream_http_error"
 	}
-	requestID, _ := s.recordWithID(recordCtx, metadata.Request{
-		StartedAt:                 sc.start,
-		ClientTokenID:             sc.token.ID,
-		CredentialID:              final.credential.ID,
-		RequestedProviderInstance: sc.address.ProviderInstanceID,
-		RequestedModel:            sc.address.ProviderModelID,
-		ResolvedProviderInstance:  sc.address.ProviderInstanceID,
-		ResolvedModel:             resolvedChatModel(sc.address.ProviderModelID, summary.ResolvedModel),
-		HTTPStatus:                status,
-		ErrorClass:                errorClass,
-		RetryCount:                authRetries + len(fallbackEvents),
-		FallbackCount:             len(fallbackEvents),
-		FallbackReason:            fallbackReason(fallbackEvents),
-		PromptTokens:              summary.Usage.PromptTokens,
-		CompletionTokens:          summary.Usage.CompletionTokens,
-		TotalTokens:               summary.Usage.TotalTokens,
-		ReasoningTokens:           summary.Usage.ReasoningTokens,
-		CacheHitTokens:            summary.Usage.CachedTokens,
-		CacheWriteTokens:          summary.Usage.CacheWriteTokens,
-		CostMicrounits:            summary.Usage.CostMicrounits,
-		TotalLatencyMS:            time.Since(sc.start).Milliseconds(),
-		TimeToFirstTokenMS:        summary.TimeToFirstTokenMS,
-		OutputTokensPerSecond:     summary.OutputTokensPerSecond,
-	})
+	requestMeta := requestMetadataBase(sc.start, sc.token, sc.address, sc.instance, sc.request, sc.endpoint, true)
+	requestMeta.CredentialID = final.credential.ID
+	requestMeta.ResolvedModel = resolvedChatModel(sc.address.ProviderModelID, summary.ResolvedModel)
+	requestMeta.HTTPStatus = status
+	requestMeta.ErrorClass = errorClass
+	requestMeta.RetryCount = authRetries + len(fallbackEvents)
+	requestMeta.AuthRetryCount = authRetries
+	requestMeta.AttemptCount = attemptCount
+	requestMeta.FallbackCount = len(fallbackEvents)
+	requestMeta.FallbackReason = fallbackReason(fallbackEvents)
+	requestMeta.PromptTokens = summary.Usage.PromptTokens
+	requestMeta.CompletionTokens = summary.Usage.CompletionTokens
+	requestMeta.TotalTokens = summary.Usage.TotalTokens
+	requestMeta.ReasoningTokens = summary.Usage.ReasoningTokens
+	requestMeta.CacheHitTokens = summary.Usage.CachedTokens
+	requestMeta.CacheWriteTokens = summary.Usage.CacheWriteTokens
+	requestMeta.CostMicrounits = summary.Usage.CostMicrounits
+	requestMeta.TotalLatencyMS = time.Since(sc.start).Milliseconds()
+	requestMeta.UpstreamLatencyMS = summary.Latency.Milliseconds()
+	requestMeta.TimeToFirstTokenMS = summary.TimeToFirstTokenMS
+	requestMeta.OutputTokensPerSecondTotal = outputTPS(requestMeta.CompletionTokens, requestMeta.TotalLatencyMS)
+	if requestMeta.OutputTokensPerSecondTotal == 0 {
+		requestMeta.OutputTokensPerSecondTotal = summary.OutputTokensPerSecond
+	}
+	requestMeta.OutputTokensPerSecond = requestMeta.OutputTokensPerSecondTotal
+	requestMeta.OutputTokensPerSecondAfterTTFT = outputTPSAfterTTFT(requestMeta.CompletionTokens, requestMeta.TotalLatencyMS, requestMeta.TimeToFirstTokenMS)
+	if summary.EffectiveServiceTier != "" {
+		requestMeta.EffectiveServiceTier = summary.EffectiveServiceTier
+	}
+	requestID, _ := s.recordWithID(recordCtx, requestMeta)
 	completionStatus := summary.CompletionStatus
 	if completionStatus == "" {
 		completionStatus = "upstream_invalid"

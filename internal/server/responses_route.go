@@ -2,7 +2,6 @@ package server
 
 import (
 	"bytes"
-	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -14,8 +13,8 @@ import (
 	"time"
 
 	"ilonasin/internal/credentials"
-	"ilonasin/internal/metadata"
 	"ilonasin/internal/openai"
+	"ilonasin/internal/provider"
 	"ilonasin/internal/routing"
 )
 
@@ -48,20 +47,20 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request, token c
 		return
 	}
 	if !instance.Chat || (!instance.APIKey && !instance.OAuth) || (instance.Placeholder && instance.Type != "codex") {
-		s.recordResponsesEarly(r, start, token, addr, http.StatusNotImplemented, "provider_unimplemented")
+		s.recordResponsesEarly(r, start, token, addr, instance, responsesReq, http.StatusNotImplemented, "provider_unimplemented")
 		s.logHTTP(r, http.StatusNotImplemented, "responses_route", "provider_unimplemented")
 		writeError(w, http.StatusNotImplemented, "provider credential type is not implemented in this slice", "invalid_request_error", "provider_unimplemented")
 		return
 	}
 	if s.adapters == nil {
-		s.recordResponsesEarly(r, start, token, addr, http.StatusNotImplemented, "provider_unimplemented")
+		s.recordResponsesEarly(r, start, token, addr, instance, responsesReq, http.StatusNotImplemented, "provider_unimplemented")
 		s.logHTTP(r, http.StatusNotImplemented, "responses_route", "provider_unimplemented")
 		writeError(w, http.StatusNotImplemented, "provider adapter is not implemented", "invalid_request_error", "provider_unimplemented")
 		return
 	}
 	adapter, ok := s.adapters.ForProvider(instance.Type)
 	if !ok {
-		s.recordResponsesEarly(r, start, token, addr, http.StatusNotImplemented, "provider_unimplemented")
+		s.recordResponsesEarly(r, start, token, addr, instance, responsesReq, http.StatusNotImplemented, "provider_unimplemented")
 		s.logHTTP(r, http.StatusNotImplemented, "responses_route", "provider_unimplemented")
 		writeError(w, http.StatusNotImplemented, "provider adapter is not implemented", "invalid_request_error", "provider_unimplemented")
 		return
@@ -92,22 +91,18 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request, token c
 	}
 	credentialsSet, err := s.resolveModelCredentials(r.Context(), instance)
 	if err != nil {
-		_ = s.record(r.Context(), metadata.Request{
-			StartedAt:                 start,
-			ClientTokenID:             token.ID,
-			RequestedProviderInstance: addr.ProviderInstanceID,
-			RequestedModel:            addr.ProviderModelID,
-			ResolvedProviderInstance:  addr.ProviderInstanceID,
-			ResolvedModel:             addr.ProviderModelID,
-			HTTPStatus:                http.StatusUnauthorized,
-			ErrorClass:                "credential_unavailable",
-			TotalLatencyMS:            time.Since(start).Milliseconds(),
-		})
+		requestMeta := responsesRequestMetadataBase(start, token, addr, instance, responsesReq)
+		requestMeta.HTTPStatus = http.StatusUnauthorized
+		requestMeta.ErrorClass = "credential_unavailable"
+		requestMeta.TotalLatencyMS = time.Since(start).Milliseconds()
+		_ = s.record(r.Context(), requestMeta)
 		writeError(w, http.StatusUnauthorized, "no eligible upstream credential is available", "invalid_request_error", "credential_unavailable")
 		return
 	}
 	exec := s.executeNonStreamingChat(r, nonStreamContext{
 		start:       start,
+		endpoint:    metadataEndpointResponses,
+		stream:      true,
 		token:       token,
 		address:     addr,
 		instance:    instance,
@@ -128,6 +123,8 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request, token c
 	}
 	nc := nonStreamContext{
 		start:       start,
+		endpoint:    metadataEndpointResponses,
+		stream:      true,
 		token:       token,
 		address:     addr,
 		instance:    instance,
@@ -143,7 +140,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request, token c
 		s.recordNonStreamingChat(r, nc, exec, status, errorClass)
 		return
 	}
-	if err := writeResponsesSSE(w, r, localResponsesID(), message, exec.final.result.Usage); err != nil {
+	if err := s.writeResponsesSSE(w, r, localResponsesID(), message, exec.final.result.Usage); err != nil {
 		exec.final.result.ErrorClass = "client_disconnected"
 		s.recordNonStreamingChat(r, nc, exec, http.StatusOK, "client_disconnected")
 		return
@@ -151,18 +148,12 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request, token c
 	s.recordNonStreamingChat(r, nc, exec, status, errorClass)
 }
 
-func (s *Server) recordResponsesEarly(r *http.Request, start time.Time, token credentials.VerifiedLocalToken, addr routing.ModelAddress, status int, errorClass string) {
-	_ = s.record(r.Context(), metadata.Request{
-		StartedAt:                 start,
-		ClientTokenID:             token.ID,
-		RequestedProviderInstance: addr.ProviderInstanceID,
-		RequestedModel:            addr.ProviderModelID,
-		ResolvedProviderInstance:  addr.ProviderInstanceID,
-		ResolvedModel:             addr.ProviderModelID,
-		HTTPStatus:                status,
-		ErrorClass:                errorClass,
-		TotalLatencyMS:            time.Since(start).Milliseconds(),
-	})
+func (s *Server) recordResponsesEarly(r *http.Request, start time.Time, token credentials.VerifiedLocalToken, addr routing.ModelAddress, instance provider.Instance, req openai.ResponsesRequest, status int, errorClass string) {
+	requestMeta := responsesRequestMetadataBase(start, token, addr, instance, req)
+	requestMeta.HTTPStatus = status
+	requestMeta.ErrorClass = errorClass
+	requestMeta.TotalLatencyMS = time.Since(start).Milliseconds()
+	_ = s.record(r.Context(), requestMeta)
 }
 
 func responsesMessageResult(final chatAttempt) (openai.ChatCompletionMessageResult, int, string) {
@@ -202,14 +193,14 @@ func writeResponsesPreStreamError(w http.ResponseWriter, final chatAttempt, stat
 	return nil
 }
 
-func writeResponsesSSE(w http.ResponseWriter, r *http.Request, responseID string, message openai.ChatCompletionMessageResult, usage openai.Usage) error {
+func (s *Server) writeResponsesSSE(w http.ResponseWriter, r *http.Request, responseID string, message openai.ChatCompletionMessageResult, usage openai.Usage) error {
 	flusher, _ := w.(http.Flusher)
 	header := w.Header()
 	header.Set("Content-Type", "text/event-stream")
 	header.Set("Cache-Control", "no-cache")
 	header.Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
-	if err := writeResponseSSEEvent(r.Context(), w, flusher, "response.created", map[string]any{
+	if err := s.writeResponseSSEEvent(r, w, flusher, "response.created", map[string]any{
 		"type":     "response.created",
 		"response": map[string]any{"id": responseID},
 	}); err != nil {
@@ -217,7 +208,7 @@ func writeResponsesSSE(w http.ResponseWriter, r *http.Request, responseID string
 	}
 	itemIndex := 0
 	if message.Content != "" || (!message.HasToolCalls && len(message.ResponsesOutputItems) == 0) {
-		if err := writeResponseSSEEvent(r.Context(), w, flusher, "response.output_item.done", map[string]any{
+		if err := s.writeResponseSSEEvent(r, w, flusher, "response.output_item.done", map[string]any{
 			"type": "response.output_item.done",
 			"item": map[string]any{
 				"id":      fmt.Sprintf("%s_item_%d", responseID, itemIndex),
@@ -235,7 +226,7 @@ func writeResponsesSSE(w http.ResponseWriter, r *http.Request, responseID string
 		if err != nil {
 			return err
 		}
-		if err := writeResponseSSEEvent(r.Context(), w, flusher, "response.output_item.done", map[string]any{
+		if err := s.writeResponseSSEEvent(r, w, flusher, "response.output_item.done", map[string]any{
 			"type": "response.output_item.done",
 			"item": item,
 		}); err != nil {
@@ -248,7 +239,7 @@ func writeResponsesSSE(w http.ResponseWriter, r *http.Request, responseID string
 		if err != nil {
 			return err
 		}
-		if err := writeResponseSSEEvent(r.Context(), w, flusher, "response.output_item.done", map[string]any{
+		if err := s.writeResponseSSEEvent(r, w, flusher, "response.output_item.done", map[string]any{
 			"type": "response.output_item.done",
 			"item": body,
 		}); err != nil {
@@ -256,7 +247,7 @@ func writeResponsesSSE(w http.ResponseWriter, r *http.Request, responseID string
 		}
 		itemIndex++
 	}
-	if err := writeResponseSSEEvent(r.Context(), w, flusher, "response.completed", map[string]any{
+	if err := s.writeResponseSSEEvent(r, w, flusher, "response.completed", map[string]any{
 		"type": "response.completed",
 		"response": map[string]any{
 			"id":     responseID,
@@ -322,7 +313,7 @@ func responseOutputItem(responseID string, index int, item openai.ResponsesOutpu
 	return out, nil
 }
 
-func writeResponseSSEEvent(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, event string, payload map[string]any) error {
+func (s *Server) writeResponseSSEEvent(r *http.Request, w http.ResponseWriter, flusher http.Flusher, event string, payload map[string]any) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
@@ -339,7 +330,7 @@ func writeResponseSSEEvent(ctx context.Context, w http.ResponseWriter, flusher h
 	if _, err := w.Write([]byte("\n\n")); err != nil {
 		return err
 	}
-	if flusher != nil && ctx.Err() == nil {
+	if flusher != nil && r.Context().Err() == nil {
 		flusher.Flush()
 	}
 	return nil

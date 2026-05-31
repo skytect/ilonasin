@@ -255,6 +255,30 @@ var migrations = []migration{
 	{version: 6, name: "oauth_refresh_failure_description", steps: []migrationStep{
 		addColumnIfMissing("oauth_tokens", "refresh_failure_description", `refresh_failure_description TEXT NOT NULL DEFAULT ''`),
 	}},
+	{version: 7, name: "request_safe_metadata", steps: []migrationStep{
+		addColumnIfMissing("request_metadata", "endpoint", `endpoint TEXT NOT NULL DEFAULT ''`),
+		addColumnIfMissing("request_metadata", "stream", `stream INTEGER NOT NULL DEFAULT 0`),
+		addColumnIfMissing("request_metadata", "provider_type", `provider_type TEXT NOT NULL DEFAULT ''`),
+		addColumnIfMissing("request_metadata", "message_count", `message_count INTEGER NOT NULL DEFAULT 0`),
+		addColumnIfMissing("request_metadata", "tool_count", `tool_count INTEGER NOT NULL DEFAULT 0`),
+		addColumnIfMissing("request_metadata", "image_count", `image_count INTEGER NOT NULL DEFAULT 0`),
+		addColumnIfMissing("request_metadata", "requested_service_tier", `requested_service_tier TEXT NOT NULL DEFAULT ''`),
+		addColumnIfMissing("request_metadata", "effective_service_tier", `effective_service_tier TEXT NOT NULL DEFAULT ''`),
+		addColumnIfMissing("request_metadata", "reasoning_effort", `reasoning_effort TEXT NOT NULL DEFAULT ''`),
+		addColumnIfMissing("request_metadata", "reasoning_summary", `reasoning_summary TEXT NOT NULL DEFAULT ''`),
+		addColumnIfMissing("request_metadata", "reasoning_max_tokens", `reasoning_max_tokens INTEGER NOT NULL DEFAULT 0`),
+		addColumnIfMissing("request_metadata", "reasoning_enabled", `reasoning_enabled INTEGER NOT NULL DEFAULT 0`),
+		addColumnIfMissing("request_metadata", "reasoning_exclude", `reasoning_exclude INTEGER NOT NULL DEFAULT 0`),
+		addColumnIfMissing("request_metadata", "thinking_type", `thinking_type TEXT NOT NULL DEFAULT ''`),
+		addColumnIfMissing("request_metadata", "max_output_tokens", `max_output_tokens INTEGER NOT NULL DEFAULT 0`),
+		addColumnIfMissing("request_metadata", "auth_retry_count", `auth_retry_count INTEGER NOT NULL DEFAULT 0`),
+		addColumnIfMissing("request_metadata", "attempt_count", `attempt_count INTEGER NOT NULL DEFAULT 0`),
+		addColumnIfMissing("request_metadata", "upstream_latency_ms", `upstream_latency_ms INTEGER NOT NULL DEFAULT 0`),
+		addColumnIfMissing("request_metadata", "output_tokens_per_second_total", `output_tokens_per_second_total REAL NOT NULL DEFAULT 0`),
+		addColumnIfMissing("request_metadata", "output_tokens_per_second_after_ttft", `output_tokens_per_second_after_ttft REAL NOT NULL DEFAULT 0`),
+		sqlStep(`UPDATE request_metadata SET stream = 1 WHERE id IN (SELECT DISTINCT request_metadata_id FROM stream_metrics)`),
+		sqlStep(`UPDATE request_metadata SET output_tokens_per_second_total = output_tokens_per_second WHERE output_tokens_per_second_total = 0 AND output_tokens_per_second != 0`),
+	}},
 }
 
 func sqlSteps(stmts []string) []migrationStep {

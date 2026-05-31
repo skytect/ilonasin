@@ -414,7 +414,7 @@ func newOAuthRefreshAuthServer() *oauthRefreshAuthServer {
 			_, _ = w.Write([]byte(`{"access_token":"oauth-refresh-trailing-access"} raw trailing`))
 		case "unsafe":
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"access_token":"eyJ.bad.jwt","expires_in":3600}`))
+			_, _ = w.Write([]byte(`{"access_token":"Bearer eyJ.bad.jwt","expires_in":3600}`))
 		case "too_large":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(strings.Repeat("x", int(provider.MaxOAuthRefreshBodyBytes)+1)))

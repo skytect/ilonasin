@@ -856,7 +856,7 @@ func canonicalAccountID(value string) (string, error) {
 
 func validateOAuthSecret(value string) error {
 	value = strings.TrimSpace(value)
-	if value == "" || LooksLikeLocalToken(value) || looksLikeJWT(value) || containsForbiddenOAuthMarker(value) || looksStructuredOAuthMaterial(value) {
+	if value == "" || LooksLikeLocalToken(value) || containsForbiddenOAuthMarker(value) || looksStructuredOAuthMaterial(value) {
 		return ErrInvalidOAuthInput
 	}
 	for _, r := range value {

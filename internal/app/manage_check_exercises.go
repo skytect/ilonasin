@@ -389,7 +389,7 @@ func exerciseOAuthCheck(ctx context.Context, registry provider.Registry, cfg con
 		return fmt.Errorf("seed unsafe oauth metadata credential: %w", err)
 	}
 	for _, invalid := range []credentials.NewOAuthCredentialInput{
-		{ProviderInstanceID: "codex", AccessToken: "eyJ.bad.jwt", RefreshToken: "oauth-refresh-secret-marker", AccountID: "acct_invalid"},
+		{ProviderInstanceID: "codex", AccessToken: "Bearer eyJ.bad.jwt", RefreshToken: "oauth-refresh-secret-marker", AccountID: "acct_invalid"},
 		{ProviderInstanceID: "codex", AccessToken: "https://auth.openai.com/oauth/callback", RefreshToken: "oauth-refresh-secret-marker", AccountID: "acct_invalid"},
 		{ProviderInstanceID: "codex", AccessToken: `{"access_token":"opaque","refresh_token":"opaque","expires_in":3600}`, RefreshToken: "oauth-refresh-secret-marker", AccountID: "acct_invalid"},
 		{ProviderInstanceID: "codex", AccessToken: "access_token=opaque&refresh_token=opaque", RefreshToken: "oauth-refresh-secret-marker", AccountID: "acct_invalid"},

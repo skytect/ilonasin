@@ -8,9 +8,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"ilonasin/internal/config"
 	"ilonasin/internal/credentials"
+	"ilonasin/internal/logging"
 	"ilonasin/internal/server"
 	"ilonasin/internal/storage/sqlite"
 )
@@ -22,6 +25,7 @@ func ServeCheck(opts Options) error {
 	}
 	defer rt.cleanup()
 	defer rt.Store.Close()
+	rt.Logger.InfoContext(context.Background(), "serve check starting", "event", "app_command_start", "command", "serve_check")
 	beforeSnapshot, err := selectedHomeSnapshot(context.Background(), rt.Store, rt.ConfigPath)
 	if err != nil {
 		return err
@@ -39,11 +43,12 @@ func ServeCheck(opts Options) error {
 	if err != nil {
 		return err
 	}
+	checkStore.Logger = rt.Logger
 	defer checkStore.Close()
 
 	tokenService := credentials.Service{Repo: checkStore}
 	checkNow := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
-	upstreamService := &credentials.UpstreamService{Registry: rt.Registry, Repo: checkStore, Now: func() time.Time { return checkNow }}
+	upstreamService := &credentials.UpstreamService{Registry: rt.Registry, Repo: checkStore, Now: func() time.Time { return checkNow }, Logger: rt.Logger}
 	created, err := tokenService.Create(context.Background(), "serve-check")
 	if err != nil {
 		return err
@@ -139,7 +144,7 @@ func ServeCheck(opts Options) error {
 	fakeUpstream := newServeCheckUpstream()
 	defer fakeUpstream.server.Close()
 	checkRegistry := baseURLOverrideRegistry{Registry: rt.Registry, baseURL: fakeUpstream.server.URL}
-	handler := server.NewWithClock(checkRegistry, tokenService, upstreamService, upstreamService, chatAdapters(fakeUpstream.server.Client()), modelDiscoverers(fakeUpstream.server.Client()), checkStore, checkStore, func() time.Time { return checkNow }).Handler()
+	handler := server.NewWithClock(checkRegistry, tokenService, upstreamService, upstreamService, chatAdapters(fakeUpstream.server.Client(), rt.Logger), modelDiscoverers(fakeUpstream.server.Client(), rt.Logger), checkStore, checkStore, func() time.Time { return checkNow }).WithLogger(rt.Logger).Handler()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return err
@@ -167,6 +172,9 @@ func ServeCheck(opts Options) error {
 	if status, err := getStatus(base+"/v1/models", created.Token); err != nil || status != http.StatusUnauthorized {
 		return fmt.Errorf("disabled token models status=%d err=%v", status, err)
 	}
+	if err := assertLogFileDoesNotContain(context.Background(), rt.Config, created.Token); err != nil {
+		return err
+	}
 	body := []byte(`{"model":"deepseek/deepseek-v4-pro","messages":[{"role":"user","content":"check"}],"unsupported":true}`)
 	created2, err := tokenService.Create(context.Background(), "serve-check-chat")
 	if err != nil {
@@ -174,6 +182,9 @@ func ServeCheck(opts Options) error {
 	}
 	if status, err := postStatus(base+"/v1/chat/completions", created2.Token, body); err != nil || status != http.StatusBadRequest {
 		return fmt.Errorf("unsupported chat status=%d err=%v", status, err)
+	}
+	if err := assertLogFileDoesNotContain(context.Background(), rt.Config, created2.Token); err != nil {
+		return err
 	}
 	if err := exerciseCodexChatCheck(context.Background(), base, created2.Token, fakeUpstream, checkStore); err != nil {
 		return err
@@ -231,4 +242,57 @@ func ServeCheck(opts Options) error {
 		return fmt.Errorf("server did not shut down")
 	}
 	return nil
+}
+
+func assertLogFileDoesNotContain(ctx context.Context, cfg config.Config, marker string) error {
+	if marker == "" {
+		return nil
+	}
+	if !configuredFileLogging(cfg) {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	content, err := os.ReadFile(filepath.Join(cfg.Paths.LogDir, logging.LogFileName))
+	if err != nil {
+		return err
+	}
+	if strings.Contains(string(content), marker) {
+		return fmt.Errorf("log file contains unsafe marker")
+	}
+	return nil
+}
+
+func assertLogFileContains(ctx context.Context, cfg config.Config, marker string) error {
+	if marker == "" {
+		return fmt.Errorf("empty log marker")
+	}
+	if !configuredFileLogging(cfg) {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	content, err := os.ReadFile(filepath.Join(cfg.Paths.LogDir, logging.LogFileName))
+	if err != nil {
+		return err
+	}
+	if !strings.Contains(string(content), marker) {
+		return fmt.Errorf("log file missing expected marker")
+	}
+	return nil
+}
+
+func configuredFileLogging(cfg config.Config) bool {
+	for _, output := range cfg.Logging.Outputs {
+		if strings.TrimSpace(strings.ToLower(output)) == "file" {
+			return true
+		}
+	}
+	return len(cfg.Logging.Outputs) == 0
 }

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -17,17 +18,27 @@ func Serve(opts Options) error {
 	if err != nil {
 		return err
 	}
+	defer rt.cleanup()
 	defer rt.Store.Close()
+	rt.Logger.InfoContext(context.Background(), "serve starting",
+		slog.String("event", "app_command_start"),
+		slog.String("command", "serve"),
+		slog.String("bind", rt.Config.Server.Bind),
+	)
 
 	auth := credentials.Service{Repo: rt.Store}
 	upstreams := &credentials.UpstreamService{
 		Registry:       rt.Registry,
 		Repo:           rt.Store,
 		OAuthRefresher: provider.NewHTTPOAuthRefresher(nil),
+		Logger:         rt.Logger,
 	}
+	refresher := provider.NewHTTPOAuthRefresher(nil)
+	refresher.Logger = rt.Logger
+	upstreams.OAuthRefresher = refresher
 	srv := &http.Server{
 		Addr:              rt.Config.Server.Bind,
-		Handler:           server.New(rt.Registry, auth, upstreams, upstreams, chatAdapters(nil), modelDiscoverers(nil), rt.Store, rt.Store).Handler(),
+		Handler:           server.New(rt.Registry, auth, upstreams, upstreams, chatAdapters(nil, rt.Logger), modelDiscoverers(nil, rt.Logger), rt.Store, rt.Store).WithLogger(rt.Logger).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	fmt.Fprintf(opts.Stdout, "ilonasin serving on %s\n", rt.Config.Server.Bind)
@@ -39,12 +50,22 @@ func Manage(opts Options) error {
 	if err != nil {
 		return err
 	}
+	defer rt.cleanup()
 	defer rt.Store.Close()
+	rt.Logger.InfoContext(context.Background(), "manage starting",
+		slog.String("event", "app_command_start"),
+		slog.String("command", "manage"),
+	)
+	refresher := provider.NewHTTPOAuthRefresher(nil)
+	refresher.Logger = rt.Logger
+	login := provider.NewHTTPOAuthDeviceLogin(nil)
+	login.Logger = rt.Logger
 	upstreams := &credentials.UpstreamService{
 		Registry:       rt.Registry,
 		Repo:           rt.Store,
-		OAuthRefresher: provider.NewHTTPOAuthRefresher(nil),
-		OAuthLogin:     provider.NewHTTPOAuthDeviceLogin(nil),
+		OAuthRefresher: refresher,
+		OAuthLogin:     login,
+		Logger:         rt.Logger,
 	}
-	return tui.Run(rt.Config, rt.Registry, credentials.Service{Repo: rt.Store}, upstreams, upstreams, rt.Store, rt.Store, rt.Store)
+	return tui.Run(rt.Config, rt.Registry, credentials.Service{Repo: rt.Store}, upstreams, upstreams, rt.Store, rt.Store, rt.Store, rt.Logger)
 }

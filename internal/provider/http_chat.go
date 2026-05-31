@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -33,6 +34,7 @@ func readLimitedUpstreamBody(body io.Reader, limit int64) ([]byte, bool, error) 
 
 type HTTPChatAdapter struct {
 	Client                 *http.Client
+	Logger                 *slog.Logger
 	StreamIdleTimeout      time.Duration
 	StreamHeaderTimeout    time.Duration
 	MaxStreamLineBytes     int
@@ -76,12 +78,31 @@ func (a HTTPChatAdapter) CompleteChat(ctx context.Context, req ChatRequest) (Cha
 
 	resp, err := a.Client.Do(httpReq)
 	if err != nil {
+		logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
+			slog.String("endpoint", "chat_completions"),
+			slog.String("method", http.MethodPost),
+			slog.String("provider_instance", req.Instance.ID),
+			slog.String("provider_type", req.Instance.Type),
+			slog.Int64("credential_id", req.Credential.ID),
+			slog.Int64("duration_ms", durationMS(start)),
+			slog.String("error_class", classifyTransportError(err)),
+		)
 		return ChatResult{ErrorClass: classifyTransportError(err), Latency: time.Since(start)}, err
 	}
 	defer resp.Body.Close()
 
 	if resp.ContentLength > MaxUpstreamChatBodyBytes {
 		latency := time.Since(start)
+		logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
+			slog.String("endpoint", "chat_completions"),
+			slog.String("method", http.MethodPost),
+			slog.String("provider_instance", req.Instance.ID),
+			slog.String("provider_type", req.Instance.Type),
+			slog.Int64("credential_id", req.Credential.ID),
+			slog.Int("status", http.StatusBadGateway),
+			slog.Int64("duration_ms", latency.Milliseconds()),
+			slog.String("error_class", "upstream_body_too_large"),
+		)
 		return ChatResult{
 			StatusCode:    http.StatusBadGateway,
 			ContentType:   "application/json",
@@ -94,6 +115,16 @@ func (a HTTPChatAdapter) CompleteChat(ctx context.Context, req ChatRequest) (Cha
 	respBody, tooLarge, readErr := readLimitedUpstreamBody(resp.Body, MaxUpstreamChatBodyBytes)
 	latency := time.Since(start)
 	if tooLarge {
+		logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
+			slog.String("endpoint", "chat_completions"),
+			slog.String("method", http.MethodPost),
+			slog.String("provider_instance", req.Instance.ID),
+			slog.String("provider_type", req.Instance.Type),
+			slog.Int64("credential_id", req.Credential.ID),
+			slog.Int("status", http.StatusBadGateway),
+			slog.Int64("duration_ms", latency.Milliseconds()),
+			slog.String("error_class", "upstream_body_too_large"),
+		)
 		return ChatResult{
 			StatusCode:    http.StatusBadGateway,
 			ContentType:   "application/json",
@@ -104,6 +135,16 @@ func (a HTTPChatAdapter) CompleteChat(ctx context.Context, req ChatRequest) (Cha
 		}, fmt.Errorf("upstream response body exceeded limit")
 	}
 	if readErr != nil {
+		logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
+			slog.String("endpoint", "chat_completions"),
+			slog.String("method", http.MethodPost),
+			slog.String("provider_instance", req.Instance.ID),
+			slog.String("provider_type", req.Instance.Type),
+			slog.Int64("credential_id", req.Credential.ID),
+			slog.Int("status", http.StatusBadGateway),
+			slog.Int64("duration_ms", latency.Milliseconds()),
+			slog.String("error_class", "upstream_network_error"),
+		)
 		return ChatResult{
 			StatusCode:  http.StatusBadGateway,
 			ContentType: "application/json",
@@ -126,10 +167,32 @@ func (a HTTPChatAdapter) CompleteChat(ctx context.Context, req ChatRequest) (Cha
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		result.ErrorClass = "upstream_http_error"
+		logProviderHTTP(ctx, a.Logger, statusLevel(resp.StatusCode, result.ErrorClass), "provider_http",
+			slog.String("endpoint", "chat_completions"),
+			slog.String("method", http.MethodPost),
+			slog.String("provider_instance", req.Instance.ID),
+			slog.String("provider_type", req.Instance.Type),
+			slog.Int64("credential_id", req.Credential.ID),
+			slog.Int("status", resp.StatusCode),
+			slog.Int64("duration_ms", latency.Milliseconds()),
+			slog.Int("response_bytes", len(respBody)),
+			slog.String("error_class", result.ErrorClass),
+		)
 		return result, nil
 	}
 	metadata, err := openai.ExtractChatCompletionMetadata(respBody)
 	if err != nil {
+		logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
+			slog.String("endpoint", "chat_completions"),
+			slog.String("method", http.MethodPost),
+			slog.String("provider_instance", req.Instance.ID),
+			slog.String("provider_type", req.Instance.Type),
+			slog.Int64("credential_id", req.Credential.ID),
+			slog.Int("status", http.StatusBadGateway),
+			slog.Int64("duration_ms", latency.Milliseconds()),
+			slog.Int("response_bytes", len(respBody)),
+			slog.String("error_class", "upstream_invalid_response"),
+		)
 		result.StatusCode = http.StatusBadGateway
 		result.ContentType = "application/json"
 		result.Body = nil
@@ -142,6 +205,16 @@ func (a HTTPChatAdapter) CompleteChat(ctx context.Context, req ChatRequest) (Cha
 		result.Usage.CostMicrounits = openRouterCostMicrounitsFromChatCompletion(respBody)
 	}
 	result.ResolvedModel = metadata.ResolvedModel
+	logProviderHTTP(ctx, a.Logger, slog.LevelInfo, "provider_http",
+		slog.String("endpoint", "chat_completions"),
+		slog.String("method", http.MethodPost),
+		slog.String("provider_instance", req.Instance.ID),
+		slog.String("provider_type", req.Instance.Type),
+		slog.Int64("credential_id", req.Credential.ID),
+		slog.Int("status", resp.StatusCode),
+		slog.Int64("duration_ms", latency.Milliseconds()),
+		slog.Int("response_bytes", len(respBody)),
+	)
 	return result, nil
 }
 

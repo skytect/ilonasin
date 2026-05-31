@@ -1,6 +1,7 @@
 package server
 
 import (
+	"log/slog"
 	"time"
 
 	"ilonasin/internal/credentials"
@@ -17,6 +18,7 @@ type Server struct {
 	models    provider.ModelDiscoverers
 	cache     ModelCache
 	meta      MetadataRecorder
+	logger    *slog.Logger
 	now       func() time.Time
 }
 
@@ -30,4 +32,9 @@ func NewWithClock(registry ProviderRegistry, auth credentials.LocalTokenVerifier
 	}
 	refresh, _ := oauth.(credentials.OAuthProviderRefreshController)
 	return &Server{registry: registry, auth: auth, upstreams: upstreams, oauth: oauth, refresh: refresh, adapters: adapters, models: models, cache: cache, meta: meta, now: now}
+}
+
+func (s *Server) WithLogger(logger *slog.Logger) *Server {
+	s.logger = logger
+	return s
 }

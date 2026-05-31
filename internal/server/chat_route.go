@@ -1,6 +1,7 @@
 package server
 
 import (
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -17,20 +18,24 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	req, err := openai.DecodeChatCompletion(r.Body)
 	if err != nil {
+		s.logHTTP(r, http.StatusBadRequest, "chat_route", "invalid_json")
 		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "invalid_json")
 		return
 	}
 	if err := req.Validate(); err != nil {
+		s.logHTTP(r, http.StatusBadRequest, "chat_route", "unsupported_request")
 		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "unsupported_request")
 		return
 	}
 	addr, err := routing.ParseModelAddress(req.Model)
 	if err != nil {
+		s.logHTTP(r, http.StatusBadRequest, "chat_route", "invalid_model")
 		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "invalid_model")
 		return
 	}
 	instance, ok := s.registry.Get(addr.ProviderInstanceID)
 	if !ok {
+		s.logHTTP(r, http.StatusNotFound, "chat_route", "provider_not_configured")
 		writeError(w, http.StatusNotFound, "provider instance is not configured", "invalid_request_error", "provider_not_configured")
 		return
 	}
@@ -46,6 +51,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 			ErrorClass:                "provider_unimplemented",
 			TotalLatencyMS:            time.Since(start).Milliseconds(),
 		})
+		s.logHTTP(r, http.StatusNotImplemented, "chat_route", "provider_unimplemented")
 		writeError(w, http.StatusNotImplemented, "provider credential type is not implemented in this slice", "invalid_request_error", "provider_unimplemented")
 		return
 	}
@@ -61,6 +67,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 			ErrorClass:                "provider_unimplemented",
 			TotalLatencyMS:            time.Since(start).Milliseconds(),
 		})
+		s.logHTTP(r, http.StatusNotImplemented, "chat_route", "provider_unimplemented")
 		writeError(w, http.StatusNotImplemented, "provider adapter is not implemented", "invalid_request_error", "provider_unimplemented")
 		return
 	}
@@ -77,12 +84,22 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 			ErrorClass:                "provider_unimplemented",
 			TotalLatencyMS:            time.Since(start).Milliseconds(),
 		})
+		s.logHTTP(r, http.StatusNotImplemented, "chat_route", "provider_unimplemented")
 		writeError(w, http.StatusNotImplemented, "provider adapter is not implemented", "invalid_request_error", "provider_unimplemented")
 		return
 	}
 	if err := adapter.ValidateChatRequest(instance, req); err != nil {
+		s.logHTTP(r, http.StatusBadRequest, "chat_route", "unsupported_request")
 		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "unsupported_request")
 		return
+	}
+	if s.logger != nil {
+		s.logAttrs(r, slog.LevelInfo, "chat route accepted",
+			slog.String("event", "chat_route"),
+			slog.String("provider_instance", addr.ProviderInstanceID),
+			slog.String("provider_type", instance.Type),
+			slog.Bool("stream", req.Stream),
+		)
 	}
 	if instance.Type == "codex" {
 		credential, err := s.resolveModelCredential(r.Context(), instance)

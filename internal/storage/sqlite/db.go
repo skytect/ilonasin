@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -20,7 +21,8 @@ import (
 )
 
 type Store struct {
-	DB *sql.DB
+	DB     *sql.DB
+	Logger *slog.Logger
 }
 
 func Open(ctx context.Context, path string) (*Store, error) {
@@ -918,6 +920,15 @@ func (s *Store) RecordRequestMetadata(ctx context.Context, m metadata.Request) (
 	if err != nil {
 		return 0, err
 	}
+	if s.Logger != nil {
+		s.Logger.LogAttrs(ctx, slog.LevelInfo, "metadata recorded",
+			slog.String("event", "metadata_recorded"),
+			slog.Int64("metadata_id", id),
+			slog.String("provider_instance", m.ResolvedProviderInstance),
+			slog.Int("status", m.HTTPStatus),
+			slog.String("error_class", m.ErrorClass),
+		)
+	}
 	return id, nil
 }
 
@@ -928,6 +939,14 @@ func (s *Store) RecordStreamMetrics(ctx context.Context, m metadata.Stream) erro
 			completion_status, chunk_count
 		) VALUES(?, ?, ?, ?, ?)
 	`, m.RequestMetadataID, m.TimeToFirstTokenMS, m.OutputTokensPerSecond, m.CompletionStatus, m.ChunkCount)
+	if err == nil && s.Logger != nil {
+		s.Logger.LogAttrs(ctx, slog.LevelInfo, "stream metadata recorded",
+			slog.String("event", "stream_recorded"),
+			slog.Int64("metadata_id", m.RequestMetadataID),
+			slog.String("stream_status", m.CompletionStatus),
+			slog.Int("chunk_count", m.ChunkCount),
+		)
+	}
 	return err
 }
 
@@ -940,6 +959,16 @@ func (s *Store) RecordHealthEvent(ctx context.Context, m metadata.HealthEvent) e
 	`, m.OccurredAt.UTC().Format(time.RFC3339Nano), m.ProviderInstanceID,
 		nullableInt64(m.CredentialID), m.ModelID, m.EventClass, nullableInt(m.HTTPStatus), m.ErrorClass,
 		nullableTime(m.RetryAfter))
+	if err == nil && s.Logger != nil {
+		s.Logger.LogAttrs(ctx, slog.LevelInfo, "health event recorded",
+			slog.String("event", "health_recorded"),
+			slog.String("provider_instance", m.ProviderInstanceID),
+			slog.Int64("credential_id", m.CredentialID),
+			slog.String("health_event", m.EventClass),
+			slog.Int("status", m.HTTPStatus),
+			slog.String("error_class", m.ErrorClass),
+		)
+	}
 	return err
 }
 
@@ -956,6 +985,16 @@ func (s *Store) RecordFallbackEvent(ctx context.Context, m metadata.FallbackEven
 	`, m.RequestMetadataID, m.OccurredAt.UTC().Format(time.RFC3339Nano),
 		m.ProviderInstanceID, m.ModelID, nullableInt64(m.FromCredentialID),
 		nullableInt64(m.ToCredentialID), m.Reason, allowed)
+	if err == nil && s.Logger != nil {
+		s.Logger.LogAttrs(ctx, slog.LevelInfo, "fallback event recorded",
+			slog.String("event", "fallback_recorded"),
+			slog.String("provider_instance", m.ProviderInstanceID),
+			slog.Int64("metadata_id", m.RequestMetadataID),
+			slog.Int64("from_credential_id", m.FromCredentialID),
+			slog.Int64("to_credential_id", m.ToCredentialID),
+			slog.Bool("allowed", m.AllowedByPolicy),
+		)
+	}
 	return err
 }
 
@@ -1120,6 +1159,15 @@ func (s *Store) PruneTelemetryBefore(ctx context.Context, cutoff time.Time) (met
 	}
 	if err := tx.Commit(); err != nil {
 		return metadata.PruneResult{}, err
+	}
+	if s.Logger != nil {
+		s.Logger.LogAttrs(ctx, slog.LevelInfo, "telemetry pruned",
+			slog.String("event", "telemetry_pruned"),
+			slog.Int("requests", result.Requests),
+			slog.Int("streams", result.Streams),
+			slog.Int("fallbacks", result.Fallbacks),
+			slog.Int("health", result.Health),
+		)
 	}
 	return result, nil
 }

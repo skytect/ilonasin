@@ -14,6 +14,7 @@ import (
 type Config struct {
 	Server    ServerConfig              `toml:"server"`
 	Paths     PathsConfig               `toml:"paths"`
+	Logging   LoggingConfig             `toml:"logging"`
 	Providers map[string]ProviderConfig `toml:"providers"`
 }
 
@@ -26,6 +27,12 @@ type PathsConfig struct {
 	Database string `toml:"database"`
 	LogDir   string `toml:"log_dir"`
 	CacheDir string `toml:"cache_dir"`
+}
+
+type LoggingConfig struct {
+	Level   string   `toml:"level"`
+	Format  string   `toml:"format"`
+	Outputs []string `toml:"outputs"`
 }
 
 type ProviderConfig struct {
@@ -42,6 +49,11 @@ func Default(homeDir string) Config {
 			Database: filepath.Join(homeDir, "ilonasin.sqlite"),
 			LogDir:   filepath.Join(homeDir, "logs"),
 			CacheDir: filepath.Join(homeDir, "cache"),
+		},
+		Logging: LoggingConfig{
+			Level:   "info",
+			Format:  "json",
+			Outputs: []string{"file"},
 		},
 		Providers: map[string]ProviderConfig{
 			"deepseek":   {Type: "deepseek"},
@@ -72,8 +84,12 @@ func LoadOrCreate(path, homeDir string, explicit bool) (Config, string, error) {
 	}
 
 	var cfg Config
-	if _, err := toml.DecodeFile(path, &cfg); err != nil {
+	meta, err := toml.DecodeFile(path, &cfg)
+	if err != nil {
 		return Config{}, "", err
+	}
+	if meta.IsDefined("logging", "outputs") && len(cfg.Logging.Outputs) == 0 {
+		return Config{}, "", fmt.Errorf("logging outputs must not be empty")
 	}
 	cfg.applyDefaults(homeDir)
 	cfg.Paths.DataDir = home.ExpandPath(cfg.Paths.DataDir, homeDir)
@@ -99,6 +115,15 @@ func (c *Config) applyDefaults(homeDir string) {
 	}
 	if c.Paths.CacheDir == "" {
 		c.Paths.CacheDir = def.Paths.CacheDir
+	}
+	if c.Logging.Level == "" {
+		c.Logging.Level = def.Logging.Level
+	}
+	if c.Logging.Format == "" {
+		c.Logging.Format = def.Logging.Format
+	}
+	if len(c.Logging.Outputs) == 0 {
+		c.Logging.Outputs = append([]string(nil), def.Logging.Outputs...)
 	}
 	if c.Providers == nil {
 		c.Providers = map[string]ProviderConfig{}

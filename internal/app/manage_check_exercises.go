@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -386,7 +387,7 @@ func exerciseOAuthCheck(ctx context.Context, registry provider.Registry, cfg con
 	return tui.ExerciseOAuthSummary(ctx, cfg, registry, service)
 }
 
-func exerciseOAuthDeviceLoginCheck(ctx context.Context, cfg config.Config) error {
+func exerciseOAuthDeviceLoginCheck(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	fakeAuth := newOAuthDeviceAuthServer()
 	defer fakeAuth.server.Close()
 	loginCfg := cfg
@@ -407,6 +408,7 @@ func exerciseOAuthDeviceLoginCheck(ctx context.Context, cfg config.Config) error
 	if err != nil {
 		return err
 	}
+	store.Logger = logger
 	defer store.Close()
 	now := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
 	login := provider.NewHTTPOAuthDeviceLogin(fakeAuth.server.Client())
@@ -416,12 +418,14 @@ func exerciseOAuthDeviceLoginCheck(ctx context.Context, cfg config.Config) error
 	login.MaxPollInterval = 5 * time.Millisecond
 	login.MaxPolls = 4
 	login.MaxBodyBytes = 4096
+	login.Logger = logger
 	service := &credentials.UpstreamService{
 		Registry:     registry,
 		Repo:         store,
 		OAuthLogin:   login,
 		Now:          func() time.Time { return now },
 		DeviceLogins: credentials.NewOAuthDeviceLoginSessions(2, 40*time.Millisecond),
+		Logger:       logger,
 	}
 	if err := tui.ExerciseOAuthDeviceLogin(ctx, loginCfg, registry, service, service); err != nil {
 		return err
@@ -432,7 +436,7 @@ func exerciseOAuthDeviceLoginCheck(ctx context.Context, cfg config.Config) error
 	if err := assertOAuthDeviceLoginStorage(ctx, store); err != nil {
 		return err
 	}
-	if err := exerciseOAuthDeviceLoginFailures(ctx, store, service, fakeAuth); err != nil {
+	if err := exerciseOAuthDeviceLoginFailures(ctx, loginCfg, store, service, fakeAuth); err != nil {
 		return err
 	}
 	return nil
@@ -480,7 +484,7 @@ func assertOAuthDeviceLoginStorage(ctx context.Context, store *sqlite.Store) err
 	return nil
 }
 
-func exerciseOAuthDeviceLoginFailures(ctx context.Context, store *sqlite.Store, service *credentials.UpstreamService, fakeAuth *oauthDeviceAuthServer) error {
+func exerciseOAuthDeviceLoginFailures(ctx context.Context, cfg config.Config, store *sqlite.Store, service *credentials.UpstreamService, fakeAuth *oauthDeviceAuthServer) error {
 	baseline, err := oauthCredentialCount(ctx, store)
 	if err != nil {
 		return err
@@ -539,13 +543,34 @@ func exerciseOAuthDeviceLoginFailures(ctx context.Context, store *sqlite.Store, 
 		if err := assertOAuthDeviceHandleSafe(challenge.Handle); err != nil {
 			return err
 		}
-		if _, err := service.CompleteOAuthDeviceLogin(ctx, challenge.Handle); err == nil {
+		if _, completeErr := service.CompleteOAuthDeviceLogin(ctx, challenge.Handle); completeErr == nil {
 			return fmt.Errorf("oauth device complete mode %s succeeded", mode)
-		} else if err := assertOAuthDeviceErrorSafe(err); err != nil {
+		} else if err := assertOAuthDeviceErrorSafe(completeErr); err != nil {
 			return err
+		} else if mode == "token_http" {
+			var loginErr provider.OAuthDeviceLoginError
+			if !errors.As(completeErr, &loginErr) || loginErr.EventID == "" {
+				return fmt.Errorf("oauth device token_http did not include event id type=%T class=%q", completeErr, loginErr.Class)
+			}
+			if err := assertLogFileContains(ctx, cfg, loginErr.EventID); err != nil {
+				return err
+			}
 		}
 		if err := assertOAuthDeviceFailureState(ctx, store, baseline); err != nil {
 			return err
+		}
+		if mode == "token_http" {
+			fakeAuth.setMode("exchange_http")
+			eventID, err := tui.ExerciseOAuthDeviceLoginFailure(ctx, cfg, service.Registry, service, service, "oauth_login_http_error")
+			if err != nil {
+				return err
+			}
+			if err := assertLogFileContains(ctx, cfg, eventID); err != nil {
+				return err
+			}
+			if err := assertOAuthDeviceFailureState(ctx, store, baseline); err != nil {
+				return err
+			}
 		}
 	}
 	fakeAuth.setMode("missing_account")

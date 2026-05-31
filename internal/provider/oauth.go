@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -54,6 +55,7 @@ func (e OAuthRefreshError) RefreshFailureClass() string {
 type HTTPOAuthRefresher struct {
 	Client  *http.Client
 	Timeout time.Duration
+	Logger  *slog.Logger
 }
 
 func NewHTTPOAuthRefresher(client *http.Client) HTTPOAuthRefresher {
@@ -68,6 +70,7 @@ func NewHTTPOAuthRefresher(client *http.Client) HTTPOAuthRefresher {
 }
 
 func (r HTTPOAuthRefresher) RefreshOAuthToken(ctx context.Context, req OAuthRefreshRequest) (OAuthRefreshResult, error) {
+	start := time.Now()
 	if req.ProviderType != "codex" {
 		return OAuthRefreshResult{}, OAuthRefreshError{Class: "refresh_unavailable"}
 	}
@@ -93,7 +96,15 @@ func (r HTTPOAuthRefresher) RefreshOAuthToken(ctx context.Context, req OAuthRefr
 	httpReq.Header.Set("Accept", "application/json")
 	resp, err := r.Client.Do(httpReq)
 	if err != nil {
-		return OAuthRefreshResult{}, OAuthRefreshError{Class: classifyOAuthTransportError(err)}
+		class := classifyOAuthTransportError(err)
+		logProviderHTTP(ctx, r.Logger, slog.LevelError, "provider_http",
+			slog.String("endpoint", "oauth_refresh"),
+			slog.String("method", http.MethodPost),
+			slog.String("provider_type", req.ProviderType),
+			slog.Int64("duration_ms", durationMS(start)),
+			slog.String("error_class", class),
+		)
+		return OAuthRefreshResult{}, OAuthRefreshError{Class: class}
 	}
 	defer resp.Body.Close()
 	limited := http.MaxBytesReader(nil, resp.Body, MaxOAuthRefreshBodyBytes)
@@ -101,20 +112,72 @@ func (r HTTPOAuthRefresher) RefreshOAuthToken(ctx context.Context, req OAuthRefr
 	if readErr != nil {
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(readErr, &maxBytesErr) {
+			logProviderHTTP(ctx, r.Logger, slog.LevelError, "provider_http",
+				slog.String("endpoint", "oauth_refresh"),
+				slog.String("method", http.MethodPost),
+				slog.String("provider_type", req.ProviderType),
+				slog.Int("status", resp.StatusCode),
+				slog.Int64("duration_ms", durationMS(start)),
+				slog.String("error_class", "refresh_body_too_large"),
+			)
 			return OAuthRefreshResult{}, OAuthRefreshError{Class: "refresh_body_too_large"}
 		}
+		logProviderHTTP(ctx, r.Logger, slog.LevelError, "provider_http",
+			slog.String("endpoint", "oauth_refresh"),
+			slog.String("method", http.MethodPost),
+			slog.String("provider_type", req.ProviderType),
+			slog.Int("status", resp.StatusCode),
+			slog.Int64("duration_ms", durationMS(start)),
+			slog.String("error_class", "refresh_network_error"),
+		)
 		return OAuthRefreshResult{}, OAuthRefreshError{Class: "refresh_network_error"}
 	}
 	if resp.StatusCode == http.StatusUnauthorized {
-		return OAuthRefreshResult{}, OAuthRefreshError{Class: oauthUnauthorizedClass(respBody)}
+		class := oauthUnauthorizedClass(respBody)
+		logProviderHTTP(ctx, r.Logger, slog.LevelError, "provider_http",
+			slog.String("endpoint", "oauth_refresh"),
+			slog.String("method", http.MethodPost),
+			slog.String("provider_type", req.ProviderType),
+			slog.Int("status", resp.StatusCode),
+			slog.Int64("duration_ms", durationMS(start)),
+			slog.Int("response_bytes", len(respBody)),
+			slog.String("error_class", class),
+		)
+		return OAuthRefreshResult{}, OAuthRefreshError{Class: class}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		logProviderHTTP(ctx, r.Logger, statusLevel(resp.StatusCode, "refresh_http_error"), "provider_http",
+			slog.String("endpoint", "oauth_refresh"),
+			slog.String("method", http.MethodPost),
+			slog.String("provider_type", req.ProviderType),
+			slog.Int("status", resp.StatusCode),
+			slog.Int64("duration_ms", durationMS(start)),
+			slog.Int("response_bytes", len(respBody)),
+			slog.String("error_class", "refresh_http_error"),
+		)
 		return OAuthRefreshResult{}, OAuthRefreshError{Class: "refresh_http_error"}
 	}
 	result, err := decodeOAuthRefreshResponse(respBody, req.Now)
 	if err != nil {
+		logProviderHTTP(ctx, r.Logger, slog.LevelError, "provider_http",
+			slog.String("endpoint", "oauth_refresh"),
+			slog.String("method", http.MethodPost),
+			slog.String("provider_type", req.ProviderType),
+			slog.Int("status", resp.StatusCode),
+			slog.Int64("duration_ms", durationMS(start)),
+			slog.Int("response_bytes", len(respBody)),
+			slog.String("error_class", "refresh_invalid_response"),
+		)
 		return OAuthRefreshResult{}, OAuthRefreshError{Class: "refresh_invalid_response"}
 	}
+	logProviderHTTP(ctx, r.Logger, slog.LevelInfo, "provider_http",
+		slog.String("endpoint", "oauth_refresh"),
+		slog.String("method", http.MethodPost),
+		slog.String("provider_type", req.ProviderType),
+		slog.Int("status", resp.StatusCode),
+		slog.Int64("duration_ms", durationMS(start)),
+		slog.Int("response_bytes", len(respBody)),
+	)
 	return result, nil
 }
 

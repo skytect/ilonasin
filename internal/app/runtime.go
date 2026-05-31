@@ -3,11 +3,13 @@ package app
 import (
 	"context"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 
 	"ilonasin/internal/config"
 	"ilonasin/internal/home"
+	"ilonasin/internal/logging"
 	"ilonasin/internal/provider"
 	"ilonasin/internal/storage/sqlite"
 )
@@ -24,6 +26,7 @@ type runtime struct {
 	Config     config.Config
 	Registry   provider.Registry
 	Store      *sqlite.Store
+	Logger     *slog.Logger
 	cleanup    func()
 }
 
@@ -64,6 +67,23 @@ func bootstrap(ctx context.Context, opts Options, checkSafeHome bool) (*runtime,
 			return nil, err
 		}
 	}
+	logger, logCloser, err := logging.Setup(cfg, opts.Stderr)
+	if err != nil {
+		cleanup()
+		return nil, err
+	}
+	cleanup = func(previous func()) func() {
+		return func() {
+			_ = logCloser.Close()
+			previous()
+		}
+	}(cleanup)
+	logger.InfoContext(ctx, "application bootstrap complete",
+		slog.String("event", "app_bootstrap"),
+		slog.String("home_dir", homeDir),
+		slog.String("config_file", cfgPath),
+		slog.String("log_output", "configured"),
+	)
 	registry, err := provider.NewRegistry(cfg)
 	if err != nil {
 		cleanup()
@@ -74,5 +94,10 @@ func bootstrap(ctx context.Context, opts Options, checkSafeHome bool) (*runtime,
 		cleanup()
 		return nil, err
 	}
-	return &runtime{HomeDir: homeDir, ConfigPath: cfgPath, Config: cfg, Registry: registry, Store: store, cleanup: cleanup}, nil
+	store.Logger = logger
+	logger.InfoContext(ctx, "storage open complete",
+		slog.String("event", "storage_open"),
+		slog.String("database", "configured"),
+	)
+	return &runtime{HomeDir: homeDir, ConfigPath: cfgPath, Config: cfg, Registry: registry, Store: store, Logger: logger, cleanup: cleanup}, nil
 }

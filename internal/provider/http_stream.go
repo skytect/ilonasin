@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -45,6 +46,15 @@ func (a HTTPChatAdapter) StreamChat(ctx context.Context, req ChatRequest, sink C
 	resp, err := a.doStreamRequest(streamCtx, cancel, httpReq)
 	if err != nil {
 		errorClass := classifyTransportError(err)
+		logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
+			slog.String("endpoint", "chat_completions_stream"),
+			slog.String("method", http.MethodPost),
+			slog.String("provider_instance", req.Instance.ID),
+			slog.String("provider_type", req.Instance.Type),
+			slog.Int64("credential_id", req.Credential.ID),
+			slog.Int64("duration_ms", durationMS(start)),
+			slog.String("error_class", errorClass),
+		)
 		return ChatStreamSummary{
 			StatusCode:       http.StatusBadGateway,
 			ErrorClass:       errorClass,
@@ -54,6 +64,16 @@ func (a HTTPChatAdapter) StreamChat(ctx context.Context, req ChatRequest, sink C
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		logProviderHTTP(ctx, a.Logger, statusLevel(resp.StatusCode, "upstream_http_error"), "provider_http",
+			slog.String("endpoint", "chat_completions_stream"),
+			slog.String("method", http.MethodPost),
+			slog.String("provider_instance", req.Instance.ID),
+			slog.String("provider_type", req.Instance.Type),
+			slog.Int64("credential_id", req.Credential.ID),
+			slog.Int("status", resp.StatusCode),
+			slog.Int64("duration_ms", durationMS(start)),
+			slog.String("error_class", "upstream_http_error"),
+		)
 		return ChatStreamSummary{
 			StatusCode:       resp.StatusCode,
 			ErrorClass:       "upstream_http_error",
@@ -80,8 +100,30 @@ func (a HTTPChatAdapter) StreamChat(ctx context.Context, req ChatRequest, sink C
 		if !summary.Started {
 			summary.PreStreamError = true
 		}
+		logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
+			slog.String("endpoint", "chat_completions_stream"),
+			slog.String("method", http.MethodPost),
+			slog.String("provider_instance", req.Instance.ID),
+			slog.String("provider_type", req.Instance.Type),
+			slog.Int64("credential_id", req.Credential.ID),
+			slog.Int("status", summary.StatusCode),
+			slog.Int64("duration_ms", durationMS(start)),
+			slog.String("error_class", summary.ErrorClass),
+			slog.String("stream_status", summary.CompletionStatus),
+		)
 		return summary, err
 	}
+	logProviderHTTP(ctx, a.Logger, slog.LevelInfo, "provider_http",
+		slog.String("endpoint", "chat_completions_stream"),
+		slog.String("method", http.MethodPost),
+		slog.String("provider_instance", req.Instance.ID),
+		slog.String("provider_type", req.Instance.Type),
+		slog.Int64("credential_id", req.Credential.ID),
+		slog.Int("status", summary.StatusCode),
+		slog.Int64("duration_ms", durationMS(start)),
+		slog.String("stream_status", summary.CompletionStatus),
+		slog.Int("chunk_count", summary.ChunkCount),
+	)
 	return summary, nil
 }
 

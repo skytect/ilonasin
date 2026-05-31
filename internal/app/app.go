@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -626,8 +627,9 @@ func apiKeyProviders(registry provider.Registry) []provider.Instance {
 	return out
 }
 
-func chatAdapters(client *http.Client) provider.StaticChatAdapters {
+func chatAdapters(client *http.Client, loggers ...*slog.Logger) provider.StaticChatAdapters {
 	adapter := provider.NewHTTPChatAdapter(client)
+	adapter.Logger = firstLogger(loggers)
 	if client != nil {
 		adapter.StreamIdleTimeout = 20 * time.Millisecond
 		adapter.StreamHeaderTimeout = time.Second
@@ -643,8 +645,9 @@ func chatAdapters(client *http.Client) provider.StaticChatAdapters {
 	}
 }
 
-func modelDiscoverers(client *http.Client) provider.StaticModelDiscoverers {
+func modelDiscoverers(client *http.Client, loggers ...*slog.Logger) provider.StaticModelDiscoverers {
 	adapter := provider.NewHTTPChatAdapter(client)
+	adapter.Logger = firstLogger(loggers)
 	if client != nil {
 		adapter.ModelTimeout = 20 * time.Millisecond
 	}
@@ -653,6 +656,13 @@ func modelDiscoverers(client *http.Client) provider.StaticModelDiscoverers {
 		"openrouter": adapter,
 		"codex":      adapter,
 	}
+}
+
+func firstLogger(loggers []*slog.Logger) *slog.Logger {
+	if len(loggers) == 0 {
+		return nil
+	}
+	return loggers[0]
 }
 
 type baseURLOverrideRegistry struct {

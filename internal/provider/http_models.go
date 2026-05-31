@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"sort"
@@ -14,6 +15,7 @@ import (
 const MaxUpstreamModelsBodyBytes int64 = 16 << 20
 
 func (a HTTPChatAdapter) ListModels(ctx context.Context, req ModelRequest) (ModelResult, error) {
+	start := time.Now()
 	ctx, cancel := context.WithTimeout(ctx, a.modelTimeout())
 	defer cancel()
 	endpoint, err := modelsURL(req.Instance)
@@ -28,6 +30,15 @@ func (a HTTPChatAdapter) ListModels(ctx context.Context, req ModelRequest) (Mode
 	httpReq.Header.Set("Accept", "application/json")
 	resp, err := a.Client.Do(httpReq)
 	if err != nil {
+		logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
+			slog.String("endpoint", "models"),
+			slog.String("method", http.MethodGet),
+			slog.String("provider_instance", req.Instance.ID),
+			slog.String("provider_type", req.Instance.Type),
+			slog.Int64("credential_id", req.Credential.ID),
+			slog.Int64("duration_ms", durationMS(start)),
+			slog.String("error_class", classifyTransportError(err)),
+		)
 		return ModelResult{ErrorClass: classifyTransportError(err)}, err
 	}
 	defer resp.Body.Close()
@@ -36,22 +47,84 @@ func (a HTTPChatAdapter) ListModels(ctx context.Context, req ModelRequest) (Mode
 		if resp.StatusCode == http.StatusUnauthorized {
 			errorClass = "upstream_auth_failed"
 		}
+		logProviderHTTP(ctx, a.Logger, statusLevel(resp.StatusCode, errorClass), "provider_http",
+			slog.String("endpoint", "models"),
+			slog.String("method", http.MethodGet),
+			slog.String("provider_instance", req.Instance.ID),
+			slog.String("provider_type", req.Instance.Type),
+			slog.Int64("credential_id", req.Credential.ID),
+			slog.Int("status", resp.StatusCode),
+			slog.Int64("duration_ms", durationMS(start)),
+			slog.String("error_class", errorClass),
+		)
 		return ModelResult{ErrorClass: errorClass, StatusCode: resp.StatusCode, RetryAfter: retryAfterFromHeader(resp.Header, time.Now())}, fmt.Errorf("upstream models status %d", resp.StatusCode)
 	}
 	if resp.ContentLength > MaxUpstreamModelsBodyBytes {
+		logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
+			slog.String("endpoint", "models"),
+			slog.String("method", http.MethodGet),
+			slog.String("provider_instance", req.Instance.ID),
+			slog.String("provider_type", req.Instance.Type),
+			slog.Int64("credential_id", req.Credential.ID),
+			slog.Int("status", resp.StatusCode),
+			slog.Int64("duration_ms", durationMS(start)),
+			slog.String("error_class", "upstream_body_too_large"),
+		)
 		return ModelResult{ErrorClass: "upstream_body_too_large", StatusCode: resp.StatusCode}, fmt.Errorf("upstream models body exceeded limit")
 	}
 	body, tooLarge, readErr := readLimitedUpstreamBody(resp.Body, MaxUpstreamModelsBodyBytes)
 	if tooLarge {
+		logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
+			slog.String("endpoint", "models"),
+			slog.String("method", http.MethodGet),
+			slog.String("provider_instance", req.Instance.ID),
+			slog.String("provider_type", req.Instance.Type),
+			slog.Int64("credential_id", req.Credential.ID),
+			slog.Int("status", resp.StatusCode),
+			slog.Int64("duration_ms", durationMS(start)),
+			slog.String("error_class", "upstream_body_too_large"),
+		)
 		return ModelResult{ErrorClass: "upstream_body_too_large", StatusCode: resp.StatusCode}, fmt.Errorf("upstream models body exceeded limit")
 	}
 	if readErr != nil {
+		logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
+			slog.String("endpoint", "models"),
+			slog.String("method", http.MethodGet),
+			slog.String("provider_instance", req.Instance.ID),
+			slog.String("provider_type", req.Instance.Type),
+			slog.Int64("credential_id", req.Credential.ID),
+			slog.Int("status", resp.StatusCode),
+			slog.Int64("duration_ms", durationMS(start)),
+			slog.String("error_class", "upstream_network_error"),
+		)
 		return ModelResult{ErrorClass: "upstream_network_error", StatusCode: resp.StatusCode}, readErr
 	}
 	models, err := normalizeModels(req.Instance, body)
 	if err != nil {
+		logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
+			slog.String("endpoint", "models"),
+			slog.String("method", http.MethodGet),
+			slog.String("provider_instance", req.Instance.ID),
+			slog.String("provider_type", req.Instance.Type),
+			slog.Int64("credential_id", req.Credential.ID),
+			slog.Int("status", resp.StatusCode),
+			slog.Int64("duration_ms", durationMS(start)),
+			slog.Int("response_bytes", len(body)),
+			slog.String("error_class", "upstream_invalid_response"),
+		)
 		return ModelResult{ErrorClass: "upstream_invalid_response", StatusCode: resp.StatusCode}, err
 	}
+	logProviderHTTP(ctx, a.Logger, slog.LevelInfo, "provider_http",
+		slog.String("endpoint", "models"),
+		slog.String("method", http.MethodGet),
+		slog.String("provider_instance", req.Instance.ID),
+		slog.String("provider_type", req.Instance.Type),
+		slog.Int64("credential_id", req.Credential.ID),
+		slog.Int("status", resp.StatusCode),
+		slog.Int64("duration_ms", durationMS(start)),
+		slog.Int("response_bytes", len(body)),
+		slog.Int("model_count", len(models)),
+	)
 	return ModelResult{Models: models, StatusCode: resp.StatusCode}, nil
 }
 

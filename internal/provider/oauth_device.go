@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"net/url"
@@ -23,8 +24,9 @@ type OAuthDeviceLoginProvider interface {
 }
 
 type OAuthDeviceCodeRequest struct {
-	ProviderType string
-	AuthIssuer   string
+	ProviderInstanceID string
+	ProviderType       string
+	AuthIssuer         string
 }
 
 type OAuthDeviceCodeChallenge struct {
@@ -35,12 +37,13 @@ type OAuthDeviceCodeChallenge struct {
 }
 
 type OAuthDeviceLoginRequest struct {
-	ProviderType    string
-	AuthIssuer      string
-	DeviceAuthID    string
-	UserCode        string
-	IntervalSeconds int
-	Now             time.Time
+	ProviderInstanceID string
+	ProviderType       string
+	AuthIssuer         string
+	DeviceAuthID       string
+	UserCode           string
+	IntervalSeconds    int
+	Now                time.Time
 }
 
 type OAuthDeviceLoginResult struct {
@@ -51,7 +54,8 @@ type OAuthDeviceLoginResult struct {
 }
 
 type OAuthDeviceLoginError struct {
-	Class string
+	Class   string
+	EventID string
 }
 
 func (e OAuthDeviceLoginError) Error() string {
@@ -69,6 +73,7 @@ type HTTPOAuthDeviceLogin struct {
 	MaxPollInterval time.Duration
 	MaxPolls        int
 	MaxBodyBytes    int64
+	Logger          *slog.Logger
 }
 
 func NewHTTPOAuthDeviceLogin(client *http.Client) HTTPOAuthDeviceLogin {
@@ -102,7 +107,7 @@ func (l HTTPOAuthDeviceLogin) RequestOAuthDeviceCode(ctx context.Context, req OA
 		return OAuthDeviceCodeChallenge{}, OAuthDeviceLoginError{Class: "oauth_login_invalid_request"}
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	respBody, err := l.doJSON(ctx, httpReq)
+	respBody, err := l.doJSON(ctx, httpReq, "oauth_device_code", req.ProviderInstanceID, req.ProviderType)
 	if err != nil {
 		return OAuthDeviceCodeChallenge{}, err
 	}
@@ -162,7 +167,8 @@ func (l HTTPOAuthDeviceLogin) pollAuthorizationCode(ctx context.Context, req OAu
 		return authorizationCodeResult{}, OAuthDeviceLoginError{Class: "oauth_login_unavailable"}
 	}
 	pollTimeout := l.pollTimeout()
-	deadline := time.Now().Add(pollTimeout)
+	pollStart := time.Now()
+	deadline := pollStart.Add(pollTimeout)
 	interval := clampDuration(time.Duration(req.IntervalSeconds)*time.Second, l.minPollInterval(), l.maxPollInterval())
 	maxPolls := l.MaxPolls
 	polls := 0
@@ -185,7 +191,17 @@ func (l HTTPOAuthDeviceLogin) pollAuthorizationCode(ctx context.Context, req OAu
 		resp, err := l.httpClient().Do(httpReq)
 		if err != nil {
 			cancel()
-			return authorizationCodeResult{}, classifyOAuthDeviceTransport(err)
+			class := oauthDeviceTransportClass(err)
+			eventID := logProviderHTTP(ctx, l.Logger, slog.LevelError, "provider_http",
+				slog.String("endpoint", "oauth_device_poll"),
+				slog.String("method", http.MethodPost),
+				slog.String("provider_instance", req.ProviderInstanceID),
+				slog.String("provider_type", req.ProviderType),
+				slog.Int("attempt", polls),
+				slog.Int64("duration_ms", durationMS(pollStart)),
+				slog.String("error_class", class),
+			)
+			return authorizationCodeResult{}, OAuthDeviceLoginError{Class: class, EventID: eventID}
 		}
 		status := resp.StatusCode
 		if status == http.StatusForbidden || status == http.StatusNotFound {
@@ -193,17 +209,67 @@ func (l HTTPOAuthDeviceLogin) pollAuthorizationCode(ctx context.Context, req OAu
 			_ = resp.Body.Close()
 			cancel()
 			if readErr != nil {
-				return authorizationCodeResult{}, readErr
+				class := "oauth_login_invalid_response"
+				var loginErr OAuthDeviceLoginError
+				if errors.As(readErr, &loginErr) && loginErr.Class != "" {
+					class = loginErr.Class
+				}
+				eventID := logProviderHTTP(ctx, l.Logger, slog.LevelError, "provider_http",
+					slog.String("endpoint", "oauth_device_poll"),
+					slog.String("method", http.MethodPost),
+					slog.String("provider_instance", req.ProviderInstanceID),
+					slog.String("provider_type", req.ProviderType),
+					slog.Int("attempt", polls),
+					slog.Int("status", status),
+					slog.Int64("duration_ms", durationMS(pollStart)),
+					slog.String("error_class", class),
+				)
+				if loginErr.Class != "" {
+					loginErr.EventID = eventID
+					return authorizationCodeResult{}, loginErr
+				}
+				return authorizationCodeResult{}, OAuthDeviceLoginError{Class: class, EventID: eventID}
 			}
+			logProviderHTTP(ctx, l.Logger, slog.LevelInfo, "provider_http",
+				slog.String("endpoint", "oauth_device_poll"),
+				slog.String("method", http.MethodPost),
+				slog.String("provider_instance", req.ProviderInstanceID),
+				slog.String("provider_type", req.ProviderType),
+				slog.Int("attempt", polls),
+				slog.Int("status", status),
+				slog.Int64("duration_ms", durationMS(pollStart)),
+				slog.String("state", "pending"),
+			)
 			if (maxPolls > 0 && polls >= maxPolls) || time.Now().Add(interval).After(deadline) {
-				return authorizationCodeResult{}, OAuthDeviceLoginError{Class: "oauth_login_timeout"}
+				eventID := logProviderHTTP(ctx, l.Logger, slog.LevelError, "provider_http",
+					slog.String("endpoint", "oauth_device_poll"),
+					slog.String("method", http.MethodPost),
+					slog.String("provider_instance", req.ProviderInstanceID),
+					slog.String("provider_type", req.ProviderType),
+					slog.Int("attempt", polls),
+					slog.Int("status", status),
+					slog.Int64("duration_ms", durationMS(pollStart)),
+					slog.String("error_class", "oauth_login_timeout"),
+				)
+				return authorizationCodeResult{}, OAuthDeviceLoginError{Class: "oauth_login_timeout", EventID: eventID}
 			}
 			timer := time.NewTimer(interval)
 			select {
 			case <-timer.C:
 			case <-ctx.Done():
 				timer.Stop()
-				return authorizationCodeResult{}, classifyOAuthDeviceTransport(ctx.Err())
+				class := oauthDeviceTransportClass(ctx.Err())
+				eventID := logProviderHTTP(ctx, l.Logger, slog.LevelError, "provider_http",
+					slog.String("endpoint", "oauth_device_poll"),
+					slog.String("method", http.MethodPost),
+					slog.String("provider_instance", req.ProviderInstanceID),
+					slog.String("provider_type", req.ProviderType),
+					slog.Int("attempt", polls),
+					slog.Int("status", status),
+					slog.Int64("duration_ms", durationMS(pollStart)),
+					slog.String("error_class", class),
+				)
+				return authorizationCodeResult{}, OAuthDeviceLoginError{Class: class, EventID: eventID}
 			}
 			continue
 		}
@@ -211,19 +277,81 @@ func (l HTTPOAuthDeviceLogin) pollAuthorizationCode(ctx context.Context, req OAu
 		_ = resp.Body.Close()
 		cancel()
 		if readErr != nil {
-			return authorizationCodeResult{}, readErr
+			class := "oauth_login_invalid_response"
+			var loginErr OAuthDeviceLoginError
+			if errors.As(readErr, &loginErr) && loginErr.Class != "" {
+				class = loginErr.Class
+			}
+			eventID := logProviderHTTP(ctx, l.Logger, slog.LevelError, "provider_http",
+				slog.String("endpoint", "oauth_device_poll"),
+				slog.String("method", http.MethodPost),
+				slog.String("provider_instance", req.ProviderInstanceID),
+				slog.String("provider_type", req.ProviderType),
+				slog.Int("attempt", polls),
+				slog.Int("status", status),
+				slog.Int64("duration_ms", durationMS(pollStart)),
+				slog.String("error_class", class),
+			)
+			if loginErr.Class != "" {
+				loginErr.EventID = eventID
+				return authorizationCodeResult{}, loginErr
+			}
+			return authorizationCodeResult{}, OAuthDeviceLoginError{Class: class, EventID: eventID}
 		}
 		if status >= 200 && status < 300 {
 			var code authorizationCodeResult
 			if err := decodeStrictJSON(respBody, &code); err != nil {
-				return authorizationCodeResult{}, OAuthDeviceLoginError{Class: "oauth_login_invalid_response"}
+				eventID := logProviderHTTP(ctx, l.Logger, slog.LevelError, "provider_http",
+					slog.String("endpoint", "oauth_device_poll"),
+					slog.String("method", http.MethodPost),
+					slog.String("provider_instance", req.ProviderInstanceID),
+					slog.String("provider_type", req.ProviderType),
+					slog.Int("attempt", polls),
+					slog.Int("status", status),
+					slog.Int64("duration_ms", durationMS(pollStart)),
+					slog.Int("response_bytes", len(respBody)),
+					slog.String("error_class", "oauth_login_invalid_response"),
+				)
+				return authorizationCodeResult{}, OAuthDeviceLoginError{Class: "oauth_login_invalid_response", EventID: eventID}
 			}
 			if strings.TrimSpace(code.AuthorizationCode) == "" || strings.TrimSpace(code.CodeChallenge) == "" || strings.TrimSpace(code.CodeVerifier) == "" {
-				return authorizationCodeResult{}, OAuthDeviceLoginError{Class: "oauth_login_invalid_response"}
+				eventID := logProviderHTTP(ctx, l.Logger, slog.LevelError, "provider_http",
+					slog.String("endpoint", "oauth_device_poll"),
+					slog.String("method", http.MethodPost),
+					slog.String("provider_instance", req.ProviderInstanceID),
+					slog.String("provider_type", req.ProviderType),
+					slog.Int("attempt", polls),
+					slog.Int("status", status),
+					slog.Int64("duration_ms", durationMS(pollStart)),
+					slog.Int("response_bytes", len(respBody)),
+					slog.String("error_class", "oauth_login_invalid_response"),
+				)
+				return authorizationCodeResult{}, OAuthDeviceLoginError{Class: "oauth_login_invalid_response", EventID: eventID}
 			}
+			logProviderHTTP(ctx, l.Logger, slog.LevelInfo, "provider_http",
+				slog.String("endpoint", "oauth_device_poll"),
+				slog.String("method", http.MethodPost),
+				slog.String("provider_instance", req.ProviderInstanceID),
+				slog.String("provider_type", req.ProviderType),
+				slog.Int("attempt", polls),
+				slog.Int("status", status),
+				slog.Int64("duration_ms", durationMS(pollStart)),
+				slog.Int("response_bytes", len(respBody)),
+			)
 			return code, nil
 		}
-		return authorizationCodeResult{}, OAuthDeviceLoginError{Class: "oauth_login_http_error"}
+		eventID := logProviderHTTP(ctx, l.Logger, slog.LevelError, "provider_http",
+			slog.String("endpoint", "oauth_device_poll"),
+			slog.String("method", http.MethodPost),
+			slog.String("provider_instance", req.ProviderInstanceID),
+			slog.String("provider_type", req.ProviderType),
+			slog.Int("attempt", polls),
+			slog.Int("status", status),
+			slog.Int64("duration_ms", durationMS(pollStart)),
+			slog.Int("response_bytes", len(respBody)),
+			slog.String("error_class", "oauth_login_http_error"),
+		)
+		return authorizationCodeResult{}, OAuthDeviceLoginError{Class: "oauth_login_http_error", EventID: eventID}
 	}
 }
 
@@ -247,7 +375,7 @@ func (l HTTPOAuthDeviceLogin) exchangeAuthorizationCode(ctx context.Context, req
 		return OAuthDeviceLoginResult{}, OAuthDeviceLoginError{Class: "oauth_login_invalid_request"}
 	}
 	httpReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	respBody, err := l.doJSON(ctx, httpReq)
+	respBody, err := l.doJSON(ctx, httpReq, "oauth_token", req.ProviderInstanceID, req.ProviderType)
 	if err != nil {
 		return OAuthDeviceLoginResult{}, err
 	}
@@ -280,22 +408,69 @@ func (l HTTPOAuthDeviceLogin) exchangeAuthorizationCode(ctx context.Context, req
 	}, nil
 }
 
-func (l HTTPOAuthDeviceLogin) doJSON(ctx context.Context, req *http.Request) ([]byte, error) {
+func (l HTTPOAuthDeviceLogin) doJSON(ctx context.Context, req *http.Request, endpoint, providerInstanceID, providerType string) ([]byte, error) {
+	start := time.Now()
 	ctx, cancel := context.WithTimeout(ctx, l.timeout())
 	defer cancel()
 	req = req.WithContext(ctx)
 	resp, err := l.httpClient().Do(req)
 	if err != nil {
-		return nil, classifyOAuthDeviceTransport(err)
+		class := oauthDeviceTransportClass(err)
+		eventID := logProviderHTTP(ctx, l.Logger, slog.LevelError, "provider_http",
+			slog.String("endpoint", endpoint),
+			slog.String("method", req.Method),
+			slog.String("provider_instance", providerInstanceID),
+			slog.String("provider_type", providerType),
+			slog.Int64("duration_ms", durationMS(start)),
+			slog.String("error_class", class),
+		)
+		return nil, OAuthDeviceLoginError{Class: class, EventID: eventID}
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, l.maxBodyBytes()))
+		eventID := logProviderHTTP(ctx, l.Logger, slog.LevelError, "provider_http",
+			slog.String("endpoint", endpoint),
+			slog.String("method", req.Method),
+			slog.String("provider_instance", providerInstanceID),
+			slog.String("provider_type", providerType),
+			slog.Int("status", resp.StatusCode),
+			slog.Int64("duration_ms", durationMS(start)),
+			slog.String("error_class", "oauth_login_http_error"),
+		)
+		return nil, OAuthDeviceLoginError{Class: "oauth_login_http_error", EventID: eventID}
+	}
 	body, err := readOAuthDeviceResponse(resp, l.maxBodyBytes())
 	if err != nil {
-		return nil, err
+		var loginErr OAuthDeviceLoginError
+		class := "oauth_login_invalid_response"
+		if errors.As(err, &loginErr) && loginErr.Class != "" {
+			class = loginErr.Class
+		}
+		eventID := logProviderHTTP(ctx, l.Logger, slog.LevelError, "provider_http",
+			slog.String("endpoint", endpoint),
+			slog.String("method", req.Method),
+			slog.String("provider_instance", providerInstanceID),
+			slog.String("provider_type", providerType),
+			slog.Int("status", resp.StatusCode),
+			slog.Int64("duration_ms", durationMS(start)),
+			slog.String("error_class", class),
+		)
+		if loginErr.Class != "" {
+			loginErr.EventID = eventID
+			return nil, loginErr
+		}
+		return nil, OAuthDeviceLoginError{Class: class, EventID: eventID}
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, OAuthDeviceLoginError{Class: "oauth_login_http_error"}
-	}
+	logProviderHTTP(ctx, l.Logger, slog.LevelInfo, "provider_http",
+		slog.String("endpoint", endpoint),
+		slog.String("method", req.Method),
+		slog.String("provider_instance", providerInstanceID),
+		slog.String("provider_type", providerType),
+		slog.Int("status", resp.StatusCode),
+		slog.Int64("duration_ms", durationMS(start)),
+		slog.Int("response_bytes", len(body)),
+	)
 	return body, nil
 }
 
@@ -379,13 +554,17 @@ func isJSONContentType(value string) bool {
 }
 
 func classifyOAuthDeviceTransport(err error) error {
+	return OAuthDeviceLoginError{Class: oauthDeviceTransportClass(err)}
+}
+
+func oauthDeviceTransportClass(err error) string {
 	if errors.Is(err, context.Canceled) {
-		return OAuthDeviceLoginError{Class: "oauth_login_canceled"}
+		return "oauth_login_canceled"
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return OAuthDeviceLoginError{Class: "oauth_login_timeout"}
+		return "oauth_login_timeout"
 	}
-	return OAuthDeviceLoginError{Class: "oauth_login_network_error"}
+	return "oauth_login_network_error"
 }
 
 func (l HTTPOAuthDeviceLogin) httpClient() *http.Client {

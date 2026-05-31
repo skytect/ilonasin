@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"sort"
 
@@ -101,6 +102,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request, _ credenti
 		all = append(all, cached...)
 	}
 	if len(all) == 0 && attempted > 0 && failedWithoutCache == attempted {
+		s.logHTTP(r, http.StatusBadGateway, "models_route", "model_discovery_failed")
 		writeError(w, http.StatusBadGateway, "model discovery failed", "api_error", "model_discovery_failed")
 		return
 	}
@@ -122,6 +124,13 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request, _ credenti
 		Object string  `json:"object"`
 		Data   []model `json:"data"`
 	}{Object: "list", Data: data}
+	if s.logger != nil {
+		s.logAttrs(r, levelForStatus(http.StatusOK, ""), "models route complete",
+			slog.String("event", "models_route"),
+			slog.Int("status", http.StatusOK),
+			slog.Int("model_count", len(data)),
+		)
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 

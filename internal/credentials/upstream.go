@@ -9,11 +9,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
 	"unicode"
 
+	"ilonasin/internal/logging"
 	"ilonasin/internal/provider"
 )
 
@@ -101,6 +103,7 @@ type UpstreamService struct {
 	OAuthLogin     provider.OAuthDeviceLoginProvider
 	Now            func() time.Time
 	DeviceLogins   *OAuthDeviceLoginSessions
+	Logger         *slog.Logger
 	refreshMu      sync.Mutex
 	refreshes      *OAuthRefreshCalls
 }
@@ -283,7 +286,7 @@ func (s *UpstreamService) AddAPIKey(ctx context.Context, providerInstanceID, lab
 	if !instance.APIKey || instance.Placeholder {
 		return UpstreamCredentialMetadata{}, fmt.Errorf("%w: provider %q does not support api-key credentials", ErrUnsupportedCredential, providerInstanceID)
 	}
-	return s.Repo.InsertAPIKeyCredential(ctx, NewUpstreamCredential{
+	meta, err := s.Repo.InsertAPIKeyCredential(ctx, NewUpstreamCredential{
 		ProviderInstanceID: providerInstanceID,
 		Kind:               "api_key",
 		Label:              label,
@@ -292,6 +295,10 @@ func (s *UpstreamService) AddAPIKey(ctx context.Context, providerInstanceID, lab
 		FallbackGroup:      DefaultFallbackGroup,
 		CreatedAt:          s.now(),
 	}, apiKey)
+	if err == nil {
+		s.logInfo(ctx, "credential_created", slog.String("kind", "api_key"), slog.String("provider_instance", providerInstanceID), slog.Int64("credential_id", meta.ID))
+	}
+	return meta, err
 }
 
 func (s *UpstreamService) AddOAuthCredential(ctx context.Context, input NewOAuthCredentialInput) (OAuthCredentialMetadata, error) {
@@ -327,7 +334,11 @@ func (s *UpstreamService) AddOAuthCredential(ctx context.Context, input NewOAuth
 		ExpiresAt:           input.ExpiresAt,
 		CreatedAt:           s.now(),
 	}
-	return s.Repo.InsertOAuthCredential(ctx, meta, accessToken, refreshToken)
+	created, err := s.Repo.InsertOAuthCredential(ctx, meta, accessToken, refreshToken)
+	if err == nil {
+		s.logInfo(ctx, "credential_created", slog.String("kind", "oauth"), slog.String("provider_instance", input.ProviderInstanceID), slog.Int64("credential_id", created.ID))
+	}
+	return created, err
 }
 
 func (s *UpstreamService) List(ctx context.Context) ([]UpstreamCredentialMetadata, error) {
@@ -347,7 +358,11 @@ func (s *UpstreamService) ListProviderAccounts(ctx context.Context) ([]ProviderA
 }
 
 func (s *UpstreamService) Disable(ctx context.Context, id int64) error {
-	return s.Repo.DisableUpstreamCredential(ctx, id, s.now())
+	err := s.Repo.DisableUpstreamCredential(ctx, id, s.now())
+	if err == nil {
+		s.logInfo(ctx, "credential_disabled", slog.Int64("credential_id", id))
+	}
+	return err
 }
 
 func (s *UpstreamService) MarkOAuthRefreshFailure(ctx context.Context, credentialID int64, failureClass string) error {
@@ -355,11 +370,19 @@ func (s *UpstreamService) MarkOAuthRefreshFailure(ctx context.Context, credentia
 }
 
 func (s *UpstreamService) EnableFallbackGroup(ctx context.Context, providerInstanceID, groupLabel string) error {
-	return s.setFallbackGroup(ctx, providerInstanceID, groupLabel, true)
+	err := s.setFallbackGroup(ctx, providerInstanceID, groupLabel, true)
+	if err == nil {
+		s.logInfo(ctx, "fallback_policy_changed", slog.String("provider_instance", providerInstanceID), slog.Bool("enabled", true))
+	}
+	return err
 }
 
 func (s *UpstreamService) DisableFallbackGroup(ctx context.Context, providerInstanceID, groupLabel string) error {
-	return s.setFallbackGroup(ctx, providerInstanceID, groupLabel, false)
+	err := s.setFallbackGroup(ctx, providerInstanceID, groupLabel, false)
+	if err == nil {
+		s.logInfo(ctx, "fallback_policy_changed", slog.String("provider_instance", providerInstanceID), slog.Bool("enabled", false))
+	}
+	return err
 }
 
 func (s *UpstreamService) ResolveAPIKey(ctx context.Context, providerInstanceID string) (ResolvedAPIKeyCredential, error) {
@@ -433,10 +456,12 @@ func (s *UpstreamService) StartOAuthDeviceLogin(ctx context.Context, providerIns
 		return OAuthDeviceLoginChallenge{}, err
 	}
 	challenge, err := s.OAuthLogin.RequestOAuthDeviceCode(ctx, provider.OAuthDeviceCodeRequest{
-		ProviderType: instance.Type,
-		AuthIssuer:   instance.AuthIssuer,
+		ProviderInstanceID: providerInstanceID,
+		ProviderType:       instance.Type,
+		AuthIssuer:         instance.AuthIssuer,
 	})
 	if err != nil {
+		s.logError(ctx, "oauth_device_login_start_failed", err, slog.String("provider_instance", providerInstanceID))
 		return OAuthDeviceLoginChallenge{}, err
 	}
 	handle, err := randomHandle()
@@ -454,6 +479,7 @@ func (s *UpstreamService) StartOAuthDeviceLogin(ctx context.Context, providerIns
 	}, now); err != nil {
 		return OAuthDeviceLoginChallenge{}, err
 	}
+	s.logInfo(ctx, "oauth_device_login_started", slog.String("provider_instance", providerInstanceID))
 	return OAuthDeviceLoginChallenge{
 		ProviderInstanceID: providerInstanceID,
 		VerificationURL:    challenge.VerificationURL,
@@ -472,14 +498,16 @@ func (s *UpstreamService) CompleteOAuthDeviceLogin(ctx context.Context, handle s
 	}
 	now := s.now()
 	result, err := s.OAuthLogin.CompleteOAuthDeviceLogin(ctx, provider.OAuthDeviceLoginRequest{
-		ProviderType:    session.ProviderType,
-		AuthIssuer:      session.AuthIssuer,
-		DeviceAuthID:    session.DeviceAuthID,
-		UserCode:        session.UserCode,
-		IntervalSeconds: session.IntervalSeconds,
-		Now:             now,
+		ProviderInstanceID: session.ProviderInstanceID,
+		ProviderType:       session.ProviderType,
+		AuthIssuer:         session.AuthIssuer,
+		DeviceAuthID:       session.DeviceAuthID,
+		UserCode:           session.UserCode,
+		IntervalSeconds:    session.IntervalSeconds,
+		Now:                now,
 	})
 	if err != nil {
+		s.logError(ctx, "oauth_device_login_complete_failed", err, slog.String("provider_instance", session.ProviderInstanceID))
 		return OAuthCredentialMetadata{}, err
 	}
 	accessToken := strings.TrimSpace(result.AccessToken)
@@ -511,9 +539,15 @@ func (s *UpstreamService) CompleteOAuthDeviceLogin(ctx context.Context, handle s
 }
 
 func (s *UpstreamService) RefreshOAuthCredential(ctx context.Context, credentialID int64) error {
-	return s.refreshCalls().do(ctx, fmt.Sprintf("credential:%d", credentialID), func() error {
+	err := s.refreshCalls().do(ctx, fmt.Sprintf("credential:%d", credentialID), func() error {
 		return s.refreshOAuthCredential(ctx, credentialID)
 	})
+	if err != nil {
+		s.logError(ctx, "oauth_refresh_failed", err, slog.Int64("credential_id", credentialID))
+	} else {
+		s.logInfo(ctx, "oauth_refresh_completed", slog.Int64("credential_id", credentialID))
+	}
+	return err
 }
 
 func (s *UpstreamService) RefreshOAuthCredentialIfBearer(ctx context.Context, credentialID int64, staleBearerToken string) error {
@@ -940,4 +974,57 @@ func (s *UpstreamService) now() time.Time {
 		return s.Now().UTC()
 	}
 	return time.Now().UTC()
+}
+
+func (s *UpstreamService) logInfo(ctx context.Context, event string, attrs ...slog.Attr) {
+	if s.Logger == nil {
+		return
+	}
+	attrs = append([]slog.Attr{slog.String("event", event)}, attrs...)
+	s.Logger.LogAttrs(ctx, slog.LevelInfo, "credential event", attrs...)
+}
+
+func (s *UpstreamService) logError(ctx context.Context, event string, err error, attrs ...slog.Attr) {
+	if s.Logger == nil {
+		return
+	}
+	eventID := logging.EventID()
+	var loginErr provider.OAuthDeviceLoginError
+	if errors.As(err, &loginErr) && loginErr.EventID != "" {
+		eventID = loginErr.EventID
+	}
+	attrs = append([]slog.Attr{
+		slog.String("event", event),
+		logging.EventIDAttr(eventID),
+		slog.String("error_class", safeCredentialErrorClass(err)),
+	}, attrs...)
+	s.Logger.LogAttrs(ctx, slog.LevelError, "credential error", attrs...)
+}
+
+func safeCredentialErrorClass(err error) string {
+	if err == nil {
+		return ""
+	}
+	var loginErr provider.OAuthDeviceLoginError
+	if errors.As(err, &loginErr) && loginErr.Class != "" {
+		return loginErr.Class
+	}
+	var refreshErr provider.OAuthRefreshError
+	if errors.As(err, &refreshErr) && refreshErr.Class != "" {
+		return refreshErr.Class
+	}
+	switch {
+	case errors.Is(err, ErrCredentialNotFound):
+		return "credential_not_found"
+	case errors.Is(err, ErrNoEligibleCredential):
+		return "no_eligible_credential"
+	case errors.Is(err, ErrUnsupportedCredential):
+		return "unsupported_credential"
+	case errors.Is(err, ErrInvalidOAuthInput):
+		return "invalid_oauth_input"
+	case errors.Is(err, ErrOAuthRefreshFailed):
+		return "oauth_refresh_failed"
+	default:
+		return "credential_error"
+	}
 }

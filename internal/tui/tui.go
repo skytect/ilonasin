@@ -20,7 +20,6 @@ import (
 	"ilonasin/internal/config"
 	"ilonasin/internal/credentials"
 	"ilonasin/internal/management"
-	"ilonasin/internal/metadata"
 	"ilonasin/internal/provider"
 )
 
@@ -40,15 +39,15 @@ type Model struct {
 	fallbackPolicies []management.FallbackPolicy
 	oauthRows        []management.OAuthCredential
 	accountRows      []management.ProviderAccount
-	modelRows        []provider.ModelMetadata
-	requestRows      []metadata.RequestSummary
-	usageRows        []metadata.UsageSummary
-	latencyRows      []metadata.LatencySummary
-	streamRows       []metadata.StreamSummary
-	healthRows       []metadata.HealthSummary
-	fallbackRows     []metadata.FallbackSummary
-	quotaRows        []metadata.QuotaSummary
-	pruneResult      *metadata.PruneResult
+	modelRows        []management.ModelMetadata
+	requestRows      []management.RequestSummary
+	usageRows        []management.UsageSummary
+	latencyRows      []management.LatencySummary
+	streamRows       []management.StreamSummary
+	healthRows       []management.HealthSummary
+	fallbackRows     []management.FallbackSummary
+	quotaRows        []management.QuotaSummary
+	pruneResult      *management.PruneResult
 	pruningAvailable bool
 	selected         int
 	oauthSelected    int
@@ -63,10 +62,6 @@ type Model struct {
 	err              string
 	quitOnInit       bool
 	checkMode        bool
-}
-
-type TelemetryPruner interface {
-	PruneTelemetryBefore(ctx context.Context, cutoff time.Time) (metadata.PruneResult, error)
 }
 
 func NewModel(cfg config.Config, registry provider.Registry, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, oauth management.OAuthClient, pruner management.TelemetryPruneClient, now func() time.Time, loggers ...*slog.Logger) Model {
@@ -580,7 +575,7 @@ func ExerciseObservabilitySummary(ctx context.Context, cfg config.Config, regist
 	return nil
 }
 
-func ExerciseTelemetryPrune(ctx context.Context, cfg config.Config, registry provider.Registry, snapshot management.SnapshotClient, pruner management.TelemetryPruneClient, now func() time.Time, expected metadata.PruneResult) error {
+func ExerciseTelemetryPrune(ctx context.Context, cfg config.Config, registry provider.Registry, snapshot management.SnapshotClient, pruner management.TelemetryPruneClient, now func() time.Time, expected management.PruneResult) error {
 	model := newCheckModel(cfg, registry, nil, nil, nil, pruner, now)
 	model.snapshot = snapshot
 	if err := model.reload(); err != nil {
@@ -625,7 +620,7 @@ func ExerciseTelemetryPrune(ctx context.Context, cfg config.Config, registry pro
 			return fmt.Errorf("telemetry prune summary leaked forbidden marker")
 		}
 	}
-	failing := newCheckModel(cfg, registry, nil, nil, nil, directTelemetryPruner{failingTelemetryPruner{}}, now)
+	failing := newCheckModel(cfg, registry, nil, nil, nil, failingTelemetryPruner{}, now)
 	failing.snapshot = snapshot
 	updated, _ = failing.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
 	failed := updated.(Model)
@@ -641,27 +636,8 @@ func ExerciseTelemetryPrune(ctx context.Context, cfg config.Config, registry pro
 
 type failingTelemetryPruner struct{}
 
-func (failingTelemetryPruner) PruneTelemetryBefore(context.Context, time.Time) (metadata.PruneResult, error) {
-	return metadata.PruneResult{}, fmt.Errorf("sk-prune-secret raw-provider-payload")
-}
-
-type directTelemetryPruner struct {
-	pruner TelemetryPruner
-}
-
-func (d directTelemetryPruner) PruneTelemetry(ctx context.Context, req management.PruneTelemetryRequest) (management.PruneTelemetryResponse, error) {
-	result, err := d.pruner.PruneTelemetryBefore(ctx, req.Cutoff)
-	if err != nil {
-		return management.PruneTelemetryResponse{}, err
-	}
-	return management.PruneTelemetryResponse{Result: management.PruneResult{
-		Cutoff:    result.Cutoff,
-		Requests:  result.Requests,
-		Streams:   result.Streams,
-		Fallbacks: result.Fallbacks,
-		Health:    result.Health,
-		Quotas:    result.Quotas,
-	}}, nil
+func (failingTelemetryPruner) PruneTelemetry(context.Context, management.PruneTelemetryRequest) (management.PruneTelemetryResponse, error) {
+	return management.PruneTelemetryResponse{}, fmt.Errorf("sk-prune-secret raw-provider-payload")
 }
 
 func ExerciseOAuthSummary(ctx context.Context, cfg config.Config, registry provider.Registry, snapshot management.SnapshotClient) error {
@@ -977,14 +953,14 @@ func (m *Model) applySnapshot(snapshot management.ManagementSnapshotResponse) {
 	m.fallbackPolicies = m.visibleFallbackPolicies(snapshot.FallbackPolicies)
 	m.oauthRows = append([]management.OAuthCredential(nil), snapshot.OAuthCredentials...)
 	m.accountRows = append([]management.ProviderAccount(nil), snapshot.ProviderAccounts...)
-	m.modelRows = modelMetadataFromSnapshot(snapshot.ModelCache)
-	m.requestRows = requestSummariesFromSnapshot(snapshot.RecentRequests)
-	m.usageRows = usageSummariesFromSnapshot(snapshot.Usage)
-	m.latencyRows = latencySummariesFromSnapshot(snapshot.Latency)
-	m.streamRows = streamSummariesFromSnapshot(snapshot.Streams)
-	m.healthRows = healthSummariesFromSnapshot(snapshot.Health)
-	m.fallbackRows = fallbackSummariesFromSnapshot(snapshot.Fallbacks)
-	m.quotaRows = quotaSummariesFromSnapshot(snapshot.Quotas)
+	m.modelRows = append([]management.ModelMetadata(nil), snapshot.ModelCache...)
+	m.requestRows = append([]management.RequestSummary(nil), snapshot.RecentRequests...)
+	m.usageRows = append([]management.UsageSummary(nil), snapshot.Usage...)
+	m.latencyRows = append([]management.LatencySummary(nil), snapshot.Latency...)
+	m.streamRows = append([]management.StreamSummary(nil), snapshot.Streams...)
+	m.healthRows = append([]management.HealthSummary(nil), snapshot.Health...)
+	m.fallbackRows = append([]management.FallbackSummary(nil), snapshot.Fallbacks...)
+	m.quotaRows = append([]management.QuotaSummary(nil), snapshot.Quotas...)
 	m.pruningAvailable = snapshot.PruningAvailable
 	if m.selected >= len(m.tokenRows) {
 		m.selected = len(m.tokenRows) - 1
@@ -1026,157 +1002,6 @@ func oauthChallengeFromManagement(row management.OAuthDeviceLoginChallenge) cred
 		UserCode:           row.UserCode,
 		Handle:             row.Handle,
 	}
-}
-
-func modelMetadataFromSnapshot(rows []management.ModelMetadata) []provider.ModelMetadata {
-	out := make([]provider.ModelMetadata, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, provider.ModelMetadata{
-			ProviderInstanceID: row.ProviderInstanceID,
-			ModelID:            row.ModelID,
-			DisplayName:        row.DisplayName,
-			CapabilityFlags:    row.Capabilities,
-			UpdatedAt:          row.UpdatedAt,
-		})
-	}
-	return out
-}
-
-func requestSummariesFromSnapshot(rows []management.RequestSummary) []metadata.RequestSummary {
-	out := make([]metadata.RequestSummary, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, metadata.RequestSummary{
-			ID:                     row.ID,
-			StartedAt:              row.StartedAt,
-			ProviderInstanceID:     row.ProviderInstanceID,
-			ModelID:                row.ModelID,
-			RequestedProviderID:    row.RequestedProviderID,
-			RequestedModelID:       row.RequestedModelID,
-			ResolvedProviderID:     row.ResolvedProviderID,
-			ResolvedModelID:        row.ResolvedModelID,
-			CredentialID:           row.CredentialID,
-			CredentialLabel:        row.CredentialLabel,
-			HTTPStatus:             row.HTTPStatus,
-			ErrorClass:             row.ErrorClass,
-			RetryCount:             row.RetryCount,
-			FallbackCount:          row.FallbackCount,
-			FallbackReason:         row.FallbackReason,
-			PromptTokens:           row.PromptTokens,
-			CompletionTokens:       row.CompletionTokens,
-			TotalTokens:            row.TotalTokens,
-			ReasoningTokens:        row.ReasoningTokens,
-			CacheHitTokens:         row.CacheHitTokens,
-			CacheWriteTokens:       row.CacheWriteTokens,
-			CostMicrounits:         row.CostMicrounits,
-			TotalLatencyMS:         row.TotalLatencyMS,
-			TimeToFirstTokenMS:     row.TimeToFirstTokenMS,
-			OutputTokensPerSecond:  row.OutputTokensPerSecond,
-			StreamCompletionStatus: row.StreamCompletionStatus,
-			StreamChunkCount:       row.StreamChunkCount,
-		})
-	}
-	return out
-}
-
-func usageSummariesFromSnapshot(rows []management.UsageSummary) []metadata.UsageSummary {
-	out := make([]metadata.UsageSummary, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, metadata.UsageSummary{
-			ProviderInstanceID: row.ProviderInstanceID,
-			RequestCount:       row.RequestCount,
-			PromptTokens:       row.PromptTokens,
-			CompletionTokens:   row.CompletionTokens,
-			TotalTokens:        row.TotalTokens,
-			ReasoningTokens:    row.ReasoningTokens,
-			CacheHitTokens:     row.CacheHitTokens,
-			CacheWriteTokens:   row.CacheWriteTokens,
-			CostMicrounits:     row.CostMicrounits,
-		})
-	}
-	return out
-}
-
-func latencySummariesFromSnapshot(rows []management.LatencySummary) []metadata.LatencySummary {
-	out := make([]metadata.LatencySummary, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, metadata.LatencySummary{
-			ProviderInstanceID:        row.ProviderInstanceID,
-			RequestCount:              row.RequestCount,
-			AverageLatencyMS:          row.AverageLatencyMS,
-			AverageTimeToFirstTokenMS: row.AverageTimeToFirstTokenMS,
-			AverageOutputTPS:          row.AverageOutputTPS,
-		})
-	}
-	return out
-}
-
-func streamSummariesFromSnapshot(rows []management.StreamSummary) []metadata.StreamSummary {
-	out := make([]metadata.StreamSummary, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, metadata.StreamSummary{
-			CompletionStatus: row.CompletionStatus,
-			StreamCount:      row.StreamCount,
-			ChunkCount:       row.ChunkCount,
-		})
-	}
-	return out
-}
-
-func healthSummariesFromSnapshot(rows []management.HealthSummary) []metadata.HealthSummary {
-	out := make([]metadata.HealthSummary, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, metadata.HealthSummary{
-			ProviderInstanceID: row.ProviderInstanceID,
-			ModelID:            row.ModelID,
-			CredentialID:       row.CredentialID,
-			CredentialLabel:    row.CredentialLabel,
-			EventClass:         row.EventClass,
-			HTTPStatus:         row.HTTPStatus,
-			ErrorClass:         row.ErrorClass,
-			OccurredAt:         row.OccurredAt,
-			RetryAfter:         row.RetryAfter,
-		})
-	}
-	return out
-}
-
-func fallbackSummariesFromSnapshot(rows []management.FallbackSummary) []metadata.FallbackSummary {
-	out := make([]metadata.FallbackSummary, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, metadata.FallbackSummary{
-			ID:                  row.ID,
-			RequestMetadataID:   row.RequestMetadataID,
-			OccurredAt:          row.OccurredAt,
-			ProviderInstanceID:  row.ProviderInstanceID,
-			ModelID:             row.ModelID,
-			FromCredentialID:    row.FromCredentialID,
-			FromCredentialLabel: row.FromCredentialLabel,
-			ToCredentialID:      row.ToCredentialID,
-			ToCredentialLabel:   row.ToCredentialLabel,
-			Reason:              row.Reason,
-		})
-	}
-	return out
-}
-
-func quotaSummariesFromSnapshot(rows []management.QuotaSummary) []metadata.QuotaSummary {
-	out := make([]metadata.QuotaSummary, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, metadata.QuotaSummary{
-			ObservedAt:         row.ObservedAt,
-			ProviderInstanceID: row.ProviderInstanceID,
-			ModelID:            row.ModelID,
-			CredentialID:       row.CredentialID,
-			CredentialLabel:    row.CredentialLabel,
-			Source:             row.Source,
-			HTTPStatus:         row.HTTPStatus,
-			ErrorClass:         row.ErrorClass,
-			RetryAfter:         row.RetryAfter,
-			ResetAt:            row.ResetAt,
-			Count:              row.Count,
-		})
-	}
-	return out
 }
 
 func (m Model) writeOAuth(b *strings.Builder) {
@@ -1354,7 +1179,7 @@ func (m *Model) pruneTelemetry() error {
 	if err != nil {
 		return err
 	}
-	result := pruneResultFromManagement(resp.Result)
+	result := resp.Result
 	m.pruneResult = &result
 	m.logInfo(context.Background(), "tui_telemetry_pruned",
 		slog.Int("requests", result.Requests),
@@ -1363,17 +1188,6 @@ func (m *Model) pruneTelemetry() error {
 		slog.Int("health", result.Health),
 	)
 	return nil
-}
-
-func pruneResultFromManagement(result management.PruneResult) metadata.PruneResult {
-	return metadata.PruneResult{
-		Cutoff:    result.Cutoff,
-		Requests:  result.Requests,
-		Streams:   result.Streams,
-		Fallbacks: result.Fallbacks,
-		Health:    result.Health,
-		Quotas:    result.Quotas,
-	}
 }
 
 func (m Model) startOAuthLoginCmd(ctx context.Context, providerInstanceID string) tea.Cmd {
@@ -1537,7 +1351,7 @@ func healthModelDisplay(modelID string) string {
 	return safeDisplay(modelID)
 }
 
-func requestModelDisplay(row metadata.RequestSummary) string {
+func requestModelDisplay(row management.RequestSummary) string {
 	requestedProvider := row.RequestedProviderID
 	requestedModel := row.RequestedModelID
 	resolvedProvider := row.ResolvedProviderID
@@ -1617,7 +1431,7 @@ type modelCacheSummary struct {
 	UpdatedAt          string
 }
 
-func modelCacheSummaries(rows []provider.ModelMetadata) []modelCacheSummary {
+func modelCacheSummaries(rows []management.ModelMetadata) []modelCacheSummary {
 	byProvider := map[string]modelCacheSummary{}
 	for _, row := range rows {
 		summary := byProvider[row.ProviderInstanceID]

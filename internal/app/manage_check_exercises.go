@@ -1598,7 +1598,7 @@ func exerciseTelemetryPruneCheck(ctx context.Context, registry provider.Registry
 		}
 	}
 
-	expected := metadata.PruneResult{Cutoff: cutoff, Requests: 1, Streams: 1, Fallbacks: 3, Health: 1, Quotas: 1}
+	expected := management.PruneResult{Cutoff: cutoff, Requests: 1, Streams: 1, Fallbacks: 3, Health: 1, Quotas: 1}
 	mgmt, err := startManagementServerWithService(ctx, checkDBDir, configPath, filepath.Join(checkDBDir, "ilonasin.sqlite"), management.Service{
 		Registry:      registry,
 		Observability: store,

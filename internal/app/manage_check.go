@@ -161,6 +161,27 @@ func assertProductionUpstreamMutationWiring() error {
 		{path: "internal/tui/tui.go", forbidden: "fallbackPoliciesFromSnapshot"},
 		{path: "internal/tui/tui.go", forbidden: "oauthCredentialsFromSnapshot"},
 		{path: "internal/tui/tui.go", forbidden: "providerAccountsFromSnapshot"},
+		{path: "internal/tui/tui.go", forbidden: "\"ilonasin/internal/metadata\""},
+		{path: "internal/tui/tui.go", forbidden: "provider.ModelMetadata"},
+		{path: "internal/tui/tui.go", forbidden: "metadata.RequestSummary"},
+		{path: "internal/tui/tui.go", forbidden: "metadata.UsageSummary"},
+		{path: "internal/tui/tui.go", forbidden: "metadata.LatencySummary"},
+		{path: "internal/tui/tui.go", forbidden: "metadata.StreamSummary"},
+		{path: "internal/tui/tui.go", forbidden: "metadata.HealthSummary"},
+		{path: "internal/tui/tui.go", forbidden: "metadata.FallbackSummary"},
+		{path: "internal/tui/tui.go", forbidden: "metadata.QuotaSummary"},
+		{path: "internal/tui/tui.go", forbidden: "metadata.PruneResult"},
+		{path: "internal/tui/tui.go", forbidden: "modelMetadataFromSnapshot"},
+		{path: "internal/tui/tui.go", forbidden: "requestSummariesFromSnapshot"},
+		{path: "internal/tui/tui.go", forbidden: "usageSummariesFromSnapshot"},
+		{path: "internal/tui/tui.go", forbidden: "latencySummariesFromSnapshot"},
+		{path: "internal/tui/tui.go", forbidden: "streamSummariesFromSnapshot"},
+		{path: "internal/tui/tui.go", forbidden: "healthSummariesFromSnapshot"},
+		{path: "internal/tui/tui.go", forbidden: "fallbackSummariesFromSnapshot"},
+		{path: "internal/tui/tui.go", forbidden: "quotaSummariesFromSnapshot"},
+		{path: "internal/tui/tui.go", forbidden: "type TelemetryPruner interface"},
+		{path: "internal/tui/tui.go", forbidden: "directTelemetryPruner"},
+		{path: "internal/tui/tui.go", forbidden: "PruneTelemetryBefore"},
 		{path: "internal/app/manage_check_exercises.go", forbidden: "tui.ExerciseModelCacheSummary(ctx, cfg, registry, store)"},
 		{path: "internal/app/manage_check_exercises.go", forbidden: "tui.ExerciseObservabilitySummary(ctx, cfg, registry, store)"},
 		{path: "internal/app/manage_check_exercises.go", forbidden: "tui.ExerciseTelemetryPrune(ctx, cfg, registry, store,"},
@@ -192,11 +213,25 @@ func assertTUIViewRowTypes(path string) error {
 	if err != nil {
 		return err
 	}
-	want := map[string]string{
+	if err := assertNoProviderModelMetadata(file); err != nil {
+		return err
+	}
+	wantArrays := map[string]string{
 		"credentials":      "UpstreamCredential",
 		"fallbackPolicies": "FallbackPolicy",
 		"oauthRows":        "OAuthCredential",
 		"accountRows":      "ProviderAccount",
+		"modelRows":        "ModelMetadata",
+		"requestRows":      "RequestSummary",
+		"usageRows":        "UsageSummary",
+		"latencyRows":      "LatencySummary",
+		"streamRows":       "StreamSummary",
+		"healthRows":       "HealthSummary",
+		"fallbackRows":     "FallbackSummary",
+		"quotaRows":        "QuotaSummary",
+	}
+	wantPointers := map[string]string{
+		"pruneResult": "PruneResult",
 	}
 	seen := map[string]bool{}
 	ast.Inspect(file, func(n ast.Node) bool {
@@ -210,21 +245,66 @@ func assertTUIViewRowTypes(path string) error {
 		}
 		for _, field := range st.Fields.List {
 			for _, name := range field.Names {
-				wantType, ok := want[name.Name]
-				if !ok {
+				if wantType, ok := wantArrays[name.Name]; ok {
+					if arraySelectorType(field.Type, "management", wantType) {
+						seen[name.Name] = true
+					}
 					continue
 				}
-				if arraySelectorType(field.Type, "management", wantType) {
-					seen[name.Name] = true
+				if wantType, ok := wantPointers[name.Name]; ok {
+					if pointerSelectorType(field.Type, "management", wantType) {
+						seen[name.Name] = true
+					}
 				}
 			}
 		}
 		return false
 	})
-	for field, wantType := range want {
+	for field, wantType := range wantArrays {
 		if !seen[field] {
 			return fmt.Errorf("tui Model.%s is not []management.%s", field, wantType)
 		}
+	}
+	for field, wantType := range wantPointers {
+		if !seen[field] {
+			return fmt.Errorf("tui Model.%s is not *management.%s", field, wantType)
+		}
+	}
+	return nil
+}
+
+func assertNoProviderModelMetadata(file *ast.File) error {
+	providerNames := map[string]bool{}
+	for _, imp := range file.Imports {
+		if strings.Trim(imp.Path.Value, "\"") != "ilonasin/internal/provider" {
+			continue
+		}
+		if imp.Name == nil {
+			providerNames["provider"] = true
+			continue
+		}
+		switch imp.Name.Name {
+		case ".", "_":
+			return fmt.Errorf("tui provider import must not use alias %q", imp.Name.Name)
+		default:
+			providerNames[imp.Name.Name] = true
+		}
+	}
+	var found bool
+	ast.Inspect(file, func(n ast.Node) bool {
+		selector, ok := n.(*ast.SelectorExpr)
+		if !ok || selector.Sel.Name != "ModelMetadata" {
+			return true
+		}
+		ident, ok := selector.X.(*ast.Ident)
+		if ok && providerNames[ident.Name] {
+			found = true
+			return false
+		}
+		return true
+	})
+	if found {
+		return fmt.Errorf("tui must not use provider.ModelMetadata")
 	}
 	return nil
 }
@@ -235,6 +315,19 @@ func arraySelectorType(expr ast.Expr, pkg, typ string) bool {
 		return false
 	}
 	selector, ok := array.Elt.(*ast.SelectorExpr)
+	if !ok || selector.Sel.Name != typ {
+		return false
+	}
+	ident, ok := selector.X.(*ast.Ident)
+	return ok && ident.Name == pkg
+}
+
+func pointerSelectorType(expr ast.Expr, pkg, typ string) bool {
+	pointer, ok := expr.(*ast.StarExpr)
+	if !ok {
+		return false
+	}
+	selector, ok := pointer.X.(*ast.SelectorExpr)
 	if !ok || selector.Sel.Name != typ {
 		return false
 	}

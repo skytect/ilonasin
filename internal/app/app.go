@@ -2602,6 +2602,26 @@ func newServeCheckUpstream() *serveCheckUpstream {
 					http.Error(w, err.Error(), http.StatusBadRequest)
 					return
 				}
+			case "provider-sort-string":
+				if err := validateServeCheckOpenRouterProviderSortString(r.URL.Path, body); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+			case "provider-sort-object":
+				if err := validateServeCheckOpenRouterProviderSortObject(r.URL.Path, body); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+			case "provider-sort-sentinel":
+				if err := validateServeCheckOpenRouterProviderSortSentinel(r.URL.Path, body); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+			case "provider-sort-combined":
+				if err := validateServeCheckOpenRouterProviderSortCombined(r.URL.Path, body); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
 			case "provider-privacy":
 				if err := validateServeCheckOpenRouterPrivacyProvider(r.URL.Path, body); err != nil {
 					http.Error(w, err.Error(), http.StatusBadRequest)
@@ -3036,6 +3056,35 @@ func validateServeCheckOpenRouterProviderFiltersCombined(path string, body map[s
 	})
 }
 
+func validateServeCheckOpenRouterProviderSortString(path string, body map[string]any) error {
+	return validateServeCheckOpenRouterProviderExact(path, body, map[string]any{
+		"sort": "price",
+	})
+}
+
+func validateServeCheckOpenRouterProviderSortObject(path string, body map[string]any) error {
+	return validateServeCheckOpenRouterProviderExact(path, body, map[string]any{
+		"sort": providerStringMap{"by": "latency", "partition": "model"},
+	})
+}
+
+func validateServeCheckOpenRouterProviderSortSentinel(path string, body map[string]any) error {
+	return validateServeCheckOpenRouterProviderExact(path, body, map[string]any{
+		"sort": providerStringMap{"by": "exacto", "partition": "none"},
+	})
+}
+
+func validateServeCheckOpenRouterProviderSortCombined(path string, body map[string]any) error {
+	return validateServeCheckOpenRouterProviderExact(path, body, map[string]any{
+		"sort":            providerStringMap{"by": "throughput", "partition": "model"},
+		"only":            []string{"deepinfra"},
+		"ignore":          []string{"openai"},
+		"allow_fallbacks": false,
+		"quantizations":   []string{"fp16"},
+		"max_price":       map[string]string{"prompt": "0.00000123"},
+	})
+}
+
 func validateServeCheckOpenRouterProviderFields(path string, body map[string]any) error {
 	if path != "/api/v1/chat/completions" {
 		return fmt.Errorf("OpenRouter provider routing reached unsupported provider")
@@ -3069,6 +3118,10 @@ func validateServeCheckOpenRouterProviderFields(path string, body map[string]any
 			if !isJSONNumberMap(value) {
 				return fmt.Errorf("invalid OpenRouter max_price translation")
 			}
+		case "sort":
+			if !isOpenRouterSortTranslation(value) {
+				return fmt.Errorf("invalid OpenRouter sort translation")
+			}
 		case "data_collection":
 			if value != "deny" {
 				return fmt.Errorf("invalid OpenRouter data_collection translation")
@@ -3083,6 +3136,8 @@ func validateServeCheckOpenRouterProviderFields(path string, body map[string]any
 	}
 	return nil
 }
+
+type providerStringMap map[string]string
 
 func validateServeCheckOpenRouterProviderExact(path string, body map[string]any, expected map[string]any) error {
 	if err := validateServeCheckOpenRouterProviderFields(path, body); err != nil {
@@ -3125,6 +3180,17 @@ func providerValueEqual(got, want any) bool {
 			}
 		}
 		return true
+	case providerStringMap:
+		values, ok := got.(map[string]any)
+		if !ok || len(values) != len(expected) {
+			return false
+		}
+		for key, expectedValue := range expected {
+			if values[key] != expectedValue {
+				return false
+			}
+		}
+		return true
 	default:
 		return got == want
 	}
@@ -3154,6 +3220,38 @@ func isJSONNumberMap(value any) bool {
 		}
 	}
 	return true
+}
+
+func isOpenRouterSortTranslation(value any) bool {
+	switch sort := value.(type) {
+	case string:
+		return sort == "price" || sort == "throughput" || sort == "latency" || sort == "exacto"
+	case map[string]any:
+		if len(sort) == 0 {
+			return false
+		}
+		for key, raw := range sort {
+			field, ok := raw.(string)
+			if !ok {
+				return false
+			}
+			switch key {
+			case "by":
+				if field != "price" && field != "throughput" && field != "latency" && field != "exacto" {
+					return false
+				}
+			case "partition":
+				if field != "model" && field != "none" {
+					return false
+				}
+			default:
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
 }
 
 func validateServeCheckMaxCompletionTokens(path string, body map[string]any) error {
@@ -3957,6 +4055,21 @@ func (u *serveCheckUpstream) handleServeCheckStream(w http.ResponseWriter, r *ht
 			}
 		case "stream-provider-filters-sentinel":
 			if err := validateServeCheckOpenRouterProviderFiltersSentinel(r.URL.Path, body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		case "stream-provider-sort-string":
+			if err := validateServeCheckOpenRouterProviderSortString(r.URL.Path, body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		case "stream-provider-sort-object":
+			if err := validateServeCheckOpenRouterProviderSortObject(r.URL.Path, body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		case "stream-provider-sort-sentinel":
+			if err := validateServeCheckOpenRouterProviderSortSentinel(r.URL.Path, body); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
@@ -5632,6 +5745,22 @@ func openRouterProviderFiltersCombinedExtra() string {
 	return `"provider_options":{"openrouter":{"provider":{"order":["google-vertex/us-east5"],"allow_fallbacks":false,"quantizations":["fp16"],"max_price":{"prompt":0.00000123}}}}`
 }
 
+func openRouterProviderSortStringExtra() string {
+	return `"provider_options":{"openrouter":{"provider":{"sort":"price"}}}`
+}
+
+func openRouterProviderSortObjectExtra() string {
+	return `"provider_options":{"openrouter":{"provider":{"sort":{"by":"latency","partition":"model"}}}}`
+}
+
+func openRouterProviderSortSentinelExtra() string {
+	return `"provider_options":{"openrouter":{"provider":{"sort":{"by":"exacto","partition":"none"}}}}`
+}
+
+func openRouterProviderSortCombinedExtra() string {
+	return `"provider_options":{"openrouter":{"provider":{"sort":{"by":"throughput","partition":"model"},"only":["deepinfra"],"ignore":["openai"],"allow_fallbacks":false,"quantizations":["fp16"],"max_price":{"prompt":0.00000123}}}}`
+}
+
 func openRouterPrivacyProviderExtra() string {
 	return `"provider_options":{"openrouter":{"provider":{"require_parameters":true,"data_collection":"deny","zdr":true}}}`
 }
@@ -5697,7 +5826,17 @@ func providerOptionInvalidCases(providerType string) []providerOptionInvalidCase
 			{name: "data-collection-marker", extra: `"provider_options":{"openrouter":{"provider":{"data_collection":"` + providerOptionPrivacyMarker + `"}}}`},
 			{name: "bad-zdr", extra: `"provider_options":{"openrouter":{"provider":{"zdr":"true"}}}`},
 			{name: "zdr-false", extra: `"provider_options":{"openrouter":{"provider":{"zdr":false}}}`},
-			{name: "provider-sort", extra: `"provider_options":{"openrouter":{"provider":{"sort":"` + providerOptionPrivacyMarker + `"}}}`},
+			{name: "bad-sort-type", extra: `"provider_options":{"openrouter":{"provider":{"sort":true}}}`},
+			{name: "sort-null", extra: `"provider_options":{"openrouter":{"provider":{"sort":null}}}`},
+			{name: "sort-empty-string", extra: `"provider_options":{"openrouter":{"provider":{"sort":""}}}`},
+			{name: "sort-unknown", extra: `"provider_options":{"openrouter":{"provider":{"sort":"` + providerOptionPrivacyMarker + `"}}}`},
+			{name: "sort-empty-object", extra: `"provider_options":{"openrouter":{"provider":{"sort":{}}}}`},
+			{name: "sort-unknown-key", extra: `"provider_options":{"openrouter":{"provider":{"sort":{"` + providerOptionPrivacyMarker + `":"price"}}}}`},
+			{name: "sort-bad-by", extra: `"provider_options":{"openrouter":{"provider":{"sort":{"by":"` + providerOptionPrivacyMarker + `"}}}}`},
+			{name: "sort-null-by", extra: `"provider_options":{"openrouter":{"provider":{"sort":{"by":null}}}}`},
+			{name: "sort-bad-partition", extra: `"provider_options":{"openrouter":{"provider":{"sort":{"partition":"` + providerOptionPrivacyMarker + `"}}}}`},
+			{name: "sort-null-partition", extra: `"provider_options":{"openrouter":{"provider":{"sort":{"partition":null}}}}`},
+			{name: "sort-with-order", extra: `"provider_options":{"openrouter":{"provider":{"sort":"price","order":["deepinfra"]}}}`},
 			{name: "provider-preferred-max-latency", extra: `"provider_options":{"openrouter":{"provider":{"preferred_max_latency":{"p50":"` + providerOptionPrivacyMarker + `"}}}}`},
 			{name: "provider-preferred-min-throughput", extra: `"provider_options":{"openrouter":{"provider":{"preferred_min_throughput":{"p50":"` + providerOptionPrivacyMarker + `"}}}}`},
 			{name: "provider-enforce-distillable-text", extra: `"provider_options":{"openrouter":{"provider":{"enforce_distillable_text":"` + providerOptionPrivacyMarker + `"}}}`},
@@ -5714,6 +5853,7 @@ func providerOptionInvalidCases(providerType string) []providerOptionInvalidCase
 		{name: "openrouter-allow-fallbacks", extra: openRouterAllowFallbacksExtra(false)},
 		{name: "openrouter-provider-targets", extra: openRouterProviderTargetsExtra()},
 		{name: "openrouter-provider-filters", extra: openRouterProviderFiltersExtra()},
+		{name: "openrouter-provider-sort", extra: openRouterProviderSortStringExtra()},
 		{name: "extra-namespace", extra: `"provider_options":{"deepseek":{"thinking":{"type":"disabled"}},"openrouter":{"reasoning":{"effort":"high"}}}`},
 		{name: "unknown-key", extra: `"provider_options":{"deepseek":{"provider-option-private-marker":true}}`},
 		{name: "bad-thinking", extra: `"provider_options":{"deepseek":{"thinking":true}}`},
@@ -6072,6 +6212,41 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 		}
 		if !fakeUpstream.sawExpected(expectedPath, "provider-filters-combined") {
 			return fmt.Errorf("provider filters combined did not reach upstream provider=%s", instance.ID)
+		}
+		sortStringBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-sort-string", openRouterProviderSortStringExtra()))
+		if status, _, err := postJSON(base+"/v1/chat/completions", token, sortStringBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("provider sort string provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if !fakeUpstream.sawExpected(expectedPath, "provider-sort-string") {
+			return fmt.Errorf("provider sort string did not reach upstream provider=%s", instance.ID)
+		}
+		sortObjectBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-sort-object", openRouterProviderSortObjectExtra()))
+		if status, _, err := postJSON(base+"/v1/chat/completions", token, sortObjectBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("provider sort object provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if !fakeUpstream.sawExpected(expectedPath, "provider-sort-object") {
+			return fmt.Errorf("provider sort object did not reach upstream provider=%s", instance.ID)
+		}
+		sortSentinelBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-sort-sentinel", openRouterProviderSortSentinelExtra()))
+		status, respBody, err = postJSON(base+"/v1/chat/completions", token, sortSentinelBody)
+		if err != nil || status != http.StatusOK {
+			return fmt.Errorf("provider sort sentinel provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if bytes.Contains(respBody, []byte("exacto")) {
+			return fmt.Errorf("provider sort sentinel echoed private marker")
+		}
+		if !fakeUpstream.sawExpected(expectedPath, "provider-sort-sentinel") {
+			return fmt.Errorf("provider sort sentinel did not reach upstream provider=%s", instance.ID)
+		}
+		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, "exacto"); err != nil {
+			return err
+		}
+		sortCombinedBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-sort-combined", openRouterProviderSortCombinedExtra()))
+		if status, _, err := postJSON(base+"/v1/chat/completions", token, sortCombinedBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("provider sort combined provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if !fakeUpstream.sawExpected(expectedPath, "provider-sort-combined") {
+			return fmt.Errorf("provider sort combined did not reach upstream provider=%s", instance.ID)
 		}
 		privacyBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-privacy", openRouterPrivacyProviderExtra()))
 		if status, _, err := postJSON(base+"/v1/chat/completions", token, privacyBody); err != nil || status != http.StatusOK {
@@ -6797,6 +6972,34 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 		}
 		if !fakeUpstream.sawExpectedStream(expectedPath, "stream-provider-filters-sentinel") {
 			return fmt.Errorf("stream provider filters sentinel did not reach upstream provider=%s", instance.ID)
+		}
+		sortStringBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/stream-provider-sort-string", openRouterProviderSortStringExtra()))
+		if status, _, _, _, err := postStream(base+"/v1/chat/completions", token, sortStringBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("stream provider sort string provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if !fakeUpstream.sawExpectedStream(expectedPath, "stream-provider-sort-string") {
+			return fmt.Errorf("stream provider sort string did not reach upstream provider=%s", instance.ID)
+		}
+		sortObjectBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/stream-provider-sort-object", openRouterProviderSortObjectExtra()))
+		if status, _, _, _, err := postStream(base+"/v1/chat/completions", token, sortObjectBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("stream provider sort object provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if !fakeUpstream.sawExpectedStream(expectedPath, "stream-provider-sort-object") {
+			return fmt.Errorf("stream provider sort object did not reach upstream provider=%s", instance.ID)
+		}
+		sortSentinelBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/stream-provider-sort-sentinel", openRouterProviderSortSentinelExtra()))
+		status, _, _, respBody, err = postStream(base+"/v1/chat/completions", token, sortSentinelBody)
+		if err != nil || status != http.StatusOK {
+			return fmt.Errorf("stream provider sort sentinel provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if bytes.Contains(respBody, []byte("exacto")) {
+			return fmt.Errorf("stream provider sort sentinel echoed private marker")
+		}
+		if !fakeUpstream.sawExpectedStream(expectedPath, "stream-provider-sort-sentinel") {
+			return fmt.Errorf("stream provider sort sentinel did not reach upstream provider=%s", instance.ID)
+		}
+		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, "exacto"); err != nil {
+			return err
 		}
 		privacyBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/stream-provider-privacy", openRouterPrivacyProviderExtra()))
 		if status, _, _, _, err := postStream(base+"/v1/chat/completions", token, privacyBody); err != nil || status != http.StatusOK {
@@ -7643,6 +7846,14 @@ func exerciseCodexNoEligibleCacheCheck(ctx context.Context, registry provider.Re
 	}
 	invalidProviderFiltersBody := []byte(`{"model":"codex/codex-noeligible-invalid-provider-filters","messages":[{"role":"user","content":"check"}],"provider_options":{"openrouter":{"provider":{"quantizations":[]}}}}`)
 	if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, invalidProviderFiltersBody, fakeUpstream, "/responses", "codex-noeligible-invalid-provider-filters", "codex noeligible invalid openrouter provider filters"); err != nil {
+		return err
+	}
+	unsupportedProviderSortBody := []byte(`{"model":"codex/codex-noeligible-openrouter-provider-sort","messages":[{"role":"user","content":"check"}],` + openRouterProviderSortStringExtra() + `}`)
+	if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, unsupportedProviderSortBody, fakeUpstream, "/responses", "codex-noeligible-openrouter-provider-sort", "codex noeligible openrouter provider sort"); err != nil {
+		return err
+	}
+	invalidProviderSortBody := []byte(`{"model":"codex/codex-noeligible-invalid-provider-sort","messages":[{"role":"user","content":"check"}],"provider_options":{"openrouter":{"provider":{"sort":{}}}}}`)
+	if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, invalidProviderSortBody, fakeUpstream, "/responses", "codex-noeligible-invalid-provider-sort", "codex noeligible invalid openrouter provider sort"); err != nil {
 		return err
 	}
 	unsupportedUserIDOptionsBody := []byte(`{"model":"codex/codex-noeligible-deepseek-user-id","messages":[{"role":"user","content":"check"}],` + deepSeekUserIDExtra(userIDPrivacyMarker) + `}`)

@@ -410,6 +410,8 @@ func validateOpenRouterProvider(raw any) error {
 	if len(provider) == 0 {
 		return errors.New("provider_options.openrouter.provider must not be empty")
 	}
+	hasOrder := false
+	hasSort := false
 	for key, value := range provider {
 		switch key {
 		case "require_parameters":
@@ -424,6 +426,9 @@ func validateOpenRouterProvider(raw any) error {
 			if err := validateOpenRouterProviderSlugList(key, value); err != nil {
 				return err
 			}
+			if key == "order" {
+				hasOrder = true
+			}
 		case "quantizations":
 			if err := validateOpenRouterQuantizations(value); err != nil {
 				return err
@@ -432,6 +437,11 @@ func validateOpenRouterProvider(raw any) error {
 			if err := validateOpenRouterMaxPrice(value); err != nil {
 				return err
 			}
+		case "sort":
+			if err := validateOpenRouterProviderSort(value); err != nil {
+				return err
+			}
+			hasSort = true
 		case "data_collection":
 			collection, ok := value.(string)
 			if !ok {
@@ -451,6 +461,9 @@ func validateOpenRouterProvider(raw any) error {
 		default:
 			return errors.New("provider_options.openrouter.provider contains an unsupported field")
 		}
+	}
+	if hasOrder && hasSort {
+		return errors.New("provider_options.openrouter.provider.sort is unsupported when order is specified")
 	}
 	return nil
 }
@@ -513,6 +526,57 @@ func validateOpenRouterQuantizations(raw any) error {
 func isOpenRouterQuantization(value string) bool {
 	switch value {
 	case "int4", "int8", "fp4", "fp6", "fp8", "fp16", "bf16", "fp32", "unknown":
+		return true
+	default:
+		return false
+	}
+}
+
+func validateOpenRouterProviderSort(raw any) error {
+	switch value := raw.(type) {
+	case string:
+		if !isOpenRouterProviderSortCriterion(value) {
+			return errors.New("provider_options.openrouter.provider.sort is unsupported")
+		}
+		return nil
+	case map[string]any:
+		if len(value) == 0 {
+			return errors.New("provider_options.openrouter.provider.sort must be a non-empty object")
+		}
+		for key, rawField := range value {
+			switch key {
+			case "by":
+				by, ok := rawField.(string)
+				if !ok || !isOpenRouterProviderSortCriterion(by) {
+					return errors.New("provider_options.openrouter.provider.sort.by is unsupported")
+				}
+			case "partition":
+				partition, ok := rawField.(string)
+				if !ok || !isOpenRouterProviderSortPartition(partition) {
+					return errors.New("provider_options.openrouter.provider.sort.partition is unsupported")
+				}
+			default:
+				return errors.New("provider_options.openrouter.provider.sort contains an unsupported field")
+			}
+		}
+		return nil
+	default:
+		return errors.New("provider_options.openrouter.provider.sort must be a string or object")
+	}
+}
+
+func isOpenRouterProviderSortCriterion(value string) bool {
+	switch value {
+	case "price", "throughput", "latency", "exacto":
+		return true
+	default:
+		return false
+	}
+}
+
+func isOpenRouterProviderSortPartition(value string) bool {
+	switch value {
+	case "model", "none":
 		return true
 	default:
 		return false

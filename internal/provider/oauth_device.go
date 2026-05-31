@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-const MaxOAuthDeviceBodyBytes int64 = 1 << 20
+const MaxOAuthDeviceBodyBytes int64 = 64 << 20
 
 type OAuthDeviceLoginProvider interface {
 	RequestOAuthDeviceCode(ctx context.Context, req OAuthDeviceCodeRequest) (OAuthDeviceCodeChallenge, error)

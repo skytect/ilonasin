@@ -15,7 +15,7 @@ import (
 )
 
 const CodexOAuthClientID = "app_EMoamEEZ73f0CkXaXp7hrann"
-const MaxOAuthRefreshBodyBytes int64 = 1 << 20
+const MaxOAuthRefreshBodyBytes int64 = 64 << 20
 
 type OAuthTokenRefresher interface {
 	RefreshOAuthToken(ctx context.Context, req OAuthRefreshRequest) (OAuthRefreshResult, error)

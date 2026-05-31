@@ -2582,6 +2582,26 @@ func newServeCheckUpstream() *serveCheckUpstream {
 					http.Error(w, err.Error(), http.StatusBadRequest)
 					return
 				}
+			case "provider-filters":
+				if err := validateServeCheckOpenRouterProviderFilters(r.URL.Path, body); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+			case "provider-filters-sentinel":
+				if err := validateServeCheckOpenRouterProviderFiltersSentinel(r.URL.Path, body); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+			case "provider-filters-boundary":
+				if err := validateServeCheckOpenRouterProviderFiltersBoundary(r.URL.Path, body); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+			case "provider-filters-combined":
+				if err := validateServeCheckOpenRouterProviderFiltersCombined(r.URL.Path, body); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
 			case "provider-privacy":
 				if err := validateServeCheckOpenRouterPrivacyProvider(r.URL.Path, body); err != nil {
 					http.Error(w, err.Error(), http.StatusBadRequest)
@@ -2987,6 +3007,35 @@ func validateServeCheckOpenRouterProviderTargetsFallback(path string, body map[s
 	})
 }
 
+func validateServeCheckOpenRouterProviderFilters(path string, body map[string]any) error {
+	return validateServeCheckOpenRouterProviderExact(path, body, map[string]any{
+		"quantizations": []string{"fp8", "bf16"},
+		"max_price":     map[string]string{"prompt": "0.5", "completion": "1.25", "request": "0", "image": "2", "audio": "3"},
+	})
+}
+
+func validateServeCheckOpenRouterProviderFiltersSentinel(path string, body map[string]any) error {
+	return validateServeCheckOpenRouterProviderExact(path, body, map[string]any{
+		"quantizations": []string{"fp8"},
+		"max_price":     map[string]string{"prompt": "0.00000123", "completion": "1e-7", "request": "1e-13", "audio": "1e-1024"},
+	})
+}
+
+func validateServeCheckOpenRouterProviderFiltersBoundary(path string, body map[string]any) error {
+	return validateServeCheckOpenRouterProviderExact(path, body, map[string]any{
+		"max_price": map[string]string{"prompt": "1000000"},
+	})
+}
+
+func validateServeCheckOpenRouterProviderFiltersCombined(path string, body map[string]any) error {
+	return validateServeCheckOpenRouterProviderExact(path, body, map[string]any{
+		"order":           []string{"google-vertex/us-east5"},
+		"allow_fallbacks": false,
+		"quantizations":   []string{"fp16"},
+		"max_price":       map[string]string{"prompt": "0.00000123"},
+	})
+}
+
 func validateServeCheckOpenRouterProviderFields(path string, body map[string]any) error {
 	if path != "/api/v1/chat/completions" {
 		return fmt.Errorf("OpenRouter provider routing reached unsupported provider")
@@ -3011,6 +3060,14 @@ func validateServeCheckOpenRouterProviderFields(path string, body map[string]any
 		case "order", "only", "ignore":
 			if !isStringList(value) {
 				return fmt.Errorf("invalid OpenRouter provider target translation")
+			}
+		case "quantizations":
+			if !isStringList(value) {
+				return fmt.Errorf("invalid OpenRouter quantizations translation")
+			}
+		case "max_price":
+			if !isJSONNumberMap(value) {
+				return fmt.Errorf("invalid OpenRouter max_price translation")
 			}
 		case "data_collection":
 			if value != "deny" {
@@ -3057,6 +3114,17 @@ func providerValueEqual(got, want any) bool {
 			}
 		}
 		return true
+	case map[string]string:
+		values, ok := got.(map[string]any)
+		if !ok || len(values) != len(expected) {
+			return false
+		}
+		for key, expectedValue := range expected {
+			if !jsonNumberEquals(values[key], expectedValue) {
+				return false
+			}
+		}
+		return true
 	default:
 		return got == want
 	}
@@ -3069,6 +3137,19 @@ func isStringList(value any) bool {
 	}
 	for _, value := range values {
 		if _, ok := value.(string); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func isJSONNumberMap(value any) bool {
+	values, ok := value.(map[string]any)
+	if !ok || len(values) == 0 {
+		return false
+	}
+	for _, value := range values {
+		if _, ok := value.(json.Number); !ok {
 			return false
 		}
 	}
@@ -3866,6 +3947,16 @@ func (u *serveCheckUpstream) handleServeCheckStream(w http.ResponseWriter, r *ht
 			}
 		case "stream-provider-targets-marker":
 			if err := validateServeCheckOpenRouterProviderTargetsMarker(r.URL.Path, body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		case "stream-provider-filters":
+			if err := validateServeCheckOpenRouterProviderFilters(r.URL.Path, body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		case "stream-provider-filters-sentinel":
+			if err := validateServeCheckOpenRouterProviderFiltersSentinel(r.URL.Path, body); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
@@ -5525,6 +5616,22 @@ func openRouterProviderTargetsFallbackExtra() string {
 	return `"provider_options":{"openrouter":{"provider":{"order":["google-vertex/us-east5"],"allow_fallbacks":false}}}`
 }
 
+func openRouterProviderFiltersExtra() string {
+	return `"provider_options":{"openrouter":{"provider":{"quantizations":["fp8","bf16"],"max_price":{"prompt":0.5,"completion":1.25,"request":0,"image":2,"audio":3}}}}`
+}
+
+func openRouterProviderFiltersSentinelExtra() string {
+	return `"provider_options":{"openrouter":{"provider":{"quantizations":["fp8"],"max_price":{"prompt":0.00000123,"completion":1e-7,"request":1e-13,"audio":1e-1024}}}}`
+}
+
+func openRouterProviderFiltersBoundaryExtra() string {
+	return `"provider_options":{"openrouter":{"provider":{"max_price":{"prompt":1000000}}}}`
+}
+
+func openRouterProviderFiltersCombinedExtra() string {
+	return `"provider_options":{"openrouter":{"provider":{"order":["google-vertex/us-east5"],"allow_fallbacks":false,"quantizations":["fp16"],"max_price":{"prompt":0.00000123}}}}`
+}
+
 func openRouterPrivacyProviderExtra() string {
 	return `"provider_options":{"openrouter":{"provider":{"require_parameters":true,"data_collection":"deny","zdr":true}}}`
 }
@@ -5569,14 +5676,28 @@ func providerOptionInvalidCases(providerType string) []providerOptionInvalidCase
 			{name: "ignore-too-many", extra: `"provider_options":{"openrouter":{"provider":{"ignore":["p00","p01","p02","p03","p04","p05","p06","p07","p08","p09","p10","p11","p12","p13","p14","p15","p16","p17","p18","p19","p20","p21","p22","p23","p24","p25","p26","p27","p28","p29","p30","p31","p32"]}}}`},
 			{name: "ignore-too-long", extra: `"provider_options":{"openrouter":{"provider":{"ignore":["` + strings.Repeat("p", 129) + `"]}}}`},
 			{name: "ignore-bad-char", extra: `"provider_options":{"openrouter":{"provider":{"ignore":["` + providerOptionPrivacyMarker + ` bad"]}}}`},
+			{name: "bad-quantizations-type", extra: `"provider_options":{"openrouter":{"provider":{"quantizations":"fp8"}}}`},
+			{name: "quantizations-empty", extra: `"provider_options":{"openrouter":{"provider":{"quantizations":[]}}}`},
+			{name: "quantizations-duplicate", extra: `"provider_options":{"openrouter":{"provider":{"quantizations":["fp8","fp8"]}}}`},
+			{name: "quantizations-too-many", extra: `"provider_options":{"openrouter":{"provider":{"quantizations":["int4","int8","fp4","fp6","fp8","fp16","bf16","fp32","unknown","int4","int8","fp4","fp6","fp8","fp16","bf16","fp32"]}}}`},
+			{name: "quantizations-unknown", extra: `"provider_options":{"openrouter":{"provider":{"quantizations":["` + providerOptionPrivacyMarker + `"]}}}`},
+			{name: "bad-max-price-type", extra: `"provider_options":{"openrouter":{"provider":{"max_price":"0.5"}}}`},
+			{name: "max-price-empty", extra: `"provider_options":{"openrouter":{"provider":{"max_price":{}}}}`},
+			{name: "max-price-unknown-key", extra: `"provider_options":{"openrouter":{"provider":{"max_price":{"` + providerOptionPrivacyMarker + `":0.5}}}}`},
+			{name: "max-price-string", extra: `"provider_options":{"openrouter":{"provider":{"max_price":{"prompt":"0.5"}}}}`},
+			{name: "max-price-bool", extra: `"provider_options":{"openrouter":{"provider":{"max_price":{"prompt":true}}}}`},
+			{name: "max-price-negative", extra: `"provider_options":{"openrouter":{"provider":{"max_price":{"prompt":-0.000001}}}}`},
+			{name: "max-price-above-int", extra: `"provider_options":{"openrouter":{"provider":{"max_price":{"prompt":1000001}}}}`},
+			{name: "max-price-above-decimal", extra: `"provider_options":{"openrouter":{"provider":{"max_price":{"prompt":1000000.000001}}}}`},
+			{name: "max-price-overflow", extra: `"provider_options":{"openrouter":{"provider":{"max_price":{"prompt":1e9999}}}}`},
+			{name: "max-price-huge-exponent", extra: `"provider_options":{"openrouter":{"provider":{"max_price":{"prompt":1e1000000000}}}}`},
+			{name: "max-price-marker", extra: `"provider_options":{"openrouter":{"provider":{"max_price":{"prompt":"` + providerOptionPrivacyMarker + `"}}}}`},
 			{name: "bad-data-collection", extra: `"provider_options":{"openrouter":{"provider":{"data_collection":true}}}`},
 			{name: "data-collection-allow", extra: `"provider_options":{"openrouter":{"provider":{"data_collection":"allow"}}}`},
 			{name: "data-collection-marker", extra: `"provider_options":{"openrouter":{"provider":{"data_collection":"` + providerOptionPrivacyMarker + `"}}}`},
 			{name: "bad-zdr", extra: `"provider_options":{"openrouter":{"provider":{"zdr":"true"}}}`},
 			{name: "zdr-false", extra: `"provider_options":{"openrouter":{"provider":{"zdr":false}}}`},
 			{name: "provider-sort", extra: `"provider_options":{"openrouter":{"provider":{"sort":"` + providerOptionPrivacyMarker + `"}}}`},
-			{name: "provider-max-price", extra: `"provider_options":{"openrouter":{"provider":{"max_price":{"prompt":"` + providerOptionPrivacyMarker + `"}}}}`},
-			{name: "provider-quantizations", extra: `"provider_options":{"openrouter":{"provider":{"quantizations":["` + providerOptionPrivacyMarker + `"]}}}`},
 			{name: "provider-preferred-max-latency", extra: `"provider_options":{"openrouter":{"provider":{"preferred_max_latency":{"p50":"` + providerOptionPrivacyMarker + `"}}}}`},
 			{name: "provider-preferred-min-throughput", extra: `"provider_options":{"openrouter":{"provider":{"preferred_min_throughput":{"p50":"` + providerOptionPrivacyMarker + `"}}}}`},
 			{name: "provider-enforce-distillable-text", extra: `"provider_options":{"openrouter":{"provider":{"enforce_distillable_text":"` + providerOptionPrivacyMarker + `"}}}`},
@@ -5592,6 +5713,7 @@ func providerOptionInvalidCases(providerType string) []providerOptionInvalidCase
 		{name: "openrouter-require-parameters", extra: openRouterRequireParametersExtra()},
 		{name: "openrouter-allow-fallbacks", extra: openRouterAllowFallbacksExtra(false)},
 		{name: "openrouter-provider-targets", extra: openRouterProviderTargetsExtra()},
+		{name: "openrouter-provider-filters", extra: openRouterProviderFiltersExtra()},
 		{name: "extra-namespace", extra: `"provider_options":{"deepseek":{"thinking":{"type":"disabled"}},"openrouter":{"reasoning":{"effort":"high"}}}`},
 		{name: "unknown-key", extra: `"provider_options":{"deepseek":{"provider-option-private-marker":true}}`},
 		{name: "bad-thinking", extra: `"provider_options":{"deepseek":{"thinking":true}}`},
@@ -5916,6 +6038,40 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 		}
 		if !fakeUpstream.sawExpected(expectedPath, "provider-targets-fallback") {
 			return fmt.Errorf("provider targets fallback did not reach upstream provider=%s", instance.ID)
+		}
+		filtersBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-filters", openRouterProviderFiltersExtra()))
+		if status, _, err := postJSON(base+"/v1/chat/completions", token, filtersBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("provider filters provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if !fakeUpstream.sawExpected(expectedPath, "provider-filters") {
+			return fmt.Errorf("provider filters did not reach upstream provider=%s", instance.ID)
+		}
+		filtersSentinelBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-filters-sentinel", openRouterProviderFiltersSentinelExtra()))
+		status, respBody, err = postJSON(base+"/v1/chat/completions", token, filtersSentinelBody)
+		if err != nil || status != http.StatusOK {
+			return fmt.Errorf("provider filters sentinel provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		for _, marker := range []string{"fp8", "0.00000123", "1e-7", "1e-13", "1e-1024"} {
+			if bytes.Contains(respBody, []byte(marker)) {
+				return fmt.Errorf("provider filters sentinel echoed private marker")
+			}
+		}
+		if !fakeUpstream.sawExpected(expectedPath, "provider-filters-sentinel") {
+			return fmt.Errorf("provider filters sentinel did not reach upstream provider=%s", instance.ID)
+		}
+		filtersBoundaryBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-filters-boundary", openRouterProviderFiltersBoundaryExtra()))
+		if status, _, err := postJSON(base+"/v1/chat/completions", token, filtersBoundaryBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("provider filters boundary provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if !fakeUpstream.sawExpected(expectedPath, "provider-filters-boundary") {
+			return fmt.Errorf("provider filters boundary did not reach upstream provider=%s", instance.ID)
+		}
+		filtersCombinedBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-filters-combined", openRouterProviderFiltersCombinedExtra()))
+		if status, _, err := postJSON(base+"/v1/chat/completions", token, filtersCombinedBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("provider filters combined provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if !fakeUpstream.sawExpected(expectedPath, "provider-filters-combined") {
+			return fmt.Errorf("provider filters combined did not reach upstream provider=%s", instance.ID)
 		}
 		privacyBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-privacy", openRouterPrivacyProviderExtra()))
 		if status, _, err := postJSON(base+"/v1/chat/completions", token, privacyBody); err != nil || status != http.StatusOK {
@@ -6476,7 +6632,7 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 			return err
 		}
 	}
-	for _, marker := range []string{costDetailsMarker, "1.75", "-1.25", penaltyOverflowMarker, "9223372036854775807", "-9223372036854775808", advancedSamplingOverflowMarker, logitBiasDecimalMarker, logitBiasExponentMarker, logitBiasOverflowMarker, predictionPrivacyMarker, userPrivacyMarker, serviceTierPrivacyMarker, sessionIDPrivacyMarker, metadataPrivacyMarker, userIDPrivacyMarker, "parallel-tool-calls-private-marker", toolNameMarker, toolDescriptionMarker, toolSchemaNumberMarker, toolCallIDMarker, toolArgumentMarker, toolResultMarker} {
+	for _, marker := range []string{costDetailsMarker, "1.75", "-1.25", penaltyOverflowMarker, "9223372036854775807", "-9223372036854775808", advancedSamplingOverflowMarker, logitBiasDecimalMarker, logitBiasExponentMarker, logitBiasOverflowMarker, predictionPrivacyMarker, userPrivacyMarker, serviceTierPrivacyMarker, sessionIDPrivacyMarker, metadataPrivacyMarker, userIDPrivacyMarker, "fp8", "0.00000123", "1e-7", "1e-13", "1e-1024", "parallel-tool-calls-private-marker", toolNameMarker, toolDescriptionMarker, toolSchemaNumberMarker, toolCallIDMarker, toolArgumentMarker, toolResultMarker} {
 		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
 			return err
 		}
@@ -6621,6 +6777,26 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 		}
 		if !fakeUpstream.sawExpectedStream(expectedPath, "stream-provider-targets-marker") {
 			return fmt.Errorf("stream provider targets marker did not reach upstream provider=%s", instance.ID)
+		}
+		filtersBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/stream-provider-filters", openRouterProviderFiltersExtra()))
+		if status, _, _, _, err := postStream(base+"/v1/chat/completions", token, filtersBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("stream provider filters provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if !fakeUpstream.sawExpectedStream(expectedPath, "stream-provider-filters") {
+			return fmt.Errorf("stream provider filters did not reach upstream provider=%s", instance.ID)
+		}
+		filtersSentinelBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/stream-provider-filters-sentinel", openRouterProviderFiltersSentinelExtra()))
+		status, _, _, respBody, err = postStream(base+"/v1/chat/completions", token, filtersSentinelBody)
+		if err != nil || status != http.StatusOK {
+			return fmt.Errorf("stream provider filters sentinel provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		for _, marker := range []string{"fp8", "0.00000123", "1e-7", "1e-13", "1e-1024"} {
+			if bytes.Contains(respBody, []byte(marker)) {
+				return fmt.Errorf("stream provider filters sentinel echoed private marker")
+			}
+		}
+		if !fakeUpstream.sawExpectedStream(expectedPath, "stream-provider-filters-sentinel") {
+			return fmt.Errorf("stream provider filters sentinel did not reach upstream provider=%s", instance.ID)
 		}
 		privacyBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/stream-provider-privacy", openRouterPrivacyProviderExtra()))
 		if status, _, _, _, err := postStream(base+"/v1/chat/completions", token, privacyBody); err != nil || status != http.StatusOK {
@@ -7058,7 +7234,7 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 			return err
 		}
 	}
-	for _, marker := range []string{providerOptionPrivacyMarker, costDetailsMarker, "1.75", "-1.25", penaltyOverflowMarker, logprobTokenMarker, logitBiasDecimalMarker, logitBiasExponentMarker, logitBiasOverflowMarker, predictionPrivacyMarker, userPrivacyMarker, serviceTierPrivacyMarker, sessionIDPrivacyMarker, metadataPrivacyMarker, userIDPrivacyMarker, "parallel-tool-calls-private-marker", toolNameMarker, toolDescriptionMarker, toolSchemaNumberMarker, toolCallIDMarker, toolArgumentMarker, toolResultMarker} {
+	for _, marker := range []string{providerOptionPrivacyMarker, costDetailsMarker, "1.75", "-1.25", penaltyOverflowMarker, logprobTokenMarker, logitBiasDecimalMarker, logitBiasExponentMarker, logitBiasOverflowMarker, predictionPrivacyMarker, userPrivacyMarker, serviceTierPrivacyMarker, sessionIDPrivacyMarker, metadataPrivacyMarker, userIDPrivacyMarker, "fp8", "0.00000123", "1e-7", "1e-13", "1e-1024", "parallel-tool-calls-private-marker", toolNameMarker, toolDescriptionMarker, toolSchemaNumberMarker, toolCallIDMarker, toolArgumentMarker, toolResultMarker} {
 		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
 			return err
 		}
@@ -7459,6 +7635,14 @@ func exerciseCodexNoEligibleCacheCheck(ctx context.Context, registry provider.Re
 	}
 	invalidProviderTargetsBody := []byte(`{"model":"codex/codex-noeligible-invalid-provider-targets","messages":[{"role":"user","content":"check"}],"provider_options":{"openrouter":{"provider":{"order":[]}}}}`)
 	if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, invalidProviderTargetsBody, fakeUpstream, "/responses", "codex-noeligible-invalid-provider-targets", "codex noeligible invalid openrouter provider targets"); err != nil {
+		return err
+	}
+	unsupportedProviderFiltersBody := []byte(`{"model":"codex/codex-noeligible-openrouter-provider-filters","messages":[{"role":"user","content":"check"}],` + openRouterProviderFiltersExtra() + `}`)
+	if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, unsupportedProviderFiltersBody, fakeUpstream, "/responses", "codex-noeligible-openrouter-provider-filters", "codex noeligible openrouter provider filters"); err != nil {
+		return err
+	}
+	invalidProviderFiltersBody := []byte(`{"model":"codex/codex-noeligible-invalid-provider-filters","messages":[{"role":"user","content":"check"}],"provider_options":{"openrouter":{"provider":{"quantizations":[]}}}}`)
+	if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, invalidProviderFiltersBody, fakeUpstream, "/responses", "codex-noeligible-invalid-provider-filters", "codex noeligible invalid openrouter provider filters"); err != nil {
 		return err
 	}
 	unsupportedUserIDOptionsBody := []byte(`{"model":"codex/codex-noeligible-deepseek-user-id","messages":[{"role":"user","content":"check"}],` + deepSeekUserIDExtra(userIDPrivacyMarker) + `}`)

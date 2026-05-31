@@ -424,6 +424,14 @@ func validateOpenRouterProvider(raw any) error {
 			if err := validateOpenRouterProviderSlugList(key, value); err != nil {
 				return err
 			}
+		case "quantizations":
+			if err := validateOpenRouterQuantizations(value); err != nil {
+				return err
+			}
+		case "max_price":
+			if err := validateOpenRouterMaxPrice(value); err != nil {
+				return err
+			}
 		case "data_collection":
 			collection, ok := value.(string)
 			if !ok {
@@ -481,6 +489,83 @@ func isOpenRouterProviderSlug(value string) bool {
 		}
 	}
 	return true
+}
+
+func validateOpenRouterQuantizations(raw any) error {
+	values, ok := raw.([]any)
+	if !ok || len(values) == 0 || len(values) > 16 {
+		return errors.New("provider_options.openrouter.provider.quantizations must be a non-empty array of up to 16 quantization strings")
+	}
+	seen := map[string]bool{}
+	for _, rawValue := range values {
+		value, ok := rawValue.(string)
+		if !ok || !isOpenRouterQuantization(value) {
+			return errors.New("provider_options.openrouter.provider.quantizations contains an unsupported quantization")
+		}
+		if seen[value] {
+			return errors.New("provider_options.openrouter.provider.quantizations must not contain duplicates")
+		}
+		seen[value] = true
+	}
+	return nil
+}
+
+func isOpenRouterQuantization(value string) bool {
+	switch value {
+	case "int4", "int8", "fp4", "fp6", "fp8", "fp16", "bf16", "fp32", "unknown":
+		return true
+	default:
+		return false
+	}
+}
+
+func validateOpenRouterMaxPrice(raw any) error {
+	prices, ok := raw.(map[string]any)
+	if !ok || len(prices) == 0 {
+		return errors.New("provider_options.openrouter.provider.max_price must be a non-empty object")
+	}
+	for key, value := range prices {
+		switch key {
+		case "prompt", "completion", "request", "image", "audio":
+		default:
+			return errors.New("provider_options.openrouter.provider.max_price contains an unsupported field")
+		}
+		num, ok := value.(json.Number)
+		if !ok || !isOpenRouterMaxPrice(num) {
+			return errors.New("provider_options.openrouter.provider.max_price values must be numbers between 0 and 1000000")
+		}
+	}
+	return nil
+}
+
+func isOpenRouterMaxPrice(num json.Number) bool {
+	if !safeOpenRouterMaxPriceToken(num.String()) {
+		return false
+	}
+	precise, ok := new(big.Rat).SetString(num.String())
+	if !ok || precise.Cmp(big.NewRat(0, 1)) < 0 || precise.Cmp(big.NewRat(1000000, 1)) > 0 {
+		return false
+	}
+	value, err := num.Float64()
+	return err == nil && !math.IsInf(value, 0) && !math.IsNaN(value)
+}
+
+func safeOpenRouterMaxPriceToken(value string) bool {
+	if value == "" || len(value) > 128 {
+		return false
+	}
+	_, exponent, ok := strings.Cut(value, "e")
+	if !ok {
+		_, exponent, ok = strings.Cut(value, "E")
+	}
+	if !ok {
+		return true
+	}
+	if exponent == "" || len(exponent) > 5 {
+		return false
+	}
+	parsed, err := strconv.Atoi(exponent)
+	return err == nil && parsed >= -1024 && parsed <= 1024
 }
 
 func isOpenRouterReasoningEffort(value string) bool {

@@ -103,12 +103,17 @@ func (a HTTPChatAdapter) ValidateChatRequest(instance Instance, req openai.ChatC
 		if err := rejectPresentFields(req, commonUnsupported...); err != nil {
 			return err
 		}
+		if instance.Type == "deepseek" {
+			if err := rejectPresentFields(req, "presence_penalty", "frequency_penalty"); err != nil {
+				return err
+			}
+		}
 		if err := validateChatResponseFormat(instance.Type, req); err != nil {
 			return err
 		}
 		return validateProviderOptions(instance.Type, req)
 	case "codex":
-		if err := rejectPresentFields(req, append(commonUnsupported, "provider_options", "max_tokens", "max_completion_tokens", "temperature", "top_p", "stop", "response_format")...); err != nil {
+		if err := rejectPresentFields(req, append(commonUnsupported, "provider_options", "max_tokens", "max_completion_tokens", "temperature", "top_p", "presence_penalty", "frequency_penalty", "stop", "response_format")...); err != nil {
 			return err
 		}
 		return nil

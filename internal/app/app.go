@@ -261,6 +261,9 @@ func ServeCheck(opts Options) error {
 	if err := exerciseResponseFormatNoEligibleCheck(context.Background(), rt.Registry); err != nil {
 		return fmt.Errorf("response_format no-eligible check: %w", err)
 	}
+	if err := exerciseSamplingPenaltyNoEligibleCheck(context.Background(), rt.Registry); err != nil {
+		return fmt.Errorf("sampling penalty no-eligible check: %w", err)
+	}
 	afterSnapshot, err := selectedHomeSnapshot(context.Background(), rt.Store, rt.ConfigPath)
 	if err != nil {
 		return err
@@ -2543,6 +2546,12 @@ func newServeCheckUpstream() *serveCheckUpstream {
 				return
 			}
 		}
+		if strings.HasPrefix(model, "sampling-penalty-") {
+			if err := validateServeCheckSamplingPenalties(r.URL.Path, model, body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
 		if body["stream"] == nil {
 			up.mu.Lock()
 			up.observed[r.URL.Path+" "+model] = true
@@ -2612,6 +2621,31 @@ func validateServeCheckMaxCompletionTokens(path string, body map[string]any) err
 		}
 	default:
 		return fmt.Errorf("unexpected token limit path %s", path)
+	}
+	return nil
+}
+
+func validateServeCheckSamplingPenalties(path, model string, body map[string]any) error {
+	if path != "/api/v1/chat/completions" {
+		return fmt.Errorf("sampling penalties reached unsupported provider")
+	}
+	presence, hasPresence := body["presence_penalty"]
+	frequency, hasFrequency := body["frequency_penalty"]
+	switch model {
+	case "sampling-penalty-presence":
+		if presence != penaltyPresenceMarkerValue || hasFrequency {
+			return fmt.Errorf("invalid presence penalty forwarding")
+		}
+	case "sampling-penalty-frequency":
+		if frequency != penaltyFrequencyMarkerValue || hasPresence {
+			return fmt.Errorf("invalid frequency penalty forwarding")
+		}
+	case "sampling-penalty-both":
+		if presence != float64(2) || frequency != float64(-2) {
+			return fmt.Errorf("invalid combined penalty forwarding")
+		}
+	default:
+		return fmt.Errorf("unexpected sampling penalty model")
 	}
 	return nil
 }
@@ -3012,6 +3046,13 @@ func (u *serveCheckUpstream) handleServeCheckStream(w http.ResponseWriter, r *ht
 			return
 		}
 	}
+	if strings.HasPrefix(model, "stream-sampling-penalty-") {
+		checkModel := strings.TrimPrefix(model, "stream-")
+		if err := validateServeCheckSamplingPenalties(r.URL.Path, checkModel, body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 	if strings.HasPrefix(model, "stream-fallback") {
 		u.recordObservedAuth(model, auth)
 	}
@@ -3179,7 +3220,10 @@ func assertUnsupportedChatNoUpstream(base, token string, body []byte, fakeUpstre
 	if bytes.Contains(respBody, []byte("in this slice")) {
 		return fmt.Errorf("unsupported %s returned slice-era wording", name)
 	}
-	for _, marker := range []string{providerOptionPrivacyMarker, responseFormatPrivacyMarker, responseFormatSchemaMarker} {
+	if strings.Contains(name, "sampling_penalty") && (bytes.Contains(respBody, []byte("invalid request JSON")) || bytes.Contains(respBody, []byte("cannot unmarshal"))) {
+		return fmt.Errorf("unsupported %s returned raw decode wording", name)
+	}
+	for _, marker := range []string{providerOptionPrivacyMarker, responseFormatPrivacyMarker, responseFormatSchemaMarker, "1.75", "-1.25", penaltyOverflowMarker, "2.01", "-2.01", "2.0000000000000001", "-2.0000000000000001", "2.000000000000000000000000000000000000000000000000000000000000000000000000000000001"} {
 		if bytes.Contains(respBody, []byte(marker)) {
 			return fmt.Errorf("unsupported %s leaked private marker", name)
 		}
@@ -3231,6 +3275,8 @@ func exerciseCodexChatCheck(ctx context.Context, base, token string, fakeUpstrea
 		{name: "max_tokens", extra: `"max_tokens":1`},
 		{name: "temperature", extra: `"temperature":0.2`},
 		{name: "top_p", extra: `"top_p":0.9`},
+		{name: "presence_penalty", extra: fmt.Sprintf(`"presence_penalty":%g`, penaltyPresenceMarkerValue)},
+		{name: "frequency_penalty", extra: fmt.Sprintf(`"frequency_penalty":%g`, penaltyFrequencyMarkerValue)},
 		{name: "stop", extra: `"stop":"x"`},
 		{name: "provider_options", extra: `"provider_options":{"codex":{"reasoning_effort":"high"}}`},
 	} {
@@ -4116,9 +4162,17 @@ type tokenLimitInvalidCase struct {
 	extra string
 }
 
+type samplingPenaltyInvalidCase struct {
+	name  string
+	extra string
+}
+
 const providerOptionPrivacyMarker = "provider-option-private-marker"
 const responseFormatPrivacyMarker = "response-format-private-marker"
 const responseFormatSchemaMarker = "schema-secret-marker"
+const penaltyPresenceMarkerValue = 1.75
+const penaltyFrequencyMarkerValue = -1.25
+const penaltyOverflowMarker = "1e309"
 
 func providerOptionsExtra(providerType string) string {
 	if providerType == "openrouter" {
@@ -4208,6 +4262,43 @@ func tokenLimitInvalidCases() []tokenLimitInvalidCase {
 		{name: "max-completion-negative", extra: `"max_completion_tokens":-1`},
 		{name: "max-completion-float", extra: `"max_completion_tokens":1.5`},
 		{name: "max-completion-string", extra: `"max_completion_tokens":"1"`},
+	}
+}
+
+func samplingPenaltyInvalidCases() []samplingPenaltyInvalidCase {
+	return []samplingPenaltyInvalidCase{
+		{name: "presence-null", extra: `"presence_penalty":null`},
+		{name: "presence-string", extra: `"presence_penalty":"1.75"`},
+		{name: "presence-bool", extra: `"presence_penalty":true`},
+		{name: "presence-object", extra: `"presence_penalty":{"value":1}`},
+		{name: "presence-array", extra: `"presence_penalty":[1]`},
+		{name: "presence-low", extra: `"presence_penalty":-2.01`},
+		{name: "presence-high", extra: `"presence_penalty":2.01`},
+		{name: "presence-low-rounding-edge", extra: `"presence_penalty":-2.0000000000000001`},
+		{name: "presence-high-rounding-edge", extra: `"presence_penalty":2.0000000000000001`},
+		{name: "presence-high-long-rounding-edge", extra: `"presence_penalty":2.` + strings.Repeat("0", 80) + `1`},
+		{name: "presence-overflow", extra: `"presence_penalty":1e309`},
+		{name: "frequency-null", extra: `"frequency_penalty":null`},
+		{name: "frequency-string", extra: `"frequency_penalty":"-1.25"`},
+		{name: "frequency-bool", extra: `"frequency_penalty":false`},
+		{name: "frequency-object", extra: `"frequency_penalty":{"value":1}`},
+		{name: "frequency-array", extra: `"frequency_penalty":[1]`},
+		{name: "frequency-low", extra: `"frequency_penalty":-2.01`},
+		{name: "frequency-high", extra: `"frequency_penalty":2.01`},
+		{name: "frequency-low-rounding-edge", extra: `"frequency_penalty":-2.0000000000000001`},
+		{name: "frequency-high-rounding-edge", extra: `"frequency_penalty":2.0000000000000001`},
+		{name: "frequency-high-long-rounding-edge", extra: `"frequency_penalty":2.` + strings.Repeat("0", 80) + `1`},
+		{name: "frequency-overflow", extra: `"frequency_penalty":1e309`},
+	}
+}
+
+func samplingPenaltyUnsupportedCases(providerType string) []samplingPenaltyInvalidCase {
+	if providerType == "openrouter" {
+		return nil
+	}
+	return []samplingPenaltyInvalidCase{
+		{name: "presence", extra: fmt.Sprintf(`"presence_penalty":%g`, penaltyPresenceMarkerValue)},
+		{name: "frequency", extra: fmt.Sprintf(`"frequency_penalty":%g`, penaltyFrequencyMarkerValue)},
 	}
 }
 
@@ -4301,6 +4392,28 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 	if !fakeUpstream.sawExpected(expectedPath, "max-completion-limit") {
 		return fmt.Errorf("max_completion_tokens did not reach upstream provider=%s", instance.ID)
 	}
+	if instance.Type == "openrouter" {
+		for _, tc := range []struct {
+			model string
+			extra string
+		}{
+			{"sampling-penalty-presence", fmt.Sprintf(`"presence_penalty":%g`, penaltyPresenceMarkerValue)},
+			{"sampling-penalty-frequency", fmt.Sprintf(`"frequency_penalty":%g`, penaltyFrequencyMarkerValue)},
+			{"sampling-penalty-both", `"presence_penalty":2.0,"frequency_penalty":-2.0`},
+		} {
+			body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+tc.model, tc.extra))
+			status, respBody, err := postJSON(base+"/v1/chat/completions", token, body)
+			if err != nil || status != http.StatusOK {
+				return fmt.Errorf("sampling penalties provider=%s model=%s status=%d err=%v", instance.ID, tc.model, status, err)
+			}
+			if bytes.Contains(respBody, []byte("1.75")) || bytes.Contains(respBody, []byte("-1.25")) {
+				return fmt.Errorf("sampling penalties echoed private marker")
+			}
+			if !fakeUpstream.sawExpected(expectedPath, tc.model) {
+				return fmt.Errorf("sampling penalties did not reach upstream provider=%s model=%s", instance.ID, tc.model)
+			}
+		}
+	}
 	for _, tc := range []struct {
 		name  string
 		extra string
@@ -4337,10 +4450,29 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 			return err
 		}
 	}
+	for _, tc := range samplingPenaltyInvalidCases() {
+		upstreamModel := "invalid-penalty-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" sampling_penalty "+tc.name); err != nil {
+			return err
+		}
+	}
+	for _, tc := range samplingPenaltyUnsupportedCases(instance.Type) {
+		upstreamModel := "unsupported-penalty-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" sampling_penalty unsupported "+tc.name); err != nil {
+			return err
+		}
+	}
 	if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, providerOptionPrivacyMarker); err != nil {
 		return err
 	}
 	for _, marker := range []string{responseFormatPrivacyMarker, responseFormatSchemaMarker} {
+		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
+			return err
+		}
+	}
+	for _, marker := range []string{"1.75", "-1.25", penaltyOverflowMarker} {
 		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
 			return err
 		}
@@ -4457,6 +4589,28 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 	if !fakeUpstream.sawExpectedStream(expectedPath, "stream-max-completion-limit") {
 		return fmt.Errorf("stream max_completion_tokens did not reach upstream provider=%s", instance.ID)
 	}
+	if instance.Type == "openrouter" {
+		for _, tc := range []struct {
+			model string
+			extra string
+		}{
+			{"stream-sampling-penalty-presence", fmt.Sprintf(`"presence_penalty":%g`, penaltyPresenceMarkerValue)},
+			{"stream-sampling-penalty-frequency", fmt.Sprintf(`"frequency_penalty":%g`, penaltyFrequencyMarkerValue)},
+			{"stream-sampling-penalty-both", `"presence_penalty":2.0,"frequency_penalty":-2.0`},
+		} {
+			body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/"+tc.model, tc.extra))
+			status, _, _, raw, err := postStream(base+"/v1/chat/completions", token, body)
+			if err != nil || status != http.StatusOK {
+				return fmt.Errorf("stream sampling penalties provider=%s model=%s status=%d err=%v", instance.ID, tc.model, status, err)
+			}
+			if bytes.Contains(raw, []byte("1.75")) || bytes.Contains(raw, []byte("-1.25")) {
+				return fmt.Errorf("stream sampling penalties echoed private marker")
+			}
+			if !fakeUpstream.sawExpectedStream(expectedPath, tc.model) {
+				return fmt.Errorf("stream sampling penalties did not reach upstream provider=%s model=%s", instance.ID, tc.model)
+			}
+		}
+	}
 	if status, err := postStatus(base+"/v1/chat/completions", token, []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream_options":{"include_usage":true}}`, model))); err != nil || status != http.StatusBadRequest {
 		return fmt.Errorf("stream_options without stream provider=%s status=%d err=%v", instance.ID, status, err)
 	}
@@ -4512,10 +4666,29 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 			return err
 		}
 	}
+	for _, tc := range samplingPenaltyInvalidCases() {
+		upstreamModel := "stream-invalid-penalty-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" stream sampling_penalty "+tc.name); err != nil {
+			return err
+		}
+	}
+	for _, tc := range samplingPenaltyUnsupportedCases(instance.Type) {
+		upstreamModel := "stream-unsupported-penalty-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" stream sampling_penalty unsupported "+tc.name); err != nil {
+			return err
+		}
+	}
 	if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, providerOptionPrivacyMarker); err != nil {
 		return err
 	}
 	for _, marker := range []string{responseFormatPrivacyMarker, responseFormatSchemaMarker} {
+		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
+			return err
+		}
+	}
+	for _, marker := range []string{"1.75", "-1.25", penaltyOverflowMarker} {
 		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
 			return err
 		}
@@ -4915,6 +5088,70 @@ func exerciseResponseFormatNoEligibleCheck(ctx context.Context, registry provide
 		}
 	}
 	for _, marker := range []string{responseFormatPrivacyMarker, responseFormatSchemaMarker} {
+		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func exerciseSamplingPenaltyNoEligibleCheck(ctx context.Context, registry provider.Registry) error {
+	checkDBDir, err := os.MkdirTemp("", "ilonasin-serve-check-penalty-noeligible-db-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(checkDBDir)
+	store, err := sqlite.Open(ctx, filepath.Join(checkDBDir, "ilonasin.sqlite"))
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	tokenService := credentials.Service{Repo: store}
+	upstreams := &credentials.UpstreamService{Registry: registry, Repo: store}
+	created, err := tokenService.Create(ctx, "penalty-noeligible")
+	if err != nil {
+		return err
+	}
+	fakeUpstream := newServeCheckUpstream()
+	defer fakeUpstream.server.Close()
+	checkRegistry := baseURLOverrideRegistry{Registry: registry, baseURL: fakeUpstream.server.URL}
+	handler := server.New(checkRegistry, tokenService, upstreams, upstreams, chatAdapters(fakeUpstream.server.Client()), modelDiscoverers(fakeUpstream.server.Client()), store, store).Handler()
+	testServer := httptest.NewServer(handler)
+	defer testServer.Close()
+	for _, instance := range apiKeyProviders(registry) {
+		expectedPath := "/chat/completions"
+		if instance.Type == "openrouter" {
+			expectedPath = "/api/v1/chat/completions"
+		}
+		for _, tc := range samplingPenaltyInvalidCases() {
+			upstreamModel := "noeligible-invalid-penalty-" + tc.name
+			body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+			if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, body, fakeUpstream, expectedPath, upstreamModel, "noeligible "+instance.ID+" sampling_penalty "+tc.name); err != nil {
+				return err
+			}
+		}
+		for _, tc := range samplingPenaltyUnsupportedCases(instance.Type) {
+			upstreamModel := "noeligible-unsupported-penalty-" + tc.name
+			body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+			if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, body, fakeUpstream, expectedPath, upstreamModel, "noeligible "+instance.ID+" sampling_penalty unsupported "+tc.name); err != nil {
+				return err
+			}
+		}
+	}
+	for _, tc := range []struct {
+		name  string
+		extra string
+	}{
+		{name: "presence", extra: fmt.Sprintf(`"presence_penalty":%g`, penaltyPresenceMarkerValue)},
+		{name: "frequency", extra: fmt.Sprintf(`"frequency_penalty":%g`, penaltyFrequencyMarkerValue)},
+	} {
+		upstreamModel := "codex-noeligible-penalty-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, "codex/"+upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, body, fakeUpstream, "/responses", upstreamModel, "codex noeligible sampling_penalty "+tc.name); err != nil {
+			return err
+		}
+	}
+	for _, marker := range []string{"1.75", "-1.25", penaltyOverflowMarker} {
 		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
 			return err
 		}

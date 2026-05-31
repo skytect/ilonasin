@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/big"
 	"sort"
 	"strings"
 )
@@ -19,6 +20,8 @@ type ChatCompletionRequest struct {
 	MaxCompletionTokens *int             `json:"max_completion_tokens,omitempty"`
 	Temperature         *float64         `json:"temperature,omitempty"`
 	TopP                *float64         `json:"top_p,omitempty"`
+	PresencePenalty     *float64         `json:"presence_penalty,omitempty"`
+	FrequencyPenalty    *float64         `json:"frequency_penalty,omitempty"`
 	Stop                any              `json:"stop,omitempty"`
 	StreamOptions       map[string]any   `json:"stream_options,omitempty"`
 	ResponseFormat      map[string]any   `json:"response_format,omitempty"`
@@ -67,6 +70,9 @@ func DecodeChatCompletion(r io.Reader) (ChatCompletionRequest, error) {
 	if err := validateRawStreamOptions(raw); err != nil {
 		return ChatCompletionRequest{}, err
 	}
+	if err := validateRawPenalties(raw); err != nil {
+		return ChatCompletionRequest{}, err
+	}
 	var req ChatCompletionRequest
 	body, err := json.Marshal(raw)
 	if err != nil {
@@ -107,6 +113,12 @@ func (r ChatCompletionRequest) Validate() error {
 	}
 	if r.HasField("max_tokens") && r.HasField("max_completion_tokens") {
 		return errors.New("max_tokens and max_completion_tokens are mutually exclusive")
+	}
+	if err := validatePenaltyValue("presence_penalty", r.HasField("presence_penalty"), r.PresencePenalty); err != nil {
+		return err
+	}
+	if err := validatePenaltyValue("frequency_penalty", r.HasField("frequency_penalty"), r.FrequencyPenalty); err != nil {
+		return err
 	}
 	for i, msg := range r.Messages {
 		switch msg.Role {
@@ -208,6 +220,12 @@ func MarshalUpstreamChatRequest(req ChatCompletionRequest, upstreamModel string)
 	}
 	if req.TopP != nil {
 		out["top_p"] = *req.TopP
+	}
+	if req.PresencePenalty != nil {
+		out["presence_penalty"] = *req.PresencePenalty
+	}
+	if req.FrequencyPenalty != nil {
+		out["frequency_penalty"] = *req.FrequencyPenalty
 	}
 	if req.Stop != nil {
 		out["stop"] = req.Stop
@@ -443,6 +461,8 @@ func validateTopLevelKeys(raw map[string]json.RawMessage) error {
 		"max_completion_tokens": true,
 		"temperature":           true,
 		"top_p":                 true,
+		"presence_penalty":      true,
+		"frequency_penalty":     true,
 		"stop":                  true,
 		"response_format":       true,
 		"tools":                 true,
@@ -460,6 +480,62 @@ func validateTopLevelKeys(raw map[string]json.RawMessage) error {
 		if !allowed[key] {
 			return fmt.Errorf("unknown field %q", key)
 		}
+	}
+	return nil
+}
+
+func validateRawPenalties(raw map[string]json.RawMessage) error {
+	for _, field := range []string{"presence_penalty", "frequency_penalty"} {
+		value, ok := raw[field]
+		if !ok {
+			continue
+		}
+		if _, err := parsePenaltyNumber(field, value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func parsePenaltyNumber(field string, raw json.RawMessage) (float64, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || isJSONNull(trimmed) {
+		return 0, fmt.Errorf("%s must be a number between -2 and 2", field)
+	}
+	if (trimmed[0] < '0' || trimmed[0] > '9') && trimmed[0] != '-' {
+		return 0, fmt.Errorf("%s must be a number between -2 and 2", field)
+	}
+	dec := json.NewDecoder(bytes.NewReader(trimmed))
+	dec.UseNumber()
+	var num json.Number
+	if err := dec.Decode(&num); err != nil {
+		return 0, fmt.Errorf("%s must be a number between -2 and 2", field)
+	}
+	if dec.Decode(&struct{}{}) != io.EOF {
+		return 0, fmt.Errorf("%s must be a number between -2 and 2", field)
+	}
+	precise, ok := new(big.Rat).SetString(num.String())
+	if !ok {
+		return 0, fmt.Errorf("%s must be a number between -2 and 2", field)
+	}
+	max := big.NewRat(2, 1)
+	min := big.NewRat(-2, 1)
+	if precise.Cmp(min) < 0 || precise.Cmp(max) > 0 {
+		return 0, fmt.Errorf("%s must be a number between -2 and 2", field)
+	}
+	value, err := num.Float64()
+	if err != nil || math.IsInf(value, 0) || math.IsNaN(value) {
+		return 0, fmt.Errorf("%s must be a number between -2 and 2", field)
+	}
+	return value, nil
+}
+
+func validatePenaltyValue(field string, present bool, value *float64) error {
+	if !present {
+		return nil
+	}
+	if value == nil || math.IsInf(*value, 0) || math.IsNaN(*value) || *value < -2 || *value > 2 {
+		return fmt.Errorf("%s must be a number between -2 and 2", field)
 	}
 	return nil
 }

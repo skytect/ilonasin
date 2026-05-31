@@ -1,7 +1,6 @@
 package server
 
 import (
-	"net/http"
 	"time"
 
 	"ilonasin/internal/credentials"
@@ -31,11 +30,4 @@ func NewWithClock(registry ProviderRegistry, auth credentials.LocalTokenVerifier
 	}
 	refresh, _ := oauth.(credentials.OAuthProviderRefreshController)
 	return &Server{registry: registry, auth: auth, upstreams: upstreams, oauth: oauth, refresh: refresh, adapters: adapters, models: models, cache: cache, meta: meta, now: now}
-}
-
-func (s *Server) Handler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /v1/models", s.withAuth(s.handleModels))
-	mux.HandleFunc("POST /v1/chat/completions", s.withAuth(s.handleChatCompletions))
-	return mux
 }

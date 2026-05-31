@@ -17,28 +17,12 @@ type streamContext struct {
 	token       credentials.VerifiedLocalToken
 	address     routing.ModelAddress
 	instance    provider.Instance
-	credentials []credentials.ResolvedAPIKeyCredential
+	credentials []provider.BearerCredential
 	adapter     provider.ChatAdapter
 	request     openai.ChatCompletionRequest
 }
 
 type streamAttempt struct {
-	credential credentials.ResolvedAPIKeyCredential
-	summary    provider.ChatStreamSummary
-	err        error
-}
-
-type singleStreamContext struct {
-	start      time.Time
-	token      credentials.VerifiedLocalToken
-	address    routing.ModelAddress
-	instance   provider.Instance
-	credential provider.BearerCredential
-	adapter    provider.ChatAdapter
-	request    openai.ChatCompletionRequest
-}
-
-type singleStreamAttempt struct {
 	credential provider.BearerCredential
 	summary    provider.ChatStreamSummary
 	err        error
@@ -88,158 +72,8 @@ func healthFromStreamAttempt(addr routing.ModelAddress, attempt streamAttempt) m
 	}
 }
 
-func healthFromSingleStreamAttempt(addr routing.ModelAddress, attempt singleStreamAttempt) metadata.HealthEvent {
-	status := attempt.summary.StatusCode
-	if status == 0 {
-		status = http.StatusBadGateway
-	}
-	errorClass := attempt.summary.ErrorClass
-	if errorClass == "" && status >= 400 {
-		errorClass = "upstream_http_error"
-	}
-	eventClass := "upstream_failure"
-	if attempt.err == nil && status >= 200 && status < 300 {
-		eventClass = "upstream_success"
-		errorClass = ""
-	}
-	retryAfter := attempt.summary.RetryAfter
-	if eventClass == "upstream_success" {
-		retryAfter = nil
-	}
-	return metadata.HealthEvent{
-		OccurredAt:         time.Now(),
-		ProviderInstanceID: addr.ProviderInstanceID,
-		CredentialID:       attempt.credential.ID,
-		ModelID:            addr.ProviderModelID,
-		EventClass:         eventClass,
-		HTTPStatus:         status,
-		ErrorClass:         errorClass,
-		RetryAfter:         retryAfter,
-	}
-}
-
 func shouldRecordStreamHealth(summary provider.ChatStreamSummary) bool {
 	return summary.ErrorClass != "client_disconnected" && summary.CompletionStatus != "client_disconnected"
-}
-
-func (s *Server) handleSingleCredentialStreamingChat(w http.ResponseWriter, r *http.Request, sc singleStreamContext) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		_ = s.record(r.Context(), metadata.Request{
-			StartedAt:                 sc.start,
-			ClientTokenID:             sc.token.ID,
-			RequestedProviderInstance: sc.address.ProviderInstanceID,
-			RequestedModel:            sc.address.ProviderModelID,
-			ResolvedProviderInstance:  sc.address.ProviderInstanceID,
-			ResolvedModel:             sc.address.ProviderModelID,
-			HTTPStatus:                http.StatusInternalServerError,
-			ErrorClass:                "client_stream_unavailable",
-			TotalLatencyMS:            time.Since(sc.start).Milliseconds(),
-		})
-		writeError(w, http.StatusInternalServerError, "streaming is not available for this response writer", "api_error", "client_stream_unavailable")
-		return
-	}
-	sink := &streamSink{w: w, flusher: flusher}
-	summary, err := sc.adapter.StreamChat(r.Context(), provider.ChatRequest{
-		Instance:      sc.instance,
-		UpstreamModel: sc.address.ProviderModelID,
-		Request:       sc.request,
-		Credential: provider.ChatCredential{
-			ID:                 sc.credential.ID,
-			ProviderInstanceID: sc.credential.ProviderInstanceID,
-			Kind:               sc.credential.Kind,
-			BearerToken:        sc.credential.BearerToken,
-		},
-	}, sink)
-	retryCount := 0
-	if s.shouldRefreshOAuthAfterStream401(sc.instance, summary) {
-		refreshed, refreshErr := s.refreshOAuthCredentialForRetryIfBearer(r.Context(), sc.credential)
-		if refreshErr != nil {
-			summary = provider.ChatStreamSummary{StatusCode: http.StatusBadGateway, ErrorClass: "upstream_auth_failed", CompletionStatus: "upstream_error", PreStreamError: true}
-			err = refreshErr
-		} else {
-			sc.credential = refreshed
-			retryCount = 1
-			summary, err = sc.adapter.StreamChat(r.Context(), provider.ChatRequest{
-				Instance:      sc.instance,
-				UpstreamModel: sc.address.ProviderModelID,
-				Request:       sc.request,
-				Credential: provider.ChatCredential{
-					ID:                 sc.credential.ID,
-					ProviderInstanceID: sc.credential.ProviderInstanceID,
-					Kind:               sc.credential.Kind,
-					BearerToken:        sc.credential.BearerToken,
-				},
-			}, sink)
-			if s.shouldRefreshOAuthAfterStream401(sc.instance, summary) {
-				summary.StatusCode = http.StatusBadGateway
-				summary.ErrorClass = "upstream_auth_failed"
-			}
-		}
-	}
-	final := singleStreamAttempt{credential: sc.credential, summary: summary, err: err}
-	if shouldRecordStreamHealth(summary) {
-		s.recordHealth(r.Context(), healthFromSingleStreamAttempt(sc.address, final))
-	}
-	if final.err != nil && !sink.started {
-		localStatus := summary.StatusCode
-		if localStatus < 400 || localStatus >= 500 {
-			localStatus = http.StatusBadGateway
-		}
-		summary.StatusCode = localStatus
-		errorCode := summary.ErrorClass
-		if errorCode == "" {
-			errorCode = "upstream_stream_error"
-		}
-		writeError(w, localStatus, "upstream stream failed", "api_error", errorCode)
-	}
-	recordCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
-	defer cancel()
-	status := summary.StatusCode
-	if status == 0 {
-		if sink.started {
-			status = http.StatusOK
-		} else {
-			status = http.StatusBadGateway
-		}
-	}
-	errorClass := summary.ErrorClass
-	if errorClass == "" && status >= 400 {
-		errorClass = "upstream_http_error"
-	}
-	requestID, _ := s.recordWithID(recordCtx, metadata.Request{
-		StartedAt:                 sc.start,
-		ClientTokenID:             sc.token.ID,
-		CredentialID:              sc.credential.ID,
-		RequestedProviderInstance: sc.address.ProviderInstanceID,
-		RequestedModel:            sc.address.ProviderModelID,
-		ResolvedProviderInstance:  sc.address.ProviderInstanceID,
-		ResolvedModel:             resolvedChatModel(sc.address.ProviderModelID, summary.ResolvedModel),
-		HTTPStatus:                status,
-		ErrorClass:                errorClass,
-		RetryCount:                retryCount,
-		PromptTokens:              summary.Usage.PromptTokens,
-		CompletionTokens:          summary.Usage.CompletionTokens,
-		TotalTokens:               summary.Usage.TotalTokens,
-		ReasoningTokens:           summary.Usage.ReasoningTokens,
-		CacheHitTokens:            summary.Usage.CachedTokens,
-		CacheWriteTokens:          summary.Usage.CacheWriteTokens,
-		CostMicrounits:            summary.Usage.CostMicrounits,
-		TotalLatencyMS:            time.Since(sc.start).Milliseconds(),
-		TimeToFirstTokenMS:        summary.TimeToFirstTokenMS,
-		OutputTokensPerSecond:     summary.OutputTokensPerSecond,
-	})
-	completionStatus := summary.CompletionStatus
-	if completionStatus == "" {
-		completionStatus = "upstream_invalid"
-	}
-	_ = s.recordStream(recordCtx, metadata.Stream{
-		RequestMetadataID:     requestID,
-		TimeToFirstTokenMS:    summary.TimeToFirstTokenMS,
-		OutputTokensPerSecond: summary.OutputTokensPerSecond,
-		CompletionStatus:      completionStatus,
-		ChunkCount:            summary.ChunkCount,
-	})
 }
 
 func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc streamContext) {
@@ -262,18 +96,72 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 	sink := &streamSink{w: w, flusher: flusher}
 	var final streamAttempt
 	var fallbackEvents []metadata.FallbackEvent
+	authRetries := 0
+	modelCredential := provider.BearerCredential{}
+	if len(sc.credentials) > 0 {
+		modelCredential = sc.credentials[0]
+	}
 	for i, credential := range sc.credentials {
 		summary, err := sc.adapter.StreamChat(r.Context(), provider.ChatRequest{
-			Instance:      sc.instance,
-			UpstreamModel: sc.address.ProviderModelID,
-			Request:       sc.request,
-			Credential:    providerAPIKey(credential),
+			Instance:        sc.instance,
+			UpstreamModel:   sc.address.ProviderModelID,
+			Request:         sc.request,
+			Credential:      providerChatCredential(credential),
+			ModelCredential: modelCredential,
 		}, sink)
+		if s.shouldRefreshModelCredentialAfterStream401(sc.instance, summary, modelCredential) {
+			refreshed, refreshErr := s.refreshOAuthCredentialForRetryIfBearer(r.Context(), modelCredential)
+			if refreshErr != nil {
+				summary = provider.ChatStreamSummary{StatusCode: http.StatusBadGateway, ErrorClass: "upstream_auth_failed", CompletionStatus: "upstream_error", PreStreamError: true}
+				err = refreshErr
+			} else {
+				modelCredentialID := modelCredential.ID
+				modelCredential = refreshed
+				if credential.ID == modelCredentialID {
+					credential = refreshed
+				}
+				authRetries++
+				summary, err = sc.adapter.StreamChat(r.Context(), provider.ChatRequest{
+					Instance:        sc.instance,
+					UpstreamModel:   sc.address.ProviderModelID,
+					Request:         sc.request,
+					Credential:      providerChatCredential(credential),
+					ModelCredential: modelCredential,
+				}, sink)
+				if s.shouldRefreshModelCredentialAfterStream401(sc.instance, summary, modelCredential) || s.shouldRefreshOAuthAfterStream401(sc.instance, summary) {
+					summary.StatusCode = http.StatusBadGateway
+					summary.ErrorClass = "upstream_auth_failed"
+				}
+			}
+		} else if s.shouldRefreshOAuthAfterStream401(sc.instance, summary) {
+			refreshed, refreshErr := s.refreshOAuthCredentialForRetryIfBearer(r.Context(), credential)
+			if refreshErr != nil {
+				summary = provider.ChatStreamSummary{StatusCode: http.StatusBadGateway, ErrorClass: "upstream_auth_failed", CompletionStatus: "upstream_error", PreStreamError: true}
+				err = refreshErr
+			} else {
+				credential = refreshed
+				if modelCredential.ID == refreshed.ID {
+					modelCredential = refreshed
+				}
+				authRetries++
+				summary, err = sc.adapter.StreamChat(r.Context(), provider.ChatRequest{
+					Instance:        sc.instance,
+					UpstreamModel:   sc.address.ProviderModelID,
+					Request:         sc.request,
+					Credential:      providerChatCredential(credential),
+					ModelCredential: modelCredential,
+				}, sink)
+				if s.shouldRefreshOAuthAfterStream401(sc.instance, summary) {
+					summary.StatusCode = http.StatusBadGateway
+					summary.ErrorClass = "upstream_auth_failed"
+				}
+			}
+		}
 		final = streamAttempt{credential: credential, summary: summary, err: err}
 		if shouldRecordStreamHealth(summary) {
 			s.recordHealth(r.Context(), healthFromStreamAttempt(sc.address, final))
 		}
-		if !retryableStreamAttempt(summary, err, sink.started) || i == len(sc.credentials)-1 {
+		if summary.ErrorClass == "upstream_auth_failed" || !retryableStreamAttempt(summary, err, sink.started) || i == len(sc.credentials)-1 {
 			break
 		}
 		next := sc.credentials[i+1]
@@ -294,7 +182,11 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 			localStatus = http.StatusBadGateway
 		}
 		summary.StatusCode = localStatus
-		writeError(w, localStatus, "upstream stream failed", "api_error", "upstream_stream_error")
+		errorCode := "upstream_stream_error"
+		if summary.ErrorClass == "upstream_auth_failed" || sc.instance.Type == "codex" && summary.ErrorClass != "" {
+			errorCode = summary.ErrorClass
+		}
+		writeError(w, localStatus, "upstream stream failed", "api_error", errorCode)
 	}
 	recordCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
 	defer cancel()
@@ -320,7 +212,7 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 		ResolvedModel:             resolvedChatModel(sc.address.ProviderModelID, summary.ResolvedModel),
 		HTTPStatus:                status,
 		ErrorClass:                errorClass,
-		RetryCount:                len(fallbackEvents),
+		RetryCount:                authRetries + len(fallbackEvents),
 		FallbackCount:             len(fallbackEvents),
 		FallbackReason:            fallbackReason(fallbackEvents),
 		PromptTokens:              summary.Usage.PromptTokens,

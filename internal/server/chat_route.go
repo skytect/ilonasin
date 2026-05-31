@@ -101,47 +101,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 			slog.Bool("stream", req.Stream),
 		)
 	}
-	if instance.Type == "codex" {
-		credential, err := s.resolveModelCredential(r.Context(), instance)
-		if err != nil {
-			_ = s.record(r.Context(), metadata.Request{
-				StartedAt:                 start,
-				ClientTokenID:             token.ID,
-				RequestedProviderInstance: addr.ProviderInstanceID,
-				RequestedModel:            addr.ProviderModelID,
-				ResolvedProviderInstance:  addr.ProviderInstanceID,
-				ResolvedModel:             addr.ProviderModelID,
-				HTTPStatus:                http.StatusUnauthorized,
-				ErrorClass:                "credential_unavailable",
-				TotalLatencyMS:            time.Since(start).Milliseconds(),
-			})
-			writeError(w, http.StatusUnauthorized, "no eligible upstream credential is available", "invalid_request_error", "credential_unavailable")
-			return
-		}
-		if req.Stream {
-			s.handleSingleCredentialStreamingChat(w, r, singleStreamContext{
-				start:      start,
-				token:      token,
-				address:    addr,
-				instance:   instance,
-				credential: credential,
-				adapter:    adapter,
-				request:    req,
-			})
-			return
-		}
-		s.handleSingleCredentialChat(w, r, singleChatContext{
-			start:      start,
-			token:      token,
-			address:    addr,
-			instance:   instance,
-			credential: credential,
-			adapter:    adapter,
-			request:    req,
-		})
-		return
-	}
-	credentialsSet, err := s.upstreams.ResolveAPIKeys(r.Context(), addr.ProviderInstanceID)
+	credentialsSet, err := s.resolveModelCredentials(r.Context(), instance)
 	if err != nil {
 		_ = s.record(r.Context(), metadata.Request{
 			StartedAt:                 start,
@@ -156,6 +116,14 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 		})
 		writeError(w, http.StatusUnauthorized, "no eligible upstream credential is available", "invalid_request_error", "credential_unavailable")
 		return
+	}
+	if s.logger != nil {
+		s.logAttrs(r, slog.LevelInfo, "chat credentials resolved",
+			slog.String("event", "chat_credentials_resolved"),
+			slog.String("provider_instance", addr.ProviderInstanceID),
+			slog.String("provider_type", instance.Type),
+			slog.Int("credential_count", len(credentialsSet)),
+		)
 	}
 	if req.Stream {
 		s.handleStreamingChat(w, r, streamContext{

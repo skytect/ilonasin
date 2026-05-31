@@ -36,9 +36,10 @@ type LoggingConfig struct {
 }
 
 type ProviderConfig struct {
-	Type       string `toml:"type"`
-	BaseURL    string `toml:"base_url"`
-	AuthIssuer string `toml:"auth_issuer"`
+	Type                string `toml:"type"`
+	BaseURL             string `toml:"base_url"`
+	AuthIssuer          string `toml:"auth_issuer"`
+	CodexAccountPooling bool   `toml:"codex_account_pooling"`
 }
 
 func Default(homeDir string) Config {

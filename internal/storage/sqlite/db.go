@@ -520,7 +520,7 @@ func (s *Store) ResolveAPIKeyCredentials(ctx context.Context, providerInstanceID
 		return nil, credentials.ErrNoEligibleCredential
 	}
 	group := all[0].FallbackGroup
-	enabled, err := s.fallbackGroupEnabled(ctx, providerInstanceID, group)
+	enabled, err := s.fallbackGroupEnabled(ctx, providerInstanceID, credentials.CredentialKindAPIKey, group)
 	if err != nil {
 		return nil, err
 	}
@@ -544,7 +544,7 @@ func (s *Store) ResolveOAuthBearerCredential(ctx context.Context, providerInstan
 	var accessSecretID sql.NullInt64
 	var expires sql.NullString
 	err := s.DB.QueryRowContext(ctx, `
-		SELECT pc.id, pc.provider_instance_id, ot.access_token_secret_id, ot.expires_at
+		SELECT pc.id, pc.provider_instance_id, pc.fallback_group, ot.access_token_secret_id, ot.expires_at
 		FROM provider_credentials pc
 		LEFT JOIN oauth_tokens ot ON ot.credential_id = pc.id
 		WHERE pc.provider_instance_id = ?
@@ -552,7 +552,7 @@ func (s *Store) ResolveOAuthBearerCredential(ctx context.Context, providerInstan
 			AND pc.disabled_at IS NULL
 		ORDER BY pc.id ASC
 		LIMIT 1
-	`, providerInstanceID).Scan(&out.ID, &out.ProviderInstanceID, &accessSecretID, &expires)
+	`, providerInstanceID).Scan(&out.ID, &out.ProviderInstanceID, &out.FallbackGroup, &accessSecretID, &expires)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return credentials.ResolvedOAuthBearerCredential{}, credentials.ErrNoEligibleCredential
@@ -585,7 +585,120 @@ func (s *Store) ResolveOAuthBearerCredential(ctx context.Context, providerInstan
 		}
 		return credentials.ResolvedOAuthBearerCredential{}, err
 	}
+	routing := credentials.ParseChatGPTRoutingClaims(out.BearerToken)
+	out.ChatGPTAccountID = routing.AccountID
+	out.ChatGPTAccountIsFedRAMP = routing.FedRAMP
 	return out, nil
+}
+
+func (s *Store) ResolveOAuthBearerCredentials(ctx context.Context, providerInstanceID string, now time.Time) ([]credentials.ResolvedOAuthBearerCredential, error) {
+	rows, err := s.DB.QueryContext(ctx, `
+		SELECT pc.id, pc.provider_instance_id, pc.fallback_group, ot.access_token_secret_id, ot.expires_at
+		FROM provider_credentials pc
+		LEFT JOIN oauth_tokens ot ON ot.credential_id = pc.id
+		WHERE pc.provider_instance_id = ?
+			AND pc.kind = 'oauth'
+			AND pc.disabled_at IS NULL
+		ORDER BY pc.id ASC
+	`, providerInstanceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var candidates []oauthBearerRow
+	for rows.Next() {
+		var row oauthBearerRow
+		if err := rows.Scan(&row.credential.ID, &row.credential.ProviderInstanceID, &row.fallback, &row.accessSecret, &row.expires); err != nil {
+			return nil, err
+		}
+		row.credential.FallbackGroup = row.fallback
+		candidates = append(candidates, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(candidates) == 0 {
+		return nil, credentials.ErrNoEligibleCredential
+	}
+	primary, ok, err := s.materializeOAuthBearer(ctx, candidates[0], now, false)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, credentials.ErrNoEligibleCredential
+	}
+	group := primary.FallbackGroup
+	enabled, err := s.fallbackGroupEnabled(ctx, providerInstanceID, credentials.CredentialKindOAuth, group)
+	if err != nil {
+		return nil, err
+	}
+	if !enabled {
+		return []credentials.ResolvedOAuthBearerCredential{primary}, nil
+	}
+	out := []credentials.ResolvedOAuthBearerCredential{primary}
+	for _, row := range candidates[1:] {
+		if row.fallback != group {
+			continue
+		}
+		credential, ok, err := s.materializeOAuthBearer(ctx, row, now, true)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			out = append(out, credential)
+		}
+	}
+	return out, nil
+}
+
+type oauthBearerRow struct {
+	credential   credentials.ResolvedOAuthBearerCredential
+	fallback     string
+	accessSecret sql.NullInt64
+	expires      sql.NullString
+}
+
+func (s *Store) materializeOAuthBearer(ctx context.Context, row oauthBearerRow, now time.Time, skipIneligible bool) (credentials.ResolvedOAuthBearerCredential, bool, error) {
+	credential := row.credential
+	if !row.accessSecret.Valid {
+		if skipIneligible {
+			return credentials.ResolvedOAuthBearerCredential{}, false, nil
+		}
+		return credentials.ResolvedOAuthBearerCredential{}, false, nil
+	}
+	if row.expires.Valid {
+		expiresAt, err := time.Parse(time.RFC3339Nano, row.expires.String)
+		if err != nil {
+			return credentials.ResolvedOAuthBearerCredential{}, false, err
+		}
+		expiresAt = expiresAt.UTC()
+		if !expiresAt.After(now.UTC()) {
+			if skipIneligible {
+				return credentials.ResolvedOAuthBearerCredential{}, false, nil
+			}
+			return credentials.ResolvedOAuthBearerCredential{}, false, nil
+		}
+		credential.ExpiresAt = &expiresAt
+	}
+	if err := s.DB.QueryRowContext(ctx, `
+		SELECT secret_material
+		FROM credential_secrets
+		WHERE id = ?
+			AND credential_id = ?
+			AND secret_kind = 'oauth_access'
+	`, row.accessSecret.Int64, credential.ID).Scan(&credential.BearerToken); err != nil {
+		if errors.Is(err, sql.ErrNoRows) && skipIneligible {
+			return credentials.ResolvedOAuthBearerCredential{}, false, nil
+		}
+		if errors.Is(err, sql.ErrNoRows) {
+			return credentials.ResolvedOAuthBearerCredential{}, false, nil
+		}
+		return credentials.ResolvedOAuthBearerCredential{}, false, err
+	}
+	routing := credentials.ParseChatGPTRoutingClaims(credential.BearerToken)
+	credential.ChatGPTAccountID = routing.AccountID
+	credential.ChatGPTAccountIsFedRAMP = routing.FedRAMP
+	return credential, true, nil
 }
 
 func (s *Store) ResolveOAuthBearerCredentialByID(ctx context.Context, credentialID int64, now time.Time) (credentials.ResolvedOAuthBearerCredential, error) {
@@ -593,7 +706,7 @@ func (s *Store) ResolveOAuthBearerCredentialByID(ctx context.Context, credential
 	var accessSecretID int64
 	var expires sql.NullString
 	err := s.DB.QueryRowContext(ctx, `
-		SELECT pc.id, pc.provider_instance_id, ot.access_token_secret_id, ot.expires_at
+		SELECT pc.id, pc.provider_instance_id, pc.fallback_group, ot.access_token_secret_id, ot.expires_at
 		FROM provider_credentials pc
 		JOIN oauth_tokens ot ON ot.credential_id = pc.id
 		JOIN credential_secrets access_secret
@@ -604,7 +717,7 @@ func (s *Store) ResolveOAuthBearerCredentialByID(ctx context.Context, credential
 			AND pc.kind = 'oauth'
 			AND pc.disabled_at IS NULL
 			AND ot.access_token_secret_id IS NOT NULL
-	`, credentialID).Scan(&out.ID, &out.ProviderInstanceID, &accessSecretID, &expires)
+	`, credentialID).Scan(&out.ID, &out.ProviderInstanceID, &out.FallbackGroup, &accessSecretID, &expires)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return credentials.ResolvedOAuthBearerCredential{}, credentials.ErrNoEligibleCredential
@@ -640,6 +753,9 @@ func (s *Store) ResolveOAuthBearerCredentialByID(ctx context.Context, credential
 		}
 		return credentials.ResolvedOAuthBearerCredential{}, err
 	}
+	routing := credentials.ParseChatGPTRoutingClaims(out.BearerToken)
+	out.ChatGPTAccountID = routing.AccountID
+	out.ChatGPTAccountIsFedRAMP = routing.FedRAMP
 	return out, nil
 }
 
@@ -808,19 +924,20 @@ func updateCredentialSecret(ctx context.Context, tx *sql.Tx, credentialID, secre
 
 func (s *Store) ListFallbackPolicies(ctx context.Context) ([]credentials.FallbackPolicyMetadata, error) {
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT groups.provider_instance_id, groups.group_label,
+		SELECT groups.provider_instance_id, groups.credential_kind, groups.group_label,
 			COALESCE(p.enabled, 0), groups.credential_count, p.id IS NOT NULL
 		FROM (
-			SELECT provider_instance_id, fallback_group AS group_label, COUNT(*) AS credential_count
+			SELECT provider_instance_id, kind AS credential_kind, fallback_group AS group_label, COUNT(*) AS credential_count
 			FROM provider_credentials
-			WHERE kind = 'api_key'
+			WHERE kind IN ('api_key', 'oauth')
 				AND disabled_at IS NULL
-			GROUP BY provider_instance_id, fallback_group
+			GROUP BY provider_instance_id, kind, fallback_group
 		) groups
 		LEFT JOIN credential_fallback_policies p
 			ON p.provider_instance_id = groups.provider_instance_id
+			AND p.credential_kind = groups.credential_kind
 			AND p.group_label = groups.group_label
-		ORDER BY groups.provider_instance_id ASC, groups.group_label ASC
+		ORDER BY groups.provider_instance_id ASC, groups.credential_kind ASC, groups.group_label ASC
 	`)
 	if err != nil {
 		return nil, err
@@ -830,7 +947,7 @@ func (s *Store) ListFallbackPolicies(ctx context.Context) ([]credentials.Fallbac
 	for rows.Next() {
 		var row credentials.FallbackPolicyMetadata
 		var enabled, explicit int
-		if err := rows.Scan(&row.ProviderInstanceID, &row.GroupLabel, &enabled, &row.CredentialCount, &explicit); err != nil {
+		if err := rows.Scan(&row.ProviderInstanceID, &row.CredentialKind, &row.GroupLabel, &enabled, &row.CredentialCount, &explicit); err != nil {
 			return nil, err
 		}
 		row.Enabled = enabled == 1
@@ -840,28 +957,28 @@ func (s *Store) ListFallbackPolicies(ctx context.Context) ([]credentials.Fallbac
 	return out, rows.Err()
 }
 
-func (s *Store) SetFallbackGroupEnabled(ctx context.Context, providerInstanceID, groupLabel string, enabled bool, now time.Time) error {
+func (s *Store) SetFallbackGroupEnabled(ctx context.Context, providerInstanceID, credentialKind, groupLabel string, enabled bool, now time.Time) error {
 	enabledInt := 0
 	if enabled {
 		enabledInt = 1
 	}
 	ts := now.UTC().Format(time.RFC3339Nano)
 	_, err := s.DB.ExecContext(ctx, `
-		INSERT INTO credential_fallback_policies(provider_instance_id, group_label, enabled, created_at, updated_at)
-		VALUES(?, ?, ?, ?, ?)
-		ON CONFLICT(provider_instance_id, group_label)
+		INSERT INTO credential_fallback_policies(provider_instance_id, credential_kind, group_label, enabled, created_at, updated_at)
+		VALUES(?, ?, ?, ?, ?, ?)
+		ON CONFLICT(provider_instance_id, credential_kind, group_label)
 		DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at
-	`, providerInstanceID, groupLabel, enabledInt, ts, ts)
+	`, providerInstanceID, credentialKind, groupLabel, enabledInt, ts, ts)
 	return err
 }
 
-func (s *Store) fallbackGroupEnabled(ctx context.Context, providerInstanceID, groupLabel string) (bool, error) {
+func (s *Store) fallbackGroupEnabled(ctx context.Context, providerInstanceID, credentialKind, groupLabel string) (bool, error) {
 	var enabled int
 	err := s.DB.QueryRowContext(ctx, `
 		SELECT enabled
 		FROM credential_fallback_policies
-		WHERE provider_instance_id = ? AND group_label = ?
-	`, providerInstanceID, groupLabel).Scan(&enabled)
+		WHERE provider_instance_id = ? AND credential_kind = ? AND group_label = ?
+	`, providerInstanceID, credentialKind, groupLabel).Scan(&enabled)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, nil

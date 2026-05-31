@@ -80,6 +80,7 @@ func exerciseManagementSnapshotTUIReload(ctx context.Context) error {
 		}},
 		FallbackPolicies: []management.FallbackPolicy{{
 			ProviderInstanceID: "snapshot-provider",
+			CredentialKind:     credentials.CredentialKindAPIKey,
 			GroupLabel:         "snapshot policy group",
 			Enabled:            true,
 			CredentialCount:    2,
@@ -359,7 +360,7 @@ func exerciseManagementSnapshotHTTPRoute(ctx context.Context, homeDir, configPat
 	if err != nil {
 		return err
 	}
-	if err := upstreams.EnableFallbackGroup(ctx, apiProviderID, credentials.DefaultFallbackGroup); err != nil {
+	if err := upstreams.EnableFallbackGroup(ctx, apiProviderID, credentials.CredentialKindAPIKey, credentials.DefaultFallbackGroup); err != nil {
 		return err
 	}
 	expiresAt := now.Add(time.Hour)
@@ -543,10 +544,10 @@ func (inertUpstreams) ListFallbackPolicies(context.Context) ([]credentials.Fallb
 	return nil, fmt.Errorf("direct fallback list should not be used")
 }
 func (inertUpstreams) Disable(context.Context, int64) error { return fmt.Errorf("not used") }
-func (inertUpstreams) EnableFallbackGroup(context.Context, string, string) error {
+func (inertUpstreams) EnableFallbackGroup(context.Context, string, string, string) error {
 	return fmt.Errorf("not used")
 }
-func (inertUpstreams) DisableFallbackGroup(context.Context, string, string) error {
+func (inertUpstreams) DisableFallbackGroup(context.Context, string, string, string) error {
 	return fmt.Errorf("not used")
 }
 
@@ -628,6 +629,7 @@ func (s sanitizeUpstreams) List(context.Context) ([]credentials.UpstreamCredenti
 func (s sanitizeUpstreams) ListFallbackPolicies(context.Context) ([]credentials.FallbackPolicyMetadata, error) {
 	return []credentials.FallbackPolicyMetadata{{
 		ProviderInstanceID: "deepseek",
+		CredentialKind:     credentials.CredentialKindAPIKey,
 		GroupLabel:         "tool argument marker",
 		Enabled:            true,
 		CredentialCount:    2,

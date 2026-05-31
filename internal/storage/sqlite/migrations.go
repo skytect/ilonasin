@@ -217,6 +217,25 @@ var migrations = []migration{
 			UNIQUE(provider_instance_id, group_label)
 		)`),
 	}},
+	{version: 4, name: "credential_fallback_policy_kind", steps: []migrationStep{
+		sqlStep(`CREATE TABLE IF NOT EXISTS credential_fallback_policies_new (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			provider_instance_id TEXT NOT NULL,
+			credential_kind TEXT NOT NULL DEFAULT 'api_key',
+			group_label TEXT NOT NULL,
+			enabled INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			UNIQUE(provider_instance_id, credential_kind, group_label)
+		)`),
+		sqlStep(`INSERT OR IGNORE INTO credential_fallback_policies_new(
+				id, provider_instance_id, credential_kind, group_label, enabled, created_at, updated_at
+			)
+			SELECT id, provider_instance_id, 'api_key', group_label, enabled, created_at, updated_at
+			FROM credential_fallback_policies`),
+		sqlStep(`DROP TABLE credential_fallback_policies`),
+		sqlStep(`ALTER TABLE credential_fallback_policies_new RENAME TO credential_fallback_policies`),
+	}},
 }
 
 func sqlSteps(stmts []string) []migrationStep {

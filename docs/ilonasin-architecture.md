@@ -304,6 +304,13 @@ Do not store:
 
 Metadata-only telemetry is allowed and expected.
 
+Full upstream account IDs may be derived transiently from credential secrets
+when building outbound provider routing headers. They must not be stored
+separately, logged, rendered, exposed in management snapshots, written to
+request metadata, or stored in normal metadata tables. All observable account
+references should use local credential IDs, safe display labels, or one-way
+account hashes.
+
 Telemetry fields may include:
 
 - timestamp,

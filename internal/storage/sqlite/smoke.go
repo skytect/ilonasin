@@ -36,11 +36,11 @@ func RunMigrationSmokeCheck(ctx context.Context) error {
 	defer os.RemoveAll(root)
 
 	cases := []migrationSmokeCase{
-		{name: "fresh", setup: setupFreshMigrationSmoke, wantVersions: []int{1, 2, 3}},
-		{name: "version1", setup: setupHistoricalMigrationSmoke(1), wantVersions: []int{1, 2, 3}, wantSentinels: true},
-		{name: "version2", setup: setupHistoricalMigrationSmoke(2), wantVersions: []int{1, 2, 3}, wantSentinels: true},
-		{name: "version3", setup: setupHistoricalMigrationSmoke(3), wantVersions: []int{1, 2, 3}, wantSentinels: true},
-		{name: "drifted-version1", setup: setupDriftedVersion1MigrationSmoke, wantVersions: []int{1, 2, 3}, wantSentinels: true},
+		{name: "fresh", setup: setupFreshMigrationSmoke, wantVersions: []int{1, 2, 3, 4}},
+		{name: "version1", setup: setupHistoricalMigrationSmoke(1), wantVersions: []int{1, 2, 3, 4}, wantSentinels: true},
+		{name: "version2", setup: setupHistoricalMigrationSmoke(2), wantVersions: []int{1, 2, 3, 4}, wantSentinels: true},
+		{name: "version3", setup: setupHistoricalMigrationSmoke(3), wantVersions: []int{1, 2, 3, 4}, wantSentinels: true},
+		{name: "drifted-version1", setup: setupDriftedVersion1MigrationSmoke, wantVersions: []int{1, 2, 3, 4}, wantSentinels: true},
 	}
 	for _, tc := range cases {
 		path := filepath.Join(root, tc.name+".sqlite")
@@ -220,6 +220,7 @@ func assertMigrationSmokeState(ctx context.Context, store *Store, tc migrationSm
 		{table: "provider_credentials", column: "secret_prefix", notNull: true, defaultValue: "''"},
 		{table: "provider_credentials", column: "secret_last4", notNull: true, defaultValue: "''"},
 		{table: "provider_credentials", column: "fallback_group", notNull: true, defaultValue: "'default'"},
+		{table: "credential_fallback_policies", column: "credential_kind", notNull: true, defaultValue: "'api_key'"},
 		{table: "oauth_tokens", column: "last_refresh_at"},
 		{table: "oauth_tokens", column: "refresh_failure_class"},
 		{table: "request_metadata", column: "retry_count", notNull: true, defaultValue: "0"},
@@ -542,7 +543,7 @@ func exerciseMigratedStore(ctx context.Context, store *Store, suffix string) err
 	}); err != nil {
 		return err
 	}
-	if err := store.SetFallbackGroupEnabled(ctx, "deepseek", credentials.DefaultFallbackGroup, true, now); err != nil {
+	if err := store.SetFallbackGroupEnabled(ctx, "deepseek", credentials.CredentialKindAPIKey, credentials.DefaultFallbackGroup, true, now); err != nil {
 		return err
 	}
 	policies, err := store.ListFallbackPolicies(ctx)
@@ -596,7 +597,7 @@ func assertMigrationSmokeSecrets(ctx context.Context, db *sql.DB) error {
 		{"request_metadata", []string{"requested_provider_instance", "requested_model", "resolved_provider_instance", "resolved_model", "error_class", "fallback_reason"}},
 		{"health_events", []string{"provider_instance_id", "model_id", "event_class", "normalized_error_class", "refresh_failure_class"}},
 		{"fallback_events", []string{"provider_instance_id", "model_id", "reason"}},
-		{"credential_fallback_policies", []string{"provider_instance_id", "group_label"}},
+		{"credential_fallback_policies", []string{"provider_instance_id", "credential_kind", "group_label"}},
 	}
 	for _, table := range tables {
 		for _, column := range table.columns {

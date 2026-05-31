@@ -26,10 +26,11 @@ type ModelDiscoverers interface {
 }
 
 type ChatRequest struct {
-	Instance      Instance
-	UpstreamModel string
-	Request       openai.ChatCompletionRequest
-	Credential    ChatCredential
+	Instance        Instance
+	UpstreamModel   string
+	Request         openai.ChatCompletionRequest
+	Credential      ChatCredential
+	ModelCredential BearerCredential
 }
 
 type ModelRequest struct {
@@ -68,17 +69,21 @@ const (
 )
 
 type BearerCredential struct {
-	ID                 int64
-	ProviderInstanceID string
-	Kind               CredentialKind
-	BearerToken        string
+	ID                      int64
+	ProviderInstanceID      string
+	Kind                    CredentialKind
+	BearerToken             string
+	ChatGPTAccountID        string
+	ChatGPTAccountIsFedRAMP bool
 }
 
 type ChatCredential struct {
-	ID                 int64
-	ProviderInstanceID string
-	Kind               CredentialKind
-	BearerToken        string
+	ID                      int64
+	ProviderInstanceID      string
+	Kind                    CredentialKind
+	BearerToken             string
+	ChatGPTAccountID        string
+	ChatGPTAccountIsFedRAMP bool
 }
 
 type ChatResult struct {

@@ -26,7 +26,11 @@ func (a HTTPChatAdapter) ListModels(ctx context.Context, req ModelRequest) (Mode
 	if err != nil {
 		return ModelResult{ErrorClass: "upstream_request_error"}, err
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+req.Credential.BearerToken)
+	if req.Instance.Type == "codex" {
+		addCodexRequestHeaders(httpReq, req.Credential.BearerToken, req.Credential.ChatGPTAccountID, req.Credential.ChatGPTAccountIsFedRAMP)
+	} else {
+		httpReq.Header.Set("Authorization", "Bearer "+req.Credential.BearerToken)
+	}
 	httpReq.Header.Set("Accept", "application/json")
 	resp, err := a.Client.Do(httpReq)
 	if err != nil {
@@ -141,12 +145,15 @@ func modelsURL(instance Instance) (string, error) {
 		return "", err
 	}
 	q := u.Query()
-	q.Set("client_version", "ilonasin")
+	q.Set("client_version", CodexClientVersion)
 	u.RawQuery = q.Encode()
 	return u.String(), nil
 }
 
 func normalizeModels(instance Instance, body []byte) ([]ModelMetadata, error) {
+	if instance.Type == "codex" {
+		return normalizeCodexModels(instance, body)
+	}
 	var resp struct {
 		Data []map[string]any `json:"data"`
 	}
@@ -189,6 +196,52 @@ func normalizeModels(instance Instance, body []byte) ([]ModelMetadata, error) {
 	}
 	if len(models) == 0 {
 		return nil, errors.New("upstream models list is empty")
+	}
+	sort.Slice(models, func(i, j int) bool {
+		return models[i].ModelID < models[j].ModelID
+	})
+	return models, nil
+}
+
+func normalizeCodexModels(instance Instance, body []byte) ([]ModelMetadata, error) {
+	// Mirrors OpenAI Codex rust-v0.135.0:
+	// codex-rs/codex-api/src/endpoint/models.rs decodes ModelsResponse,
+	// whose envelope is protocol/src/openai_models.rs ModelsResponse { models }.
+	var resp struct {
+		Models []map[string]any `json:"models"`
+	}
+	if err := jsonUnmarshal(body, &resp); err != nil {
+		return nil, err
+	}
+	if resp.Models == nil {
+		return nil, errors.New("upstream codex models list is missing")
+	}
+	now := time.Now().UTC()
+	models := make([]ModelMetadata, 0, len(resp.Models))
+	seen := map[string]bool{}
+	for _, item := range resp.Models {
+		id, _ := item["slug"].(string)
+		if !validProviderModelID(id) {
+			continue
+		}
+		if seen[id] {
+			return nil, fmt.Errorf("upstream models contains duplicate id")
+		}
+		seen[id] = true
+		meta := ModelMetadata{
+			ProviderInstanceID: instance.ID,
+			ModelID:            id,
+			CapabilityFlags:    "chat,reasoning,stream",
+			UpdatedAt:          now,
+		}
+		if name, ok := item["display_name"].(string); ok {
+			meta.DisplayName = safeDisplayName(name)
+		}
+		meta.ContextLength = safeInt(item["context_window"])
+		models = append(models, meta)
+	}
+	if len(models) == 0 {
+		return nil, errors.New("upstream codex models list is empty")
 	}
 	sort.Slice(models, func(i, j int) bool {
 		return models[i].ModelID < models[j].ModelID

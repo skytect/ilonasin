@@ -230,6 +230,9 @@ func ServeCheck(opts Options) error {
 	if err := exerciseCodexServeOAuthRefreshCheck(context.Background(), rt.Config, fakeUpstream); err != nil {
 		return fmt.Errorf("codex serve oauth refresh check: %w", err)
 	}
+	if err := exerciseCodexAccountPoolingCheck(context.Background(), rt.Config, fakeUpstream); err != nil {
+		return fmt.Errorf("codex account pooling check: %w", err)
+	}
 	for _, instance := range instances {
 		if _, err := upstreamService.AddAPIKey(context.Background(), instance.ID, "serve-check-adapter", "sk-serve-check-adapter"); err != nil {
 			return err

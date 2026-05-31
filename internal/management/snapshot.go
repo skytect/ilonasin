@@ -64,6 +64,7 @@ type UpstreamCredential struct {
 
 type FallbackPolicy struct {
 	ProviderInstanceID string `json:"provider_instance_id"`
+	CredentialKind     string `json:"credential_kind"`
 	GroupLabel         string `json:"group_label"`
 	Enabled            bool   `json:"enabled"`
 	CredentialCount    int    `json:"credential_count"`
@@ -465,14 +466,30 @@ func visibleUpstreamCredentials(rows []credentials.UpstreamCredentialMetadata, r
 }
 
 func visibleFallbackPolicies(rows []credentials.FallbackPolicyMetadata, registry provider.Registry) []credentials.FallbackPolicyMetadata {
-	allowed := apiKeyProviderIDs(registry)
+	allowed := fallbackPolicyProviderKinds(registry)
 	out := rows[:0]
 	for _, row := range rows {
-		if allowed[row.ProviderInstanceID] && row.CredentialCount >= 2 {
+		if allowed[row.ProviderInstanceID][row.CredentialKind] && row.CredentialCount >= 2 {
 			out = append(out, row)
 		}
 	}
 	return out
+}
+
+func fallbackPolicyProviderKinds(registry provider.Registry) map[string]map[string]bool {
+	allowed := map[string]map[string]bool{}
+	for _, instance := range registry.List() {
+		if instance.APIKey && !instance.Placeholder {
+			allowed[instance.ID] = map[string]bool{credentials.CredentialKindAPIKey: true}
+		}
+		if instance.OAuth && instance.Type == "codex" {
+			if allowed[instance.ID] == nil {
+				allowed[instance.ID] = map[string]bool{}
+			}
+			allowed[instance.ID][credentials.CredentialKindOAuth] = true
+		}
+	}
+	return allowed
 }
 
 func apiKeyProviderIDs(registry provider.Registry) map[string]bool {
@@ -541,6 +558,7 @@ func fallbackPoliciesFromCredentials(rows []credentials.FallbackPolicyMetadata) 
 	for _, row := range rows {
 		out = append(out, FallbackPolicy{
 			ProviderInstanceID: row.ProviderInstanceID,
+			CredentialKind:     row.CredentialKind,
 			GroupLabel:         row.GroupLabel,
 			Enabled:            row.Enabled,
 			CredentialCount:    row.CredentialCount,

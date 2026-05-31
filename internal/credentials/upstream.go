@@ -31,13 +31,18 @@ var (
 
 const DefaultFallbackGroup = "default"
 
+const (
+	CredentialKindAPIKey = "api_key"
+	CredentialKindOAuth  = "oauth"
+)
+
 type UpstreamCredentialManager interface {
 	AddAPIKey(ctx context.Context, providerInstanceID, label, apiKey string) (UpstreamCredentialMetadata, error)
 	List(ctx context.Context) ([]UpstreamCredentialMetadata, error)
 	ListFallbackPolicies(ctx context.Context) ([]FallbackPolicyMetadata, error)
 	Disable(ctx context.Context, id int64) error
-	EnableFallbackGroup(ctx context.Context, providerInstanceID, groupLabel string) error
-	DisableFallbackGroup(ctx context.Context, providerInstanceID, groupLabel string) error
+	EnableFallbackGroup(ctx context.Context, providerInstanceID, credentialKind, groupLabel string) error
+	DisableFallbackGroup(ctx context.Context, providerInstanceID, credentialKind, groupLabel string) error
 }
 
 type UpstreamCredentialResolver interface {
@@ -47,6 +52,7 @@ type UpstreamCredentialResolver interface {
 
 type OAuthBearerResolver interface {
 	ResolveOAuthBearer(ctx context.Context, providerInstanceID string, now time.Time) (ResolvedOAuthBearerCredential, error)
+	ResolveOAuthBearers(ctx context.Context, providerInstanceID string, now time.Time) ([]ResolvedOAuthBearerCredential, error)
 }
 
 type OAuthProviderRefreshController interface {
@@ -63,13 +69,14 @@ type UpstreamCredentialRepository interface {
 	ResolveAPIKeyCredential(ctx context.Context, providerInstanceID string) (ResolvedAPIKeyCredential, error)
 	ResolveAPIKeyCredentials(ctx context.Context, providerInstanceID string) ([]ResolvedAPIKeyCredential, error)
 	ResolveOAuthBearerCredential(ctx context.Context, providerInstanceID string, now time.Time) (ResolvedOAuthBearerCredential, error)
+	ResolveOAuthBearerCredentials(ctx context.Context, providerInstanceID string, now time.Time) ([]ResolvedOAuthBearerCredential, error)
 	ResolveOAuthBearerCredentialByID(ctx context.Context, credentialID int64, now time.Time) (ResolvedOAuthBearerCredential, error)
 	ResolveOAuthRefreshCredential(ctx context.Context, credentialID int64) (ResolvedOAuthRefreshCredential, error)
 	ResolveOAuthRefreshCredentialForProvider(ctx context.Context, providerInstanceID string) (ResolvedOAuthRefreshCredential, error)
 	ResolveOAuthRefreshToken(ctx context.Context, credentialID, refreshSecretID int64) (string, error)
 	UpdateOAuthTokens(ctx context.Context, credentialID int64, update OAuthTokenUpdate) error
 	ListFallbackPolicies(ctx context.Context) ([]FallbackPolicyMetadata, error)
-	SetFallbackGroupEnabled(ctx context.Context, providerInstanceID, groupLabel string, enabled bool, now time.Time) error
+	SetFallbackGroupEnabled(ctx context.Context, providerInstanceID, credentialKind, groupLabel string, enabled bool, now time.Time) error
 	InsertOAuthCredential(ctx context.Context, meta NewOAuthCredential, accessToken, refreshToken string) (OAuthCredentialMetadata, error)
 	ListOAuthCredentials(ctx context.Context) ([]OAuthCredentialMetadata, error)
 	ListProviderAccounts(ctx context.Context) ([]ProviderAccountMetadata, error)
@@ -211,6 +218,7 @@ type ProviderAccountMetadata struct {
 
 type FallbackPolicyMetadata struct {
 	ProviderInstanceID string
+	CredentialKind     string
 	GroupLabel         string
 	Enabled            bool
 	CredentialCount    int
@@ -226,10 +234,13 @@ type ResolvedAPIKeyCredential struct {
 }
 
 type ResolvedOAuthBearerCredential struct {
-	ID                 int64
-	ProviderInstanceID string
-	BearerToken        string
-	ExpiresAt          *time.Time
+	ID                      int64
+	ProviderInstanceID      string
+	FallbackGroup           string
+	BearerToken             string
+	ChatGPTAccountID        string
+	ChatGPTAccountIsFedRAMP bool
+	ExpiresAt               *time.Time
 }
 
 type ResolvedOAuthRefreshCredential struct {
@@ -288,7 +299,7 @@ func (s *UpstreamService) AddAPIKey(ctx context.Context, providerInstanceID, lab
 	}
 	meta, err := s.Repo.InsertAPIKeyCredential(ctx, NewUpstreamCredential{
 		ProviderInstanceID: providerInstanceID,
-		Kind:               "api_key",
+		Kind:               CredentialKindAPIKey,
 		Label:              label,
 		SecretPrefix:       Prefix(apiKey),
 		SecretLast4:        Last4(apiKey),
@@ -369,18 +380,18 @@ func (s *UpstreamService) MarkOAuthRefreshFailure(ctx context.Context, credentia
 	return s.Repo.MarkOAuthRefreshFailure(ctx, credentialID, normalizeRefreshFailureClass(failureClass), s.now())
 }
 
-func (s *UpstreamService) EnableFallbackGroup(ctx context.Context, providerInstanceID, groupLabel string) error {
-	err := s.setFallbackGroup(ctx, providerInstanceID, groupLabel, true)
+func (s *UpstreamService) EnableFallbackGroup(ctx context.Context, providerInstanceID, credentialKind, groupLabel string) error {
+	err := s.setFallbackGroup(ctx, providerInstanceID, credentialKind, groupLabel, true)
 	if err == nil {
-		s.logInfo(ctx, "fallback_policy_changed", slog.String("provider_instance", providerInstanceID), slog.Bool("enabled", true))
+		s.logInfo(ctx, "fallback_policy_changed", slog.String("provider_instance", providerInstanceID), slog.String("credential_kind", credentialKind), slog.Bool("enabled", true))
 	}
 	return err
 }
 
-func (s *UpstreamService) DisableFallbackGroup(ctx context.Context, providerInstanceID, groupLabel string) error {
-	err := s.setFallbackGroup(ctx, providerInstanceID, groupLabel, false)
+func (s *UpstreamService) DisableFallbackGroup(ctx context.Context, providerInstanceID, credentialKind, groupLabel string) error {
+	err := s.setFallbackGroup(ctx, providerInstanceID, credentialKind, groupLabel, false)
 	if err == nil {
-		s.logInfo(ctx, "fallback_policy_changed", slog.String("provider_instance", providerInstanceID), slog.Bool("enabled", false))
+		s.logInfo(ctx, "fallback_policy_changed", slog.String("provider_instance", providerInstanceID), slog.String("credential_kind", credentialKind), slog.Bool("enabled", false))
 	}
 	return err
 }
@@ -412,13 +423,34 @@ func (s *UpstreamService) ResolveOAuthBearer(ctx context.Context, providerInstan
 	if !ok {
 		return ResolvedOAuthBearerCredential{}, ErrCredentialNotFound
 	}
-	if !instance.OAuth {
+	if !instance.OAuth || instance.Type != "codex" {
 		return ResolvedOAuthBearerCredential{}, fmt.Errorf("%w: provider %q does not support oauth credentials", ErrUnsupportedCredential, providerInstanceID)
 	}
 	if now.IsZero() {
 		now = s.now()
 	}
 	return s.Repo.ResolveOAuthBearerCredential(ctx, providerInstanceID, now.UTC())
+}
+
+func (s *UpstreamService) ResolveOAuthBearers(ctx context.Context, providerInstanceID string, now time.Time) ([]ResolvedOAuthBearerCredential, error) {
+	instance, ok := s.Registry.Get(providerInstanceID)
+	if !ok {
+		return nil, ErrCredentialNotFound
+	}
+	if !instance.OAuth || instance.Type != "codex" {
+		return nil, fmt.Errorf("%w: provider %q does not support oauth credential pooling", ErrUnsupportedCredential, providerInstanceID)
+	}
+	if now.IsZero() {
+		now = s.now()
+	}
+	out, err := s.Repo.ResolveOAuthBearerCredentials(ctx, providerInstanceID, now.UTC())
+	if err != nil {
+		return nil, err
+	}
+	if !instance.CodexAccountPooling && len(out) > 1 {
+		return out[:1], nil
+	}
+	return out, nil
 }
 
 func (s *UpstreamService) ResolveOAuthBearerByID(ctx context.Context, credentialID int64, now time.Time) (ResolvedOAuthBearerCredential, error) {
@@ -757,6 +789,37 @@ type chatGPTIDTokenClaims struct {
 	PlanLabel string
 }
 
+type ChatGPTRoutingClaims struct {
+	AccountID string
+	FedRAMP   bool
+}
+
+func ParseChatGPTRoutingClaims(jwt string) ChatGPTRoutingClaims {
+	parts := strings.Split(jwt, ".")
+	if len(parts) != 3 || parts[1] == "" {
+		return ChatGPTRoutingClaims{}
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return ChatGPTRoutingClaims{}
+	}
+	// Best-effort compatibility only. Codex stores TokenData.account_id
+	// separately and uses it as the durable ChatGPT-Account-ID source.
+	var claims struct {
+		Auth struct {
+			AccountID string `json:"chatgpt_account_id"`
+			FedRAMP   bool   `json:"chatgpt_account_is_fedramp"`
+		} `json:"https://api.openai.com/auth"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return ChatGPTRoutingClaims{}
+	}
+	return ChatGPTRoutingClaims{
+		AccountID: strings.TrimSpace(claims.Auth.AccountID),
+		FedRAMP:   claims.Auth.FedRAMP,
+	}
+}
+
 func parseChatGPTIDTokenClaims(jwt string) (chatGPTIDTokenClaims, error) {
 	parts := strings.Split(jwt, ".")
 	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
@@ -961,7 +1024,7 @@ func normalizeRefreshFailureClass(value string) string {
 	}
 }
 
-func (s *UpstreamService) setFallbackGroup(ctx context.Context, providerInstanceID, groupLabel string, enabled bool) error {
+func (s *UpstreamService) setFallbackGroup(ctx context.Context, providerInstanceID, credentialKind, groupLabel string, enabled bool) error {
 	if groupLabel == "" {
 		groupLabel = DefaultFallbackGroup
 	}
@@ -969,10 +1032,19 @@ func (s *UpstreamService) setFallbackGroup(ctx context.Context, providerInstance
 	if !ok {
 		return ErrCredentialNotFound
 	}
-	if !instance.APIKey || instance.Placeholder {
-		return fmt.Errorf("%w: provider %q does not support api-key credentials", ErrUnsupportedCredential, providerInstanceID)
+	switch credentialKind {
+	case CredentialKindAPIKey:
+		if !instance.APIKey || instance.Placeholder {
+			return fmt.Errorf("%w: provider %q does not support api-key fallback groups", ErrUnsupportedCredential, providerInstanceID)
+		}
+	case CredentialKindOAuth:
+		if !instance.OAuth || instance.Type != "codex" {
+			return fmt.Errorf("%w: provider %q does not support oauth fallback groups", ErrUnsupportedCredential, providerInstanceID)
+		}
+	default:
+		return fmt.Errorf("%w: provider %q does not support fallback groups", ErrUnsupportedCredential, providerInstanceID)
 	}
-	return s.Repo.SetFallbackGroupEnabled(ctx, providerInstanceID, groupLabel, enabled, s.now())
+	return s.Repo.SetFallbackGroupEnabled(ctx, providerInstanceID, credentialKind, groupLabel, enabled, s.now())
 }
 
 func (s *UpstreamService) now() time.Time {

@@ -94,10 +94,10 @@ func exerciseFallbackPolicyCheck(ctx context.Context, registry provider.Registry
 			}
 		}
 	}
-	if err := store.SetFallbackGroupEnabled(ctx, "stale-provider", "raw-provider-payload prompt marker", true, time.Now()); err != nil {
+	if err := store.SetFallbackGroupEnabled(ctx, "stale-provider", credentials.CredentialKindAPIKey, "raw-provider-payload prompt marker", true, time.Now()); err != nil {
 		return fmt.Errorf("seed stale fallback policy: %w", err)
 	}
-	if err := store.SetFallbackGroupEnabled(ctx, "codex", "raw-provider-payload prompt marker", true, time.Now()); err != nil {
+	if err := store.SetFallbackGroupEnabled(ctx, "codex", credentials.CredentialKindAPIKey, "raw-provider-payload prompt marker", true, time.Now()); err != nil {
 		return fmt.Errorf("seed placeholder fallback policy: %w", err)
 	}
 	beforeProtected, err := fallbackPolicyProtectedSnapshot(ctx, store, configPath)
@@ -129,8 +129,8 @@ func exerciseFallbackPolicyCheck(ctx context.Context, registry provider.Registry
 	if err := store.DB.QueryRowContext(ctx, `
 		SELECT enabled
 		FROM credential_fallback_policies
-		WHERE provider_instance_id = ? AND group_label = ?
-	`, instance.ID, credentials.DefaultFallbackGroup).Scan(&enabled); err != nil {
+		WHERE provider_instance_id = ? AND credential_kind = ? AND group_label = ?
+	`, instance.ID, credentials.CredentialKindAPIKey, credentials.DefaultFallbackGroup).Scan(&enabled); err != nil {
 		return err
 	}
 	if enabled != 0 {
@@ -140,13 +140,40 @@ func exerciseFallbackPolicyCheck(ctx context.Context, registry provider.Registry
 		if err := store.DB.QueryRowContext(ctx, `
 			SELECT enabled
 			FROM credential_fallback_policies
-			WHERE provider_instance_id = ? AND group_label = ?
-		`, providerID, "raw-provider-payload prompt marker").Scan(&enabled); err != nil {
+			WHERE provider_instance_id = ? AND credential_kind = ? AND group_label = ?
+		`, providerID, credentials.CredentialKindAPIKey, "raw-provider-payload prompt marker").Scan(&enabled); err != nil {
 			return err
 		}
 		if enabled != 1 {
 			return fmt.Errorf("ignored fallback policy toggled")
 		}
+	}
+	for _, candidate := range registry.List() {
+		if candidate.Type != "codex" || !candidate.OAuth {
+			continue
+		}
+		if _, err := service.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+			ProviderInstanceID: candidate.ID,
+			Label:              "codex oauth fallback policy primary",
+			AccessToken:        "oauth-fallback-policy-primary",
+			RefreshToken:       "oauth-fallback-policy-refresh-primary",
+			AccountID:          "codex-fallback-policy-primary",
+		}); err != nil {
+			return fmt.Errorf("seed codex oauth fallback policy primary: %w", err)
+		}
+		if _, err := service.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+			ProviderInstanceID: candidate.ID,
+			Label:              "codex oauth fallback policy secondary",
+			AccessToken:        "oauth-fallback-policy-secondary",
+			RefreshToken:       "oauth-fallback-policy-refresh-secondary",
+			AccountID:          "codex-fallback-policy-secondary",
+		}); err != nil {
+			return fmt.Errorf("seed codex oauth fallback policy secondary: %w", err)
+		}
+		if err := tui.ExerciseOAuthFallbackPolicySummary(ctx, cfg, registry, service); err != nil {
+			return err
+		}
+		break
 	}
 	return nil
 }
@@ -1110,7 +1137,7 @@ func exerciseTelemetryPruneCheck(ctx context.Context, registry provider.Registry
 	if err != nil {
 		return fmt.Errorf("seed prune secondary credential: %w", err)
 	}
-	if err := upstreams.EnableFallbackGroup(ctx, "deepseek", credentials.DefaultFallbackGroup); err != nil {
+	if err := upstreams.EnableFallbackGroup(ctx, "deepseek", credentials.CredentialKindAPIKey, credentials.DefaultFallbackGroup); err != nil {
 		return fmt.Errorf("seed prune fallback policy: %w", err)
 	}
 	expiresAt := time.Date(2026, 5, 30, 13, 0, 0, 0, time.UTC)
@@ -1351,7 +1378,7 @@ func oauthMarkerQueries(includeSecrets bool) []string {
 		`SELECT COUNT(*) FROM provider_credentials WHERE provider_instance_id || kind || label || secret_prefix || secret_last4 || fallback_group LIKE ?`,
 		`SELECT COUNT(*) FROM oauth_tokens WHERE scopes || COALESCE(expires_at, '') || COALESCE(last_refresh_at, '') || COALESCE(refresh_failure_class, '') LIKE ?`,
 		`SELECT COUNT(*) FROM provider_accounts WHERE provider_instance_id || account_hash || display_label || plan_label LIKE ?`,
-		`SELECT COUNT(*) FROM credential_fallback_policies WHERE provider_instance_id || group_label LIKE ?`,
+		`SELECT COUNT(*) FROM credential_fallback_policies WHERE provider_instance_id || credential_kind || group_label LIKE ?`,
 		`SELECT COUNT(*) FROM request_metadata WHERE started_at || requested_provider_instance || requested_model || resolved_provider_instance || resolved_model || error_class || fallback_reason LIKE ?`,
 		`SELECT COUNT(*) FROM stream_metrics WHERE completion_status LIKE ?`,
 		`SELECT COUNT(*) FROM health_events WHERE occurred_at || provider_instance_id || model_id || event_class || COALESCE(normalized_error_class, '') || COALESCE(retry_after, '') || COALESCE(token_expires_at, '') || refresh_failure_class LIKE ?`,

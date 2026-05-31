@@ -475,7 +475,7 @@ func ExerciseFallbackPolicyLifecycle(ctx context.Context, cfg config.Config, reg
 	}
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
 	m := updated.(Model)
-	if !fallbackPolicyEnabled(m.fallbackPolicies, instance.ID, credentials.DefaultFallbackGroup) {
+	if !fallbackPolicyEnabled(m.fallbackPolicies, instance.ID, credentials.CredentialKindAPIKey, credentials.DefaultFallbackGroup) {
 		return fmt.Errorf("fallback policy enable did not update view")
 	}
 	resolved, err = resolver.ResolveAPIKeys(ctx, instance.ID)
@@ -487,7 +487,7 @@ func ExerciseFallbackPolicyLifecycle(ctx context.Context, cfg config.Config, reg
 	}
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'F'}})
 	m = updated.(Model)
-	if fallbackPolicyEnabled(m.fallbackPolicies, instance.ID, credentials.DefaultFallbackGroup) {
+	if fallbackPolicyEnabled(m.fallbackPolicies, instance.ID, credentials.CredentialKindAPIKey, credentials.DefaultFallbackGroup) {
 		return fmt.Errorf("fallback policy disable did not update view")
 	}
 	resolved, err = resolver.ResolveAPIKeys(ctx, instance.ID)
@@ -511,6 +511,36 @@ func ExerciseFallbackPolicyLifecycle(ctx context.Context, cfg config.Config, reg
 	return nil
 }
 
+func ExerciseOAuthFallbackPolicySummary(ctx context.Context, cfg config.Config, registry provider.Registry, upstreams credentials.UpstreamCredentialManager) error {
+	codexID := ""
+	for _, instance := range registry.List() {
+		if instance.Type == "codex" && instance.OAuth {
+			codexID = instance.ID
+			break
+		}
+	}
+	if codexID == "" {
+		return nil
+	}
+	model := newCheckModel(cfg, registry, nil, upstreams, nil, nil, nil, nil, nil, nil, nil)
+	_ = model.reload()
+	view := model.View()
+	if !strings.Contains(view, codexID+" default disabled credentials 2") {
+		return fmt.Errorf("codex oauth fallback policy summary missing")
+	}
+	for _, forbidden := range []string{
+		"oauth-fallback-policy",
+		"codex-fallback-policy",
+		"refresh-primary",
+		"refresh-secondary",
+	} {
+		if strings.Contains(view, forbidden) {
+			return fmt.Errorf("codex oauth fallback policy summary leaked forbidden marker")
+		}
+	}
+	return nil
+}
+
 type failingFallbackPolicyManager struct{}
 
 func (failingFallbackPolicyManager) AddAPIKey(context.Context, string, string, string) (credentials.UpstreamCredentialMetadata, error) {
@@ -524,6 +554,7 @@ func (failingFallbackPolicyManager) List(context.Context) ([]credentials.Upstrea
 func (failingFallbackPolicyManager) ListFallbackPolicies(context.Context) ([]credentials.FallbackPolicyMetadata, error) {
 	return []credentials.FallbackPolicyMetadata{{
 		ProviderInstanceID: "deepseek",
+		CredentialKind:     credentials.CredentialKindAPIKey,
 		GroupLabel:         credentials.DefaultFallbackGroup,
 		CredentialCount:    2,
 	}}, nil
@@ -533,11 +564,11 @@ func (failingFallbackPolicyManager) Disable(context.Context, int64) error {
 	return fmt.Errorf("sk-fallback-policy raw-provider-payload")
 }
 
-func (failingFallbackPolicyManager) EnableFallbackGroup(context.Context, string, string) error {
+func (failingFallbackPolicyManager) EnableFallbackGroup(context.Context, string, string, string) error {
 	return fmt.Errorf("sk-fallback-policy raw-provider-payload")
 }
 
-func (failingFallbackPolicyManager) DisableFallbackGroup(context.Context, string, string) error {
+func (failingFallbackPolicyManager) DisableFallbackGroup(context.Context, string, string, string) error {
 	return fmt.Errorf("sk-fallback-policy raw-provider-payload")
 }
 
@@ -1103,6 +1134,7 @@ func fallbackPoliciesFromSnapshot(rows []management.FallbackPolicy) []credential
 	for _, row := range rows {
 		out = append(out, credentials.FallbackPolicyMetadata{
 			ProviderInstanceID: row.ProviderInstanceID,
+			CredentialKind:     row.CredentialKind,
 			GroupLabel:         row.GroupLabel,
 			Enabled:            row.Enabled,
 			CredentialCount:    row.CredentialCount,
@@ -1803,11 +1835,12 @@ func (m *Model) enableFirstFallbackPolicy() error {
 	}
 	for _, row := range m.fallbackPolicies {
 		if !row.Enabled {
-			if err := m.upstreams.EnableFallbackGroup(context.Background(), row.ProviderInstanceID, row.GroupLabel); err != nil {
+			if err := m.upstreams.EnableFallbackGroup(context.Background(), row.ProviderInstanceID, row.CredentialKind, row.GroupLabel); err != nil {
 				return err
 			}
 			m.logInfo(context.Background(), "tui_fallback_policy_changed",
 				slog.String("provider_instance", row.ProviderInstanceID),
+				slog.String("credential_kind", row.CredentialKind),
 				slog.String("group", row.GroupLabel),
 				slog.Bool("enabled", true),
 			)
@@ -1823,11 +1856,12 @@ func (m *Model) disableFirstFallbackPolicy() error {
 	}
 	for _, row := range m.fallbackPolicies {
 		if row.Enabled {
-			if err := m.upstreams.DisableFallbackGroup(context.Background(), row.ProviderInstanceID, row.GroupLabel); err != nil {
+			if err := m.upstreams.DisableFallbackGroup(context.Background(), row.ProviderInstanceID, row.CredentialKind, row.GroupLabel); err != nil {
 				return err
 			}
 			m.logInfo(context.Background(), "tui_fallback_policy_changed",
 				slog.String("provider_instance", row.ProviderInstanceID),
+				slog.String("credential_kind", row.CredentialKind),
 				slog.String("group", row.GroupLabel),
 				slog.Bool("enabled", false),
 			)
@@ -1838,15 +1872,21 @@ func (m *Model) disableFirstFallbackPolicy() error {
 }
 
 func (m Model) visibleFallbackPolicies(rows []credentials.FallbackPolicyMetadata) []credentials.FallbackPolicyMetadata {
-	allowed := map[string]bool{}
+	allowed := map[string]map[string]bool{}
 	for _, instance := range m.visibleProviderRows() {
 		if instance.APIKey && !instance.Placeholder {
-			allowed[instance.ID] = true
+			allowed[instance.ID] = map[string]bool{credentials.CredentialKindAPIKey: true}
+		}
+		if instance.OAuth && instance.Type == "codex" {
+			if allowed[instance.ID] == nil {
+				allowed[instance.ID] = map[string]bool{}
+			}
+			allowed[instance.ID][credentials.CredentialKindOAuth] = true
 		}
 	}
 	out := rows[:0]
 	for _, row := range rows {
-		if allowed[row.ProviderInstanceID] && row.CredentialCount >= 2 {
+		if allowed[row.ProviderInstanceID][row.CredentialKind] && row.CredentialCount >= 2 {
 			out = append(out, row)
 		}
 	}
@@ -1876,9 +1916,9 @@ func (m Model) visibleProviderRows() []provider.Instance {
 	return m.registry.List()
 }
 
-func fallbackPolicyEnabled(rows []credentials.FallbackPolicyMetadata, providerInstanceID, groupLabel string) bool {
+func fallbackPolicyEnabled(rows []credentials.FallbackPolicyMetadata, providerInstanceID, credentialKind, groupLabel string) bool {
 	for _, row := range rows {
-		if row.ProviderInstanceID == providerInstanceID && row.GroupLabel == groupLabel {
+		if row.ProviderInstanceID == providerInstanceID && row.CredentialKind == credentialKind && row.GroupLabel == groupLabel {
 			return row.Enabled
 		}
 	}

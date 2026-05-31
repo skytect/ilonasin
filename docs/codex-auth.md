@@ -1,6 +1,6 @@
 # Codex Authentication Map
 
-This document maps Codex CLI authentication as of the installed `codex-cli 0.133.0` source snapshot at `/tmp/codex-src-0.133.0/codex-rs`. It intentionally does not inspect local credential files, environment values, cookies, or account-specific state. Token examples are redacted.
+This document maps Codex CLI authentication as of the installed `codex-cli 0.133.0` source snapshot at `/tmp/codex-src-0.133.0/codex-rs`, with supplemental routing-header and model-discovery checks against `rust-v0.135.0` source at `/tmp/codex-src-0.135.0/codex-rs`. It intentionally does not inspect local credential files, environment values, cookies, or account-specific state. Token examples are redacted.
 
 ## Executive Summary
 
@@ -73,6 +73,15 @@ ChatGPT OAuth token data contains `id_token`, `access_token`, `refresh_token`, a
 
 Claims are parsed from the JWT payload without signature verification in this parsing helper (`/tmp/codex-src-0.133.0/codex-rs/login/src/token_data.rs:117-128`). The helper reads top-level `email`, namespaced profile email, and namespaced auth values such as `chatgpt_plan_type`, `chatgpt_user_id`, `user_id`, `chatgpt_account_id`, and `chatgpt_account_is_fedramp` (`/tmp/codex-src-0.133.0/codex-rs/login/src/token_data.rs:71-99`, `/tmp/codex-src-0.133.0/codex-rs/login/src/token_data.rs:137-161`).
 
+Codex persists `TokenData.account_id` separately from the access token and uses
+that value for `ChatGPT-Account-ID`. Ilonasin does not store a separate full
+account ID. It may derive `ChatGPT-Account-ID` transiently from an access-token
+claim when present, but this is best-effort compatibility rather than the
+durable Codex source. Normal metadata stores only the account hash, safe display
+labels, plan labels, and local credential IDs. Logs, management snapshots,
+CLI/TUI output, request metadata, and fallback metadata must not contain the
+full account ID.
+
 Agent identity JWT claims include issuer, audience, issued/expiry times, runtime ID, private key, account/user/email/plan metadata, and FedRAMP status (`/tmp/codex-src-0.133.0/codex-rs/agent-identity/src/lib.rs:64-78`). When JWKS is provided, validation requires RS256, expected issuer, and expected audience (`/tmp/codex-src-0.133.0/codex-rs/agent-identity/src/lib.rs:147-171`). The default audience is `codex-app-server`, and the expected issuer is `https://chatgpt.com/codex-backend/agent-identity` (`/tmp/codex-src-0.133.0/codex-rs/agent-identity/src/lib.rs:33-37`).
 
 ## Refresh, Revocation, and 401 Recovery
@@ -91,7 +100,9 @@ Bearer auth attaches:
 - `ChatGPT-Account-ID: <redacted>` when an account ID exists
 - `X-OpenAI-Fedramp: true` for FedRAMP accounts
 
-Source: `/tmp/codex-src-0.133.0/codex-rs/model-provider/src/bearer_auth_provider.rs:31-46`.
+Source: `/tmp/codex-src-0.133.0/codex-rs/model-provider/src/bearer_auth_provider.rs:31-46`. The same bearer routing headers are present in the `rust-v0.135.0` snapshot at `/tmp/codex-src-0.135.0/codex-rs/model-provider/src/bearer_auth_provider.rs:31-42`.
+
+Codex's default originator is `codex_cli_rs`; `rust-v0.135.0` defines it in `/tmp/codex-src-0.135.0/codex-rs/login/src/auth/default_client.rs:36`. The user-agent helper builds an originator/version/platform string from `CARGO_PKG_VERSION` at `/tmp/codex-src-0.135.0/codex-rs/login/src/auth/default_client.rs:133-145`. The models manager derives the whole client version from `CARGO_PKG_VERSION_MAJOR`, `CARGO_PKG_VERSION_MINOR`, and `CARGO_PKG_VERSION_PATCH` at `/tmp/codex-src-0.135.0/codex-rs/models-manager/src/lib.rs:19-26`, and the Codex models endpoint appends `client_version` at `/tmp/codex-src-0.135.0/codex-rs/codex-api/src/endpoint/models.rs:35-53`.
 
 Agent identity attaches:
 

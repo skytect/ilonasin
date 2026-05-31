@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -19,11 +20,21 @@ import (
 
 const MaxCodexAggregateAssistantBytes = 16 << 20
 
+var errCodexModelAuthFailed = errors.New("codex model metadata auth failed")
+
 func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest, start time.Time) (ChatResult, error) {
 	if req.Credential.Kind != CredentialKindOAuthAccess {
 		return ChatResult{StatusCode: http.StatusUnauthorized, ContentType: "application/json", ErrorClass: "credential_unavailable", Latency: time.Since(start)}, fmt.Errorf("codex chat requires oauth access credential")
 	}
-	body, err := marshalCodexResponsesRequest(req.Request, req.UpstreamModel)
+	ids := newCodexRequestIDs()
+	modelMeta, err := a.resolveCodexResponsesModel(ctx, req, start)
+	if err != nil {
+		if errors.Is(err, errCodexModelAuthFailed) {
+			return ChatResult{StatusCode: http.StatusUnauthorized, ContentType: "application/json", ErrorClass: "model_discovery_auth_failed", Latency: time.Since(start)}, err
+		}
+		return ChatResult{StatusCode: http.StatusBadGateway, ContentType: "application/json", ErrorClass: "model_discovery_failed", Latency: time.Since(start)}, err
+	}
+	body, err := marshalCodexResponsesRequest(req.Request, req.UpstreamModel, ids, modelMeta)
 	if err != nil {
 		return ChatResult{ErrorClass: "invalid_request", Latency: time.Since(start)}, err
 	}
@@ -37,22 +48,85 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 	if err != nil {
 		return ChatResult{ErrorClass: "upstream_request_error", Latency: time.Since(start)}, err
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+req.Credential.BearerToken)
+	addCodexRequestHeaders(httpReq, req.Credential.BearerToken, req.Credential.ChatGPTAccountID, req.Credential.ChatGPTAccountIsFedRAMP)
+	addCodexResponsesHeaders(httpReq, ids)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
 
 	resp, err := a.doStreamRequest(streamCtx, cancel, httpReq)
 	if err != nil {
 		errorClass := classifyTransportError(err)
+		logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
+			slog.String("endpoint", "responses"),
+			slog.String("method", http.MethodPost),
+			slog.String("provider_instance", req.Instance.ID),
+			slog.String("provider_type", req.Instance.Type),
+			slog.Int64("credential_id", req.Credential.ID),
+			slog.Int64("duration_ms", durationMS(start)),
+			slog.String("error_class", errorClass),
+		)
 		return ChatResult{StatusCode: http.StatusBadGateway, ContentType: "application/json", ErrorClass: errorClass, Latency: time.Since(start)}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		retryAfter := retryAfterFromHeader(resp.Header, time.Now())
+		respBody, tooLarge, readErr := readLimitedUpstreamBody(resp.Body, MaxUpstreamChatBodyBytes)
+		if tooLarge {
+			logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
+				slog.String("endpoint", "responses"),
+				slog.String("method", http.MethodPost),
+				slog.String("provider_instance", req.Instance.ID),
+				slog.String("provider_type", req.Instance.Type),
+				slog.Int64("credential_id", req.Credential.ID),
+				slog.Int("status", http.StatusBadGateway),
+				slog.Int64("duration_ms", durationMS(start)),
+				slog.String("error_class", "upstream_body_too_large"),
+			)
+			return ChatResult{StatusCode: http.StatusBadGateway, ContentType: "application/json", ErrorClass: "upstream_body_too_large", Latency: time.Since(start), RetryAfter: retryAfter, BodyTruncated: true}, fmt.Errorf("codex responses body exceeded limit")
+		}
+		if readErr != nil {
+			logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
+				slog.String("endpoint", "responses"),
+				slog.String("method", http.MethodPost),
+				slog.String("provider_instance", req.Instance.ID),
+				slog.String("provider_type", req.Instance.Type),
+				slog.Int64("credential_id", req.Credential.ID),
+				slog.Int("status", resp.StatusCode),
+				slog.Int64("duration_ms", durationMS(start)),
+				slog.String("error_class", "upstream_network_error"),
+			)
+			return ChatResult{StatusCode: http.StatusBadGateway, ContentType: "application/json", ErrorClass: "upstream_network_error", Latency: time.Since(start), RetryAfter: retryAfter}, readErr
+		}
 		if resp.StatusCode == http.StatusUnauthorized {
+			logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
+				slog.String("endpoint", "responses"),
+				slog.String("method", http.MethodPost),
+				slog.String("provider_instance", req.Instance.ID),
+				slog.String("provider_type", req.Instance.Type),
+				slog.Int64("credential_id", req.Credential.ID),
+				slog.Int("status", resp.StatusCode),
+				slog.Int64("duration_ms", durationMS(start)),
+				slog.Int("response_bytes", len(respBody)),
+				slog.String("error_class", "upstream_auth_failed"),
+			)
 			return ChatResult{StatusCode: http.StatusUnauthorized, ContentType: "application/json", ErrorClass: "upstream_auth_failed", Latency: time.Since(start), RetryAfter: retryAfter}, fmt.Errorf("codex responses status %d", resp.StatusCode)
 		}
-		return ChatResult{StatusCode: http.StatusBadGateway, ContentType: "application/json", ErrorClass: "upstream_http_error", Latency: time.Since(start), RetryAfter: retryAfter}, fmt.Errorf("codex responses status %d", resp.StatusCode)
+		errorClass := "upstream_http_error"
+		if resp.StatusCode == http.StatusTooManyRequests {
+			errorClass = "rate_limit_exceeded"
+		}
+		logProviderHTTP(ctx, a.Logger, statusLevel(resp.StatusCode, errorClass), "provider_http",
+			slog.String("endpoint", "responses"),
+			slog.String("method", http.MethodPost),
+			slog.String("provider_instance", req.Instance.ID),
+			slog.String("provider_type", req.Instance.Type),
+			slog.Int64("credential_id", req.Credential.ID),
+			slog.Int("status", resp.StatusCode),
+			slog.Int64("duration_ms", durationMS(start)),
+			slog.Int("response_bytes", len(respBody)),
+			slog.String("error_class", errorClass),
+		)
+		return ChatResult{StatusCode: http.StatusBadGateway, ContentType: "application/json", ErrorClass: errorClass, Latency: time.Since(start), RetryAfter: retryAfter}, fmt.Errorf("codex responses status %d", resp.StatusCode)
 	}
 	parsed, err := a.readCodexResponses(streamCtx, resp.Body)
 	if err != nil {
@@ -60,12 +134,41 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 		if errorClass == "" {
 			errorClass = classifyCodexReadError(streamCtx, err)
 		}
+		logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
+			slog.String("endpoint", "responses"),
+			slog.String("method", http.MethodPost),
+			slog.String("provider_instance", req.Instance.ID),
+			slog.String("provider_type", req.Instance.Type),
+			slog.Int64("credential_id", req.Credential.ID),
+			slog.Int("status", http.StatusBadGateway),
+			slog.Int64("duration_ms", durationMS(start)),
+			slog.String("error_class", errorClass),
+		)
 		return ChatResult{StatusCode: http.StatusBadGateway, ContentType: "application/json", ErrorClass: errorClass, Latency: time.Since(start)}, err
 	}
 	out, err := openai.MarshalChatCompletionResponse(localChatCompletionID(), req.UpstreamModel, parsed.Text, parsed.Usage)
 	if err != nil {
+		logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
+			slog.String("endpoint", "responses"),
+			slog.String("method", http.MethodPost),
+			slog.String("provider_instance", req.Instance.ID),
+			slog.String("provider_type", req.Instance.Type),
+			slog.Int64("credential_id", req.Credential.ID),
+			slog.Int("status", http.StatusBadGateway),
+			slog.Int64("duration_ms", durationMS(start)),
+			slog.String("error_class", "upstream_invalid_response"),
+		)
 		return ChatResult{StatusCode: http.StatusBadGateway, ContentType: "application/json", ErrorClass: "upstream_invalid_response", Latency: time.Since(start)}, err
 	}
+	logProviderHTTP(ctx, a.Logger, slog.LevelInfo, "provider_http",
+		slog.String("endpoint", "responses"),
+		slog.String("method", http.MethodPost),
+		slog.String("provider_instance", req.Instance.ID),
+		slog.String("provider_type", req.Instance.Type),
+		slog.Int64("credential_id", req.Credential.ID),
+		slog.Int("status", http.StatusOK),
+		slog.Int64("duration_ms", durationMS(start)),
+	)
 	return ChatResult{
 		StatusCode:    http.StatusOK,
 		ContentType:   "application/json",
@@ -77,11 +180,23 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 }
 
 type codexResponsesRequest struct {
-	Model        string              `json:"model"`
-	Instructions string              `json:"instructions,omitempty"`
-	Input        []codexResponseItem `json:"input"`
-	Store        bool                `json:"store"`
-	Stream       bool                `json:"stream"`
+	Model             string              `json:"model"`
+	Instructions      string              `json:"instructions,omitempty"`
+	Input             []codexResponseItem `json:"input"`
+	Tools             []any               `json:"tools"`
+	ToolChoice        string              `json:"tool_choice"`
+	ParallelToolCalls bool                `json:"parallel_tool_calls"`
+	Reasoning         any                 `json:"reasoning,omitempty"`
+	Store             bool                `json:"store"`
+	Stream            bool                `json:"stream"`
+	Include           []string            `json:"include"`
+	PromptCacheKey    string              `json:"prompt_cache_key,omitempty"`
+	ClientMetadata    map[string]string   `json:"client_metadata,omitempty"`
+}
+
+type codexResponsesModel struct {
+	BaseInstructions          string
+	SupportsParallelToolCalls bool
 }
 
 type codexResponseItem struct {
@@ -95,12 +210,21 @@ type codexContentItem struct {
 	Text string `json:"text"`
 }
 
-func marshalCodexResponsesRequest(req openai.ChatCompletionRequest, upstreamModel string) ([]byte, error) {
+func marshalCodexResponsesRequest(req openai.ChatCompletionRequest, upstreamModel string, ids codexRequestIDs, model codexResponsesModel) ([]byte, error) {
 	out := codexResponsesRequest{
-		Model:  upstreamModel,
-		Input:  []codexResponseItem{},
-		Store:  false,
-		Stream: true,
+		Model:             upstreamModel,
+		Input:             []codexResponseItem{},
+		Tools:             []any{},
+		ToolChoice:        "auto",
+		ParallelToolCalls: model.SupportsParallelToolCalls,
+		Reasoning:         nil,
+		Store:             false,
+		Stream:            true,
+		Include:           []string{},
+		PromptCacheKey:    ids.ThreadID,
+		ClientMetadata: map[string]string{
+			"x-codex-installation-id": ids.InstallationID,
+		},
 	}
 	var instructions []string
 	for _, msg := range req.Messages {
@@ -127,8 +251,98 @@ func marshalCodexResponsesRequest(req openai.ChatCompletionRequest, upstreamMode
 			return nil, fmt.Errorf("unsupported codex message role %q", msg.Role)
 		}
 	}
-	out.Instructions = strings.Join(instructions, "\n\n")
+	if len(instructions) > 0 {
+		out.Instructions = strings.Join(instructions, "\n\n")
+	} else {
+		out.Instructions = model.BaseInstructions
+	}
 	return json.Marshal(out)
+}
+
+func (a HTTPChatAdapter) resolveCodexResponsesModel(ctx context.Context, req ChatRequest, start time.Time) (codexResponsesModel, error) {
+	endpoint, err := modelsURL(req.Instance)
+	if err != nil {
+		return codexResponsesModel{}, err
+	}
+	modelCtx, cancel := context.WithTimeout(ctx, a.modelTimeout())
+	defer cancel()
+	httpReq, err := http.NewRequestWithContext(modelCtx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return codexResponsesModel{}, err
+	}
+	credential := req.ModelCredential
+	if credential.ID == 0 {
+		credential = BearerCredential{
+			ID:                      req.Credential.ID,
+			ProviderInstanceID:      req.Credential.ProviderInstanceID,
+			Kind:                    req.Credential.Kind,
+			BearerToken:             req.Credential.BearerToken,
+			ChatGPTAccountID:        req.Credential.ChatGPTAccountID,
+			ChatGPTAccountIsFedRAMP: req.Credential.ChatGPTAccountIsFedRAMP,
+		}
+	}
+	addCodexRequestHeaders(httpReq, credential.BearerToken, credential.ChatGPTAccountID, credential.ChatGPTAccountIsFedRAMP)
+	httpReq.Header.Set("Accept", "application/json")
+	resp, err := a.Client.Do(httpReq)
+	if err != nil {
+		logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
+			slog.String("endpoint", "models"),
+			slog.String("method", http.MethodGet),
+			slog.String("provider_instance", req.Instance.ID),
+			slog.String("provider_type", req.Instance.Type),
+			slog.Int64("credential_id", credential.ID),
+			slog.Int64("duration_ms", durationMS(start)),
+			slog.String("error_class", classifyTransportError(err)),
+		)
+		return codexResponsesModel{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		errorClass := "upstream_http_error"
+		if resp.StatusCode == http.StatusUnauthorized {
+			errorClass = "upstream_auth_failed"
+		}
+		logProviderHTTP(ctx, a.Logger, statusLevel(resp.StatusCode, errorClass), "provider_http",
+			slog.String("endpoint", "models"),
+			slog.String("method", http.MethodGet),
+			slog.String("provider_instance", req.Instance.ID),
+			slog.String("provider_type", req.Instance.Type),
+			slog.Int64("credential_id", credential.ID),
+			slog.Int("status", resp.StatusCode),
+			slog.Int64("duration_ms", durationMS(start)),
+			slog.String("error_class", errorClass),
+		)
+		if resp.StatusCode == http.StatusUnauthorized {
+			return codexResponsesModel{}, errCodexModelAuthFailed
+		}
+		return codexResponsesModel{}, fmt.Errorf("codex models status %d", resp.StatusCode)
+	}
+	body, tooLarge, readErr := readLimitedUpstreamBody(resp.Body, MaxUpstreamModelsBodyBytes)
+	if tooLarge {
+		return codexResponsesModel{}, fmt.Errorf("codex models body exceeded limit")
+	}
+	if readErr != nil {
+		return codexResponsesModel{}, readErr
+	}
+	var parsed struct {
+		Models []struct {
+			Slug                      string `json:"slug"`
+			BaseInstructions          string `json:"base_instructions"`
+			SupportsParallelToolCalls bool   `json:"supports_parallel_tool_calls"`
+		} `json:"models"`
+	}
+	if err := jsonUnmarshal(body, &parsed); err != nil {
+		return codexResponsesModel{}, err
+	}
+	for _, model := range parsed.Models {
+		if model.Slug == req.UpstreamModel {
+			return codexResponsesModel{
+				BaseInstructions:          strings.TrimSpace(model.BaseInstructions),
+				SupportsParallelToolCalls: model.SupportsParallelToolCalls,
+			}, nil
+		}
+	}
+	return codexResponsesModel{SupportsParallelToolCalls: true}, nil
 }
 
 type codexResponsesResult struct {
@@ -240,8 +454,10 @@ func handleCodexEvent(data []byte, doneText, deltaText *strings.Builder, sawDone
 		Response *struct {
 			ID      string `json:"id"`
 			EndTurn *bool  `json:"end_turn"`
-			Error   any    `json:"error"`
-			Usage   *struct {
+			Error   *struct {
+				Code string `json:"code"`
+			} `json:"error"`
+			Usage *struct {
 				InputTokens        *int `json:"input_tokens"`
 				OutputTokens       *int `json:"output_tokens"`
 				TotalTokens        *int `json:"total_tokens"`
@@ -298,6 +514,9 @@ func handleCodexEvent(data []byte, doneText, deltaText *strings.Builder, sawDone
 			}
 		}
 	case "response.failed":
+		if event.Response != nil && event.Response.Error != nil && event.Response.Error.Code == "rate_limit_exceeded" {
+			return codexEventFailure{class: "rate_limit_exceeded"}
+		}
 		return codexEventFailure{class: "upstream_response_failed"}
 	case "response.incomplete":
 		return codexEventFailure{class: "upstream_response_incomplete"}
@@ -333,11 +552,56 @@ func localChatCompletionID() string {
 	return "chatcmpl_" + hex.EncodeToString(b[:])
 }
 
+type codexRequestIDs struct {
+	SessionID      string
+	ThreadID       string
+	WindowID       string
+	InstallationID string
+}
+
+func newCodexRequestIDs() codexRequestIDs {
+	threadID := localCodexUUID()
+	return codexRequestIDs{
+		SessionID:      localCodexUUID(),
+		ThreadID:       threadID,
+		WindowID:       threadID + ":0",
+		InstallationID: localCodexUUID(),
+	}
+}
+
+func localCodexUUID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "00000000-0000-4000-8000-000000000000"
+	}
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+func addCodexResponsesHeaders(req *http.Request, ids codexRequestIDs) {
+	// Mirrors OpenAI Codex rust-v0.135.0:
+	// codex-rs/codex-api/src/endpoint/responses.rs adds session-id,
+	// thread-id, and x-client-request-id; core/src/client.rs adds x-codex-window-id.
+	req.Header.Set("session-id", ids.SessionID)
+	req.Header.Set("thread-id", ids.ThreadID)
+	req.Header.Set("x-client-request-id", ids.ThreadID)
+	req.Header.Set("x-codex-window-id", ids.WindowID)
+}
+
 func (a HTTPChatAdapter) streamCodexChat(ctx context.Context, req ChatRequest, sink ChatStreamSink, start time.Time) (ChatStreamSummary, error) {
 	if req.Credential.Kind != CredentialKindOAuthAccess {
 		return ChatStreamSummary{StatusCode: http.StatusUnauthorized, ErrorClass: "credential_unavailable", CompletionStatus: "upstream_error", PreStreamError: true}, fmt.Errorf("codex chat requires oauth access credential")
 	}
-	body, err := marshalCodexResponsesRequest(req.Request, req.UpstreamModel)
+	ids := newCodexRequestIDs()
+	modelMeta, err := a.resolveCodexResponsesModel(ctx, req, start)
+	if err != nil {
+		if errors.Is(err, errCodexModelAuthFailed) {
+			return ChatStreamSummary{StatusCode: http.StatusUnauthorized, ErrorClass: "model_discovery_auth_failed", CompletionStatus: "upstream_error", PreStreamError: true}, err
+		}
+		return ChatStreamSummary{StatusCode: http.StatusBadGateway, ErrorClass: "model_discovery_failed", CompletionStatus: "upstream_error", PreStreamError: true}, err
+	}
+	body, err := marshalCodexResponsesRequest(req.Request, req.UpstreamModel, ids, modelMeta)
 	if err != nil {
 		return ChatStreamSummary{ErrorClass: "invalid_request", CompletionStatus: "upstream_invalid", PreStreamError: true}, err
 	}
@@ -351,13 +615,23 @@ func (a HTTPChatAdapter) streamCodexChat(ctx context.Context, req ChatRequest, s
 	if err != nil {
 		return ChatStreamSummary{ErrorClass: "upstream_request_error", CompletionStatus: "upstream_invalid", PreStreamError: true}, err
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+req.Credential.BearerToken)
+	addCodexRequestHeaders(httpReq, req.Credential.BearerToken, req.Credential.ChatGPTAccountID, req.Credential.ChatGPTAccountIsFedRAMP)
+	addCodexResponsesHeaders(httpReq, ids)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
 
 	resp, err := a.doStreamRequest(streamCtx, cancel, httpReq)
 	if err != nil {
 		errorClass := classifyTransportError(err)
+		logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
+			slog.String("endpoint", "responses_stream"),
+			slog.String("method", http.MethodPost),
+			slog.String("provider_instance", req.Instance.ID),
+			slog.String("provider_type", req.Instance.Type),
+			slog.Int64("credential_id", req.Credential.ID),
+			slog.Int64("duration_ms", durationMS(start)),
+			slog.String("error_class", errorClass),
+		)
 		return ChatStreamSummary{
 			StatusCode:       http.StatusBadGateway,
 			ErrorClass:       errorClass,
@@ -370,6 +644,29 @@ func (a HTTPChatAdapter) streamCodexChat(ctx context.Context, req ChatRequest, s
 		errorClass := "upstream_http_error"
 		if resp.StatusCode == http.StatusUnauthorized {
 			errorClass = "upstream_auth_failed"
+		}
+		respBody, tooLarge, readErr := readLimitedUpstreamBody(resp.Body, MaxUpstreamChatBodyBytes)
+		if tooLarge {
+			errorClass = "upstream_body_too_large"
+		} else if readErr != nil {
+			errorClass = "upstream_network_error"
+		}
+		attrs := []slog.Attr{
+			slog.String("endpoint", "responses_stream"),
+			slog.String("method", http.MethodPost),
+			slog.String("provider_instance", req.Instance.ID),
+			slog.String("provider_type", req.Instance.Type),
+			slog.Int64("credential_id", req.Credential.ID),
+			slog.Int("status", resp.StatusCode),
+			slog.Int64("duration_ms", durationMS(start)),
+			slog.String("error_class", errorClass),
+		}
+		if !tooLarge && readErr == nil {
+			attrs = append(attrs, slog.Int("response_bytes", len(respBody)))
+		}
+		logProviderHTTP(ctx, a.Logger, statusLevel(resp.StatusCode, errorClass), "provider_http", attrs...)
+		if tooLarge {
+			resp.StatusCode = http.StatusBadGateway
 		}
 		return ChatStreamSummary{
 			StatusCode:       resp.StatusCode,
@@ -531,6 +828,9 @@ func (a HTTPChatAdapter) handleCodexStreamEvent(ctx context.Context, data []byte
 			} `json:"content"`
 		} `json:"item"`
 		Response *struct {
+			Error *struct {
+				Code string `json:"code"`
+			} `json:"error"`
 			Usage *codexUsagePayload `json:"usage"`
 		} `json:"response"`
 	}
@@ -617,7 +917,11 @@ func (a HTTPChatAdapter) handleCodexStreamEvent(ctx context.Context, data []byte
 		}
 		summary.Done = true
 	case "response.failed":
-		summary.ErrorClass = "upstream_response_failed"
+		if event.Response != nil && event.Response.Error != nil && event.Response.Error.Code == "rate_limit_exceeded" {
+			summary.ErrorClass = "rate_limit_exceeded"
+		} else {
+			summary.ErrorClass = "upstream_response_failed"
+		}
 		summary.CompletionStatus = "upstream_error"
 		return fmt.Errorf("codex response failed")
 	case "response.incomplete":

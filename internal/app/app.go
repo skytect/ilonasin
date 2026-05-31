@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -356,6 +357,22 @@ func fakeIDToken(accountID, email, plan string) string {
 	return header + "." + base64.RawURLEncoding.EncodeToString(body) + ".signature"
 }
 
+const serveCheckCodexRoutedAccountID = "codex-pool-routed-account"
+
+var serveCheckCodexRoutedAccessToken = fakeAccessToken(serveCheckCodexRoutedAccountID, true)
+
+func fakeAccessToken(accountID string, fedRAMP bool) string {
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none"}`))
+	payload := map[string]any{
+		"https://api.openai.com/auth": map[string]any{
+			"chatgpt_account_id":         accountID,
+			"chatgpt_account_is_fedramp": fedRAMP,
+		},
+	}
+	body, _ := json.Marshal(payload)
+	return header + "." + base64.RawURLEncoding.EncodeToString(body) + ".signature"
+}
+
 func newOAuthRefreshAuthServer() *oauthRefreshAuthServer {
 	f := &oauthRefreshAuthServer{mode: "success_replace"}
 	f.server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -451,7 +468,7 @@ func selectedHomeSnapshot(ctx context.Context, store *sqlite.Store, configPath s
 		`SELECT 'provider_credentials:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || provider_instance_id || ':' || kind || ':' || label || ':' || fallback_group || ':' || COALESCE(disabled_at, '') AS part FROM provider_credentials ORDER BY id)), '')`,
 		`SELECT 'oauth_tokens:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || credential_id || ':' || COALESCE(access_token_secret_id, 0) || ':' || COALESCE(refresh_token_secret_id, 0) || ':' || COALESCE(expires_at, '') || ':' || scopes || ':' || COALESCE(last_refresh_at, '') || ':' || COALESCE(refresh_failure_class, '') AS part FROM oauth_tokens ORDER BY id)), '')`,
 		`SELECT 'provider_accounts:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || provider_instance_id || ':' || COALESCE(credential_id, 0) || ':' || account_hash || ':' || display_label || ':' || plan_label AS part FROM provider_accounts ORDER BY id)), '')`,
-		`SELECT 'credential_fallback_policies:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || provider_instance_id || ':' || group_label || ':' || enabled AS part FROM credential_fallback_policies ORDER BY id)), '')`,
+		`SELECT 'credential_fallback_policies:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || provider_instance_id || ':' || credential_kind || ':' || group_label || ':' || enabled AS part FROM credential_fallback_policies ORDER BY id)), '')`,
 		`SELECT 'request_metadata:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || requested_provider_instance || ':' || requested_model || ':' || http_status || ':' || error_class || ':' || retry_count || ':' || fallback_count AS part FROM request_metadata ORDER BY id)), '')`,
 		`SELECT 'stream_metrics:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || request_metadata_id || ':' || completion_status || ':' || chunk_count AS part FROM stream_metrics ORDER BY id)), '')`,
 		`SELECT 'health_events:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || provider_instance_id || ':' || COALESCE(credential_id, 0) || ':' || model_id || ':' || event_class || ':' || COALESCE(http_status, 0) || ':' || normalized_error_class AS part FROM health_events ORDER BY id)), '')`,
@@ -493,7 +510,7 @@ func protectedStateSnapshot(ctx context.Context, store *sqlite.Store, configPath
 		`SELECT 'provider_credentials:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || provider_instance_id || ':' || kind || ':' || label || ':' || fallback_group || ':' || COALESCE(disabled_at, '') AS part FROM provider_credentials ORDER BY id)), '')`,
 		`SELECT 'oauth_tokens:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || credential_id || ':' || COALESCE(access_token_secret_id, 0) || ':' || COALESCE(refresh_token_secret_id, 0) || ':' || COALESCE(expires_at, '') || ':' || scopes || ':' || COALESCE(last_refresh_at, '') || ':' || COALESCE(refresh_failure_class, '') AS part FROM oauth_tokens ORDER BY id)), '')`,
 		`SELECT 'provider_accounts:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || provider_instance_id || ':' || COALESCE(credential_id, 0) || ':' || account_hash || ':' || display_label || ':' || plan_label AS part FROM provider_accounts ORDER BY id)), '')`,
-		`SELECT 'credential_fallback_policies:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || provider_instance_id || ':' || group_label || ':' || enabled AS part FROM credential_fallback_policies ORDER BY id)), '')`,
+		`SELECT 'credential_fallback_policies:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || provider_instance_id || ':' || credential_kind || ':' || group_label || ':' || enabled AS part FROM credential_fallback_policies ORDER BY id)), '')`,
 		`SELECT 'model_cache:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT id || ':' || provider_instance_id || ':' || model_id || ':' || display_name || ':' || capability_flags || ':' || COALESCE(context_length, 0) AS part FROM model_cache ORDER BY id)), '')`,
 		`SELECT 'migrations:' || COALESCE((SELECT group_concat(part, '|') FROM (SELECT version || ':' || name AS part FROM migrations ORDER BY version)), '')`,
 	}
@@ -570,7 +587,7 @@ func fallbackPolicySnapshot(ctx context.Context, store *sqlite.Store) (string, e
 	var part string
 	err := store.DB.QueryRowContext(ctx, `
 		SELECT 'credential_fallback_policies:' || COALESCE((SELECT group_concat(part, '|') FROM (
-			SELECT id || ':' || provider_instance_id || ':' || group_label || ':' || enabled AS part
+			SELECT id || ':' || provider_instance_id || ':' || credential_kind || ':' || group_label || ':' || enabled AS part
 			FROM credential_fallback_policies
 			ORDER BY id
 		)), '')
@@ -2300,12 +2317,11 @@ func (u *serveCheckUpstream) handleServeCheckCodexResponses(w http.ResponseWrite
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	if r.Header.Get("Content-Type") != "application/json" || r.Header.Get("Accept") != "text/event-stream" {
-		http.Error(w, "bad headers", http.StatusBadRequest)
+	if !u.checkCodexRoutingHeaders(w, r, auth, "responses") {
 		return
 	}
-	if r.Header.Get("ChatGPT-Account-ID") != "" || r.Header.Get("X-OpenAI-Fedramp") != "" {
-		http.Error(w, "unexpected account headers", http.StatusBadRequest)
+	if r.Header.Get("Content-Type") != "application/json" || r.Header.Get("Accept") != "text/event-stream" {
+		http.Error(w, "bad headers", http.StatusBadRequest)
 		return
 	}
 	var raw map[string]json.RawMessage
@@ -2318,7 +2334,19 @@ func (u *serveCheckUpstream) handleServeCheckCodexResponses(w http.ResponseWrite
 		http.Error(w, "trailing request", http.StatusBadRequest)
 		return
 	}
-	allowed := map[string]bool{"model": true, "instructions": true, "input": true, "store": true, "stream": true}
+	allowed := map[string]bool{
+		"model":               true,
+		"instructions":        true,
+		"input":               true,
+		"tools":               true,
+		"tool_choice":         true,
+		"parallel_tool_calls": true,
+		"store":               true,
+		"stream":              true,
+		"include":             true,
+		"prompt_cache_key":    true,
+		"client_metadata":     true,
+	}
 	for key := range raw {
 		if !allowed[key] {
 			http.Error(w, "extra field", http.StatusBadRequest)
@@ -2336,8 +2364,15 @@ func (u *serveCheckUpstream) handleServeCheckCodexResponses(w http.ResponseWrite
 				Text string `json:"text"`
 			} `json:"content"`
 		} `json:"input"`
-		Store  bool `json:"store"`
-		Stream bool `json:"stream"`
+		Tools             []any             `json:"tools"`
+		ToolChoice        string            `json:"tool_choice"`
+		ParallelToolCalls bool              `json:"parallel_tool_calls"`
+		Reasoning         any               `json:"reasoning"`
+		Store             bool              `json:"store"`
+		Stream            bool              `json:"stream"`
+		Include           []any             `json:"include"`
+		PromptCacheKey    string            `json:"prompt_cache_key"`
+		ClientMetadata    map[string]string `json:"client_metadata"`
 	}
 	if err := json.Unmarshal(mustMarshalRaw(raw), &body); err != nil {
 		http.Error(w, "bad request shape", http.StatusBadRequest)
@@ -2346,8 +2381,16 @@ func (u *serveCheckUpstream) handleServeCheckCodexResponses(w http.ResponseWrite
 	u.mu.Lock()
 	u.observed["/responses "+body.Model] = true
 	u.mu.Unlock()
-	if body.Store || !body.Stream {
+	if _, ok := raw["reasoning"]; ok {
+		http.Error(w, "unexpected reasoning", http.StatusBadRequest)
+		return
+	}
+	if body.Store || !body.Stream || len(body.Tools) != 0 || body.ToolChoice != "auto" || !body.ParallelToolCalls || len(body.Include) != 0 {
 		http.Error(w, "bad responses flags", http.StatusBadRequest)
+		return
+	}
+	if body.PromptCacheKey == "" || body.ClientMetadata["x-codex-installation-id"] == "" || r.Header.Get("session-id") == "" || r.Header.Get("thread-id") == "" || r.Header.Get("x-client-request-id") == "" || r.Header.Get("x-codex-window-id") == "" {
+		http.Error(w, "bad codex session metadata", http.StatusBadRequest)
 		return
 	}
 	if body.Model == "gpt-5.5-codex" {
@@ -2374,6 +2417,18 @@ func (u *serveCheckUpstream) handleServeCheckCodexResponses(w http.ResponseWrite
 		http.Error(w, "raw codex http body", http.StatusServiceUnavailable)
 		return
 	}
+	if body.Model == "codex-pool-success" && auth == serveCheckCodexRoutedAccessToken {
+		http.Error(w, "raw codex pool 503 body", http.StatusServiceUnavailable)
+		return
+	}
+	if body.Model == "codex-pool-stream-success" && auth == serveCheckCodexRoutedAccessToken {
+		http.Error(w, "raw codex pool stream 503 body", http.StatusServiceUnavailable)
+		return
+	}
+	if body.Model == "codex-pool-429" && auth == serveCheckCodexRoutedAccessToken {
+		http.Error(w, "raw codex pool 429 body", http.StatusTooManyRequests)
+		return
+	}
 	if body.Model == "codex-429" {
 		w.Header().Set("Retry-After", "2")
 		http.Error(w, "raw codex rate limit body", http.StatusTooManyRequests)
@@ -2392,6 +2447,8 @@ func (u *serveCheckUpstream) handleServeCheckCodexResponses(w http.ResponseWrite
 		}
 	}
 	switch body.Model {
+	case "codex-pool-rate-limit":
+		write(`data: {"type":"response.failed","response":{"error":{"code":"rate_limit_exceeded","message":"raw failed marker"}}}` + "\n\n")
 	case "codex-malformed":
 		write(`data: {"type":"response.output_item.done"` + "\n\n")
 	case "codex-missing-completed":
@@ -2513,7 +2570,7 @@ func (u *serveCheckUpstream) handleServeCheckFallbackChat(w http.ResponseWriter,
 
 func (u *serveCheckUpstream) handleServeCheckModels(w http.ResponseWriter, r *http.Request) {
 	auth := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	codex := r.URL.Query().Get("client_version") == "ilonasin"
+	codex := r.URL.Query().Get("client_version") == provider.CodexClientVersion
 	if codex {
 		u.recordObservedAuth("codex-models", auth)
 		if auth == "oauth-serve-stale-model-large-401" {
@@ -2522,6 +2579,9 @@ func (u *serveCheckUpstream) handleServeCheckModels(w http.ResponseWriter, r *ht
 		}
 		if !isServeCheckCodexAccess(auth) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if !u.checkCodexRoutingHeaders(w, r, auth, "models") {
 			return
 		}
 	} else if auth != "sk-serve-check-adapter" {
@@ -2562,22 +2622,34 @@ func (u *serveCheckUpstream) handleServeCheckModels(w http.ResponseWriter, r *ht
 	}
 	if malformed {
 		w.Header().Set("Content-Type", "application/json")
+		if codex {
+			_, _ = w.Write([]byte(`{"models":[]}`))
+			return
+		}
 		_, _ = w.Write([]byte(`{"data":[]}`))
 		return
 	}
 	if trailing {
 		w.Header().Set("Content-Type", "application/json")
+		if codex {
+			_, _ = w.Write([]byte(`{"models":[{"slug":"trailing-model"}]} raw trailing payload`))
+			return
+		}
 		_, _ = w.Write([]byte(`{"data":[{"id":"trailing-model"}]} raw trailing payload`))
 		return
 	}
 	if duplicate {
 		w.Header().Set("Content-Type", "application/json")
+		if codex {
+			_, _ = w.Write([]byte(`{"models":[{"slug":"dup-model"},{"slug":"dup-model"}]}`))
+			return
+		}
 		_, _ = w.Write([]byte(`{"data":[{"id":"dup-model"},{"id":"dup-model"}]}`))
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if codex {
-		_, _ = w.Write([]byte(`{"data":[{"id":"gpt-5.5-codex","object":"model","owned_by":"codex","raw_provider_payload":"secret"}]}`))
+		_, _ = w.Write([]byte(serveCheckCodexModelsJSON()))
 		return
 	}
 	if r.URL.Path == "/api/v1/models" {
@@ -2587,9 +2659,56 @@ func (u *serveCheckUpstream) handleServeCheckModels(w http.ResponseWriter, r *ht
 	_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"deepseek-v4-pro","object":"model","owned_by":"deepseek"},{"id":"","object":"model"}]}`))
 }
 
+func serveCheckCodexModelsJSON() string {
+	slugs := []string{
+		"gpt-5.5-codex",
+		"codex-system-only",
+		"codex-http-error",
+		"codex-429",
+		"codex-401-repeat",
+		"codex-pool-success",
+		"codex-pool-429",
+		"codex-pool-rate-limit",
+		"codex-malformed",
+		"codex-missing-completed",
+		"codex-failed",
+		"codex-incomplete",
+		"codex-invalid-usage",
+		"codex-too-large-event",
+		"codex-too-many-events",
+		"codex-too-large-output",
+		"codex-idle",
+		"codex-completed-hung",
+		"codex-completed-late-delta",
+		"codex-empty-done",
+		"codex-client-cancel",
+		"codex-mixed-text",
+		"codex-stream-delta",
+		"codex-stream-output-text-done",
+		"codex-stream-tool-event",
+		"codex-stream-failed-after-start",
+	}
+	var b strings.Builder
+	b.WriteString(`{"models":[`)
+	for i, slug := range slugs {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(`{"slug":`)
+		b.WriteString(strconv.Quote(slug))
+		b.WriteString(`,"display_name":"GPT 5.5 Codex","base_instructions":"codex base instructions","supports_parallel_tool_calls":true,"raw_provider_payload":"secret"}`)
+	}
+	b.WriteString(`]}`)
+	return b.String()
+}
+
 func isServeCheckCodexAccess(auth string) bool {
+	if auth == serveCheckCodexRoutedAccessToken {
+		return true
+	}
 	switch auth {
 	case "oauth-access-secret-marker",
+		"oauth-pool-second",
 		"oauth-serve-refreshed-model",
 		"oauth-serve-refreshed-chat",
 		"oauth-serve-refreshed-first-with-other",
@@ -3001,17 +3120,43 @@ func (u *serveCheckUpstream) recordObservedAuth(model, auth string) {
 	u.observed["auth "+model+" "+auth] = true
 }
 
+func (u *serveCheckUpstream) checkCodexRoutingHeaders(w http.ResponseWriter, r *http.Request, auth, endpoint string) bool {
+	accountID := r.Header.Get("ChatGPT-Account-ID")
+	fedRAMP := r.Header.Get("X-OpenAI-Fedramp")
+	if auth == serveCheckCodexRoutedAccessToken {
+		if accountID != serveCheckCodexRoutedAccountID || fedRAMP != "true" {
+			http.Error(w, "missing codex account routing headers", http.StatusBadRequest)
+			return false
+		}
+		u.mu.Lock()
+		u.observed["codex-routing "+endpoint] = true
+		u.mu.Unlock()
+		return true
+	}
+	if accountID != "" || fedRAMP != "" {
+		http.Error(w, "unexpected account headers", http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
 func (u *serveCheckUpstream) sawAuth(model, auth string) bool {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	return u.observed["auth "+model+" "+auth]
 }
 
+func (u *serveCheckUpstream) sawCodexRoutingHeader(endpoint string) bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.observed["codex-routing "+endpoint]
+}
+
 func (u *serveCheckUpstream) clearObservedAuth() {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	for key := range u.observed {
-		if strings.HasPrefix(key, "auth ") {
+		if strings.HasPrefix(key, "auth ") || strings.HasPrefix(key, "codex-routing ") {
 			delete(u.observed, key)
 		}
 	}
@@ -3251,7 +3396,7 @@ func exerciseCodexChatCheck(ctx context.Context, base, token string, fakeUpstrea
 			return err
 		}
 	}
-	if err := exerciseCodexCancellationCheck(ctx, base, token, store); err != nil {
+	if err := exerciseCodexCancellationCheck(ctx, base, token, store, fakeUpstream); err != nil {
 		return err
 	}
 	if err := assertCodexChatNoLeak(ctx, store); err != nil {
@@ -3368,7 +3513,7 @@ func assertCodexStream(events []string, body []byte, model, wantContent string, 
 	return nil
 }
 
-func exerciseCodexCancellationCheck(ctx context.Context, base, token string, store *sqlite.Store) error {
+func exerciseCodexCancellationCheck(ctx context.Context, base, token string, store *sqlite.Store, fakeUpstream *serveCheckUpstream) error {
 	reqCtx, cancel := context.WithCancel(ctx)
 	body := []byte(`{"model":"codex/codex-client-cancel","messages":[{"role":"user","content":"check"}]}`)
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, base+"/v1/chat/completions", bytes.NewReader(body))
@@ -3387,15 +3532,26 @@ func exerciseCodexCancellationCheck(ctx context.Context, base, token string, sto
 		}
 		done <- err
 	}()
-	time.Sleep(20 * time.Millisecond)
+	deadline := time.Now().Add(time.Second)
+	for !fakeUpstream.sawExpected("/responses", "codex-client-cancel") && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
 	cancel()
 	select {
 	case <-done:
 	case <-time.After(time.Second):
 		return fmt.Errorf("codex cancellation request did not return")
 	}
-	time.Sleep(50 * time.Millisecond)
-	return assertLatestCodexChatMetadata(ctx, store, "codex-client-cancel", http.StatusBadGateway, "client_disconnected")
+	deadline = time.Now().Add(time.Second)
+	var metadataErr error
+	for time.Now().Before(deadline) {
+		metadataErr = assertLatestCodexChatMetadata(ctx, store, "codex-client-cancel", http.StatusBadGateway, "client_disconnected")
+		if metadataErr == nil {
+			return nil
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return metadataErr
 }
 
 func exerciseCodexServeOAuthRefreshCheck(ctx context.Context, cfg config.Config, fakeUpstream *serveCheckUpstream) error {
@@ -7319,8 +7475,17 @@ func exerciseCredentialFallbackCheck(ctx context.Context, base, token string, in
 	if afterFallbacks != beforeFallbacks {
 		return fmt.Errorf("fallback event recorded while policy disabled")
 	}
-	if err := upstreams.EnableFallbackGroup(ctx, instance.ID, credentials.DefaultFallbackGroup); err != nil {
+	if err := upstreams.EnableFallbackGroup(ctx, instance.ID, credentials.CredentialKindAPIKey, credentials.DefaultFallbackGroup); err != nil {
 		return err
+	}
+	if resolver, ok := upstreams.(credentials.UpstreamCredentialResolver); ok {
+		resolved, err := resolver.ResolveAPIKeys(ctx, instance.ID)
+		if err != nil {
+			return err
+		}
+		if len(resolved) != 2 {
+			return fmt.Errorf("fallback policy resolved %d credentials after enable", len(resolved))
+		}
 	}
 	status, respBody, err = postJSON(base+"/v1/chat/completions", token, body)
 	if err != nil || status != http.StatusOK || !looksLikeChatCompletion(respBody) || bytes.Contains(respBody, []byte("raw fallback 503 body")) {
@@ -7408,6 +7573,170 @@ func exerciseCredentialFallbackCheck(ctx context.Context, base, token string, in
 	}
 	if err := assertFallbackMetadataNoLeak(ctx, store); err != nil {
 		return err
+	}
+	return nil
+}
+
+func exerciseCodexAccountPoolingCheck(ctx context.Context, cfg config.Config, fakeUpstream *serveCheckUpstream) error {
+	root, err := os.MkdirTemp("", "ilonasin-codex-pool-check-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(root)
+	store, err := sqlite.Open(ctx, filepath.Join(root, "ilonasin.sqlite"))
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	now := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
+	pooledCfg := cfg
+	pooledCfg.Providers = map[string]config.ProviderConfig{}
+	for id, providerCfg := range cfg.Providers {
+		if providerCfg.Type == "codex" {
+			providerCfg.CodexAccountPooling = true
+		}
+		pooledCfg.Providers[id] = providerCfg
+	}
+	pooledRegistry, err := provider.NewRegistry(pooledCfg)
+	if err != nil {
+		return err
+	}
+	noPoolCfg := pooledCfg
+	noPoolCfg.Providers = map[string]config.ProviderConfig{}
+	for id, providerCfg := range pooledCfg.Providers {
+		if providerCfg.Type == "codex" {
+			providerCfg.CodexAccountPooling = false
+		}
+		noPoolCfg.Providers[id] = providerCfg
+	}
+	noPoolRegistry, err := provider.NewRegistry(noPoolCfg)
+	if err != nil {
+		return err
+	}
+	tokenService := credentials.Service{Repo: store}
+	created, err := tokenService.Create(ctx, "codex-pool-check")
+	if err != nil {
+		return err
+	}
+	upstreams := &credentials.UpstreamService{Registry: pooledRegistry, Repo: store, Now: func() time.Time { return now }}
+	first, err := upstreams.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID: "codex",
+		Label:              "codex pool first",
+		AccessToken:        serveCheckCodexRoutedAccessToken,
+		RefreshToken:       "oauth-pool-refresh-first",
+		AccountID:          "codex-pool-first",
+	})
+	if err != nil {
+		return err
+	}
+	second, err := upstreams.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID: "codex",
+		Label:              "codex pool second",
+		AccessToken:        "oauth-pool-second",
+		RefreshToken:       "oauth-pool-refresh-second",
+		AccountID:          "codex-pool-second",
+	})
+	if err != nil {
+		return err
+	}
+	if err := upstreams.EnableFallbackGroup(ctx, "codex", credentials.CredentialKindOAuth, credentials.DefaultFallbackGroup); err != nil {
+		return err
+	}
+	noPoolUpstreams := &credentials.UpstreamService{Registry: noPoolRegistry, Repo: store, Now: func() time.Time { return now }}
+	noPool, err := noPoolUpstreams.ResolveOAuthBearers(ctx, "codex", now)
+	if err != nil {
+		return err
+	}
+	if len(noPool) != 1 {
+		return fmt.Errorf("codex pooling gate resolved %d credentials without provider permission", len(noPool))
+	}
+	fakeUpstream.clearObservedAuth()
+	checkRegistry := baseURLOverrideRegistry{Registry: pooledRegistry, baseURL: fakeUpstream.server.URL}
+	handler := server.NewWithClock(checkRegistry, tokenService, upstreams, upstreams, chatAdapters(fakeUpstream.server.Client()), modelDiscoverers(fakeUpstream.server.Client()), store, store, func() time.Time { return now }).Handler()
+	testServer := httptest.NewServer(handler)
+	defer testServer.Close()
+	body := []byte(`{"model":"codex/codex-pool-success","messages":[{"role":"user","content":"check"}]}`)
+	status, respBody, err := postJSON(testServer.URL+"/v1/chat/completions", created.Token, body)
+	if err != nil || status != http.StatusOK || !looksLikeChatCompletion(respBody) || bytes.Contains(respBody, []byte("raw codex pool 503 body")) {
+		return fmt.Errorf("codex account pooling status=%d err=%v body_len=%d", status, err, len(respBody))
+	}
+	if !fakeUpstream.sawAuth("codex-chat", serveCheckCodexRoutedAccessToken) || !fakeUpstream.sawAuth("codex-chat", "oauth-pool-second") {
+		return fmt.Errorf("codex account pooling did not attempt both accounts")
+	}
+	if fakeUpstream.sawAuth("codex-models", "oauth-pool-second") {
+		return fmt.Errorf("codex account pooling used secondary account for model discovery")
+	}
+	if !fakeUpstream.sawCodexRoutingHeader("models") || !fakeUpstream.sawCodexRoutingHeader("responses") {
+		return fmt.Errorf("codex account pooling did not send account routing headers")
+	}
+	if err := assertRequestFallbackMetadata(ctx, store, "codex", "codex-pool-success"); err != nil {
+		return err
+	}
+	if err := assertFallbackEvent(ctx, store, "codex", "codex-pool-success", first.ID, second.ID); err != nil {
+		return err
+	}
+	fakeUpstream.clearObservedAuth()
+	streamBody := []byte(`{"model":"codex/codex-pool-stream-success","messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true}}`)
+	status, _, _, respBody, err = postStream(testServer.URL+"/v1/chat/completions", created.Token, streamBody)
+	if err != nil || status != http.StatusOK || !bytes.Contains(respBody, []byte("data: [DONE]")) || bytes.Contains(respBody, []byte("raw codex pool stream 503 body")) {
+		return fmt.Errorf("codex account pooling stream status=%d err=%v body_len=%d", status, err, len(respBody))
+	}
+	if !fakeUpstream.sawAuth("codex-chat", serveCheckCodexRoutedAccessToken) || !fakeUpstream.sawAuth("codex-chat", "oauth-pool-second") {
+		return fmt.Errorf("codex account pooling stream did not attempt both accounts")
+	}
+	if fakeUpstream.sawAuth("codex-models", "oauth-pool-second") {
+		return fmt.Errorf("codex account pooling stream used secondary account for model discovery")
+	}
+	if err := assertRequestFallbackMetadata(ctx, store, "codex", "codex-pool-stream-success"); err != nil {
+		return err
+	}
+	if err := assertFallbackEvent(ctx, store, "codex", "codex-pool-stream-success", first.ID, second.ID); err != nil {
+		return err
+	}
+	fakeUpstream.clearObservedAuth()
+	streamAfterStartBody := []byte(`{"model":"codex/codex-stream-failed-after-start","messages":[{"role":"user","content":"check"}],"stream":true}`)
+	beforeFallbacks, err := fallbackEventCount(ctx, store, "codex", "codex-stream-failed-after-start")
+	if err != nil {
+		return err
+	}
+	status, _, _, respBody, err = postStream(testServer.URL+"/v1/chat/completions", created.Token, streamAfterStartBody)
+	if err != nil || status != http.StatusOK || !bytes.Contains(respBody, []byte("upstream_stream_error")) || bytes.Contains(respBody, []byte("[DONE]")) || bytes.Contains(respBody, []byte("raw failed marker")) {
+		return fmt.Errorf("codex account pooling stream after-start status=%d err=%v body_len=%d", status, err, len(respBody))
+	}
+	if !fakeUpstream.sawAuth("codex-chat", serveCheckCodexRoutedAccessToken) {
+		return fmt.Errorf("codex account pooling stream after-start did not use first account")
+	}
+	if fakeUpstream.sawAuth("codex-chat", "oauth-pool-second") {
+		return fmt.Errorf("codex account pooling stream after-start used second account")
+	}
+	afterFallbacks, err := fallbackEventCount(ctx, store, "codex", "codex-stream-failed-after-start")
+	if err != nil {
+		return err
+	}
+	if afterFallbacks != beforeFallbacks {
+		return fmt.Errorf("codex account pooling stream after-start recorded fallback")
+	}
+	for _, model := range []string{"codex-pool-429", "codex-pool-rate-limit"} {
+		fakeUpstream.clearObservedAuth()
+		beforeFallbacks, err := fallbackEventCount(ctx, store, "codex", model)
+		if err != nil {
+			return err
+		}
+		body := []byte(fmt.Sprintf(`{"model":"codex/%s","messages":[{"role":"user","content":"check"}]}`, model))
+		status, respBody, err := postJSON(testServer.URL+"/v1/chat/completions", created.Token, body)
+		if err != nil || status != http.StatusBadGateway || bytes.Contains(respBody, []byte("raw codex pool")) || bytes.Contains(respBody, []byte("raw failed marker")) {
+			return fmt.Errorf("codex account pooling no-fallback %s status=%d err=%v body_len=%d", model, status, err, len(respBody))
+		}
+		if fakeUpstream.sawAuth("codex-chat", "oauth-pool-second") {
+			return fmt.Errorf("codex account pooling used second account for %s", model)
+		}
+		afterFallbacks, err := fallbackEventCount(ctx, store, "codex", model)
+		if err != nil {
+			return err
+		}
+		if afterFallbacks != beforeFallbacks {
+			return fmt.Errorf("codex account pooling recorded fallback for %s", model)
+		}
 	}
 	return nil
 }
@@ -7919,7 +8248,7 @@ func assertModelCacheRows(ctx context.Context, store *sqlite.Store) error {
 		}
 		if row.ProviderInstanceID == "codex" && row.ModelID == "gpt-5.5-codex" {
 			codexFound = true
-			if row.CapabilityFlags != "chat,reasoning,stream" || row.DisplayName != "" || row.ContextLength != 0 {
+			if row.CapabilityFlags != "chat,reasoning,stream" || row.DisplayName != "GPT 5.5 Codex" || row.ContextLength != 0 {
 				return fmt.Errorf("codex model cache metadata mismatch")
 			}
 		}

@@ -233,14 +233,14 @@ func parseResponsesInputItem(raw map[string]json.RawMessage, index int) (Respons
 	case "custom_tool_call_output":
 		return parseResponsesCustomToolCallOutputItem(raw, index, typ)
 	default:
-		return ResponseInputItem{}, fmt.Errorf("input[%d].type is unsupported", index)
+		return ResponseInputItem{Type: typ}, nil
 	}
 }
 
 func parseResponsesMessageItem(raw map[string]json.RawMessage, index int, typ string) (ResponseInputItem, error) {
 	for key := range raw {
 		switch key {
-		case "type", "role", "content":
+		case "type", "role", "content", "phase":
 		default:
 			return ResponseInputItem{}, fmt.Errorf("input[%d] contains unsupported fields", index)
 		}
@@ -805,13 +805,6 @@ func (r ResponsesRequest) ToChatCompletionRequest(providerType string) (ChatComp
 	var messages []Message
 	var err error
 	if providerType == "codex" {
-		for _, item := range r.Input {
-			switch item.Type {
-			case "message", "function_call", "function_call_output", "tool_search_call", "tool_search_output", "custom_tool_call", "custom_tool_call_output":
-			default:
-				return ChatCompletionRequest{}, errors.New("input contains unsupported Codex Responses item")
-			}
-		}
 		messages, err = nil, nil
 	} else {
 		messages, err = responsesInputToChatMessages(r.Instructions, r.Input)

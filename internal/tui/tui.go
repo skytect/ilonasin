@@ -107,7 +107,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case oauthLoginStartedMsg:
 		if msg.err != nil {
-			m.err = "OAuth login failed"
+			m.err = oauthLoginErrorMessage(msg.err)
 			m.oauthChallenge = nil
 			m.cancelOAuthLogin()
 			return m, nil
@@ -120,7 +120,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.oauthChallenge = nil
 		m.cancelOAuthLogin()
 		if msg.err != nil {
-			m.err = "OAuth login failed"
+			m.err = oauthLoginErrorMessage(msg.err)
 			return m, nil
 		}
 		_ = m.reload()
@@ -1142,6 +1142,39 @@ func firstOAuthLoginProvider(registry provider.Registry) (string, bool) {
 	return "", false
 }
 
+func oauthLoginErrorMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	var loginErr provider.OAuthDeviceLoginError
+	if errors.As(err, &loginErr) && loginErr.Class != "" {
+		return "OAuth login failed: " + loginErr.Class
+	}
+	if errors.Is(err, context.Canceled) {
+		return "OAuth login failed: oauth_login_canceled"
+	}
+	if errors.Is(err, credentials.ErrNoEligibleCredential) {
+		return "OAuth login failed: oauth_login_expired"
+	}
+	return "OAuth login failed: " + safeErrorMessage(err.Error())
+}
+
+func safeErrorMessage(value string) string {
+	value = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, strings.TrimSpace(value))
+	if value == "" {
+		return "unknown"
+	}
+	if safeErrorMessagePattern.MatchString(value) {
+		return value
+	}
+	return "details_redacted"
+}
+
 func (m Model) nowTime() time.Time {
 	if m.now != nil {
 		return m.now().UTC()
@@ -1207,6 +1240,7 @@ func formatPreciseTime(t time.Time) string {
 }
 
 var unsafeDisplayPattern = regexp.MustCompile(`(?i)(bearer|sk-|iln_|oauth|token|secret|authorization|raw|payload|prompt|completion|body|account|acct_|request[_ -]?id|requestid|req_|balance|credit|eyj[a-z0-9_-]*\.[a-z0-9_-]*\.)`)
+var safeErrorMessagePattern = regexp.MustCompile(`^[a-z0-9_ .:-]+$`)
 
 func safeDisplay(value string) string {
 	value = strings.Map(func(r rune) rune {

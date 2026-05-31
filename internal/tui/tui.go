@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -22,42 +23,67 @@ import (
 )
 
 type Model struct {
-	cfg              config.Config
-	registry         provider.Registry
-	snapshot         management.SnapshotClient
-	tokens           management.LocalTokenClient
-	upstreams        management.UpstreamCredentialClient
-	oauth            management.OAuthClient
-	pruner           management.TelemetryPruneClient
-	logger           *slog.Logger
-	now              func() time.Time
-	tokenRows        []management.LocalToken
-	providers        []provider.Instance
-	credentials      []management.UpstreamCredential
-	fallbackPolicies []management.FallbackPolicy
-	oauthRows        []management.OAuthCredential
-	accountRows      []management.ProviderAccount
-	modelRows        []management.ModelMetadata
-	requestRows      []management.RequestSummary
-	usageRows        []management.UsageSummary
-	latencyRows      []management.LatencySummary
-	streamRows       []management.StreamSummary
-	healthRows       []management.HealthSummary
-	fallbackRows     []management.FallbackSummary
-	quotaRows        []management.QuotaSummary
-	pruneResult      *management.PruneResult
-	pruningAvailable bool
-	selected         int
-	oauthSelected    int
-	reveal           string
-	revealTokenID    int64
-	apiKeyMode       bool
-	apiKeyProvider   string
-	apiKeyInput      string
-	oauthChallenge   *credentials.OAuthDeviceLoginChallenge
-	oauthCtx         context.Context
-	oauthCancel      context.CancelFunc
-	err              string
+	cfg               config.Config
+	registry          provider.Registry
+	snapshot          management.SnapshotClient
+	tokens            management.LocalTokenClient
+	upstreams         management.UpstreamCredentialClient
+	oauth             management.OAuthClient
+	pruner            management.TelemetryPruneClient
+	logger            *slog.Logger
+	now               func() time.Time
+	tokenRows         []management.LocalToken
+	providers         []provider.Instance
+	credentials       []management.UpstreamCredential
+	fallbackPolicies  []management.FallbackPolicy
+	oauthRows         []management.OAuthCredential
+	accountRows       []management.ProviderAccount
+	modelRows         []management.ModelMetadata
+	requestRows       []management.RequestSummary
+	usageRows         []management.UsageSummary
+	latencyRows       []management.LatencySummary
+	streamRows        []management.StreamSummary
+	healthRows        []management.HealthSummary
+	fallbackRows      []management.FallbackSummary
+	quotaRows         []management.QuotaSummary
+	pruneResult       *management.PruneResult
+	pruningAvailable  bool
+	width             int
+	height            int
+	activeTab         tuiTab
+	scrollOffsets     [tuiTabCount]int
+	selected          int
+	oauthSelected     int
+	revealTokenID     int64
+	revealTokenPrefix string
+	revealTokenLast4  string
+	apiKeyMode        bool
+	apiKeyProvider    string
+	apiKeyInput       string
+	oauthChallenge    *credentials.OAuthDeviceLoginChallenge
+	oauthCtx          context.Context
+	oauthCancel       context.CancelFunc
+	err               string
+}
+
+type tuiTab int
+
+const (
+	tabOverview tuiTab = iota
+	tabAccounts
+	tabObservability
+	tabHelp
+	tuiTabCount
+)
+
+var tuiTabs = []struct {
+	id    tuiTab
+	label string
+}{
+	{tabOverview, "overview"},
+	{tabAccounts, "accounts"},
+	{tabObservability, "observability"},
+	{tabHelp, "help"},
 }
 
 func NewModel(cfg config.Config, registry provider.Registry, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, oauth management.OAuthClient, pruner management.TelemetryPruneClient, now func() time.Time, loggers ...*slog.Logger) Model {
@@ -103,17 +129,59 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.logInfo(context.Background(), "tui_oauth_login_completed")
 		_ = m.reload()
 		return m, nil
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.clampScrolls()
+		return m, nil
+	case tea.MouseMsg:
+		switch msg.Type {
+		case tea.MouseWheelUp:
+			m.scrollActive(-3)
+		case tea.MouseWheelDown:
+			m.scrollActive(3)
+		}
+		return m, nil
 	}
 	if key, ok := msg.(tea.KeyMsg); ok {
 		if m.apiKeyMode {
 			return m.updateAPIKeyInput(key)
 		}
 		switch key.String() {
+		case "tab", "right":
+			m.activeTab = (m.activeTab + 1) % tuiTabCount
+			m.clampScrolls()
+		case "shift+tab", "left":
+			m.activeTab = (m.activeTab + tuiTabCount - 1) % tuiTabCount
+			m.clampScrolls()
+		case "1":
+			m.activeTab = tabOverview
+			m.clampScrolls()
+		case "2":
+			m.activeTab = tabAccounts
+			m.clampScrolls()
+		case "3":
+			m.activeTab = tabObservability
+			m.clampScrolls()
+		case "4":
+			m.activeTab = tabHelp
+			m.clampScrolls()
+		case "pgdown", "ctrl+d":
+			m.scrollActive(m.viewportHeight())
+		case "pgup", "ctrl+u":
+			m.scrollActive(-m.viewportHeight())
+		case "home":
+			m.setActiveScroll(0)
+		case "end":
+			m.setActiveScroll(m.activeScrollMax())
 		case "q", "ctrl+c":
 			m.clearReveal()
 			m.cancelOAuthLogin()
 			return m, tea.Quit
 		case "n":
+			if m.activeTab != tabAccounts {
+				return m, nil
+			}
 			m.clearReveal()
 			created, err := m.tokens.CreateLocalToken(context.Background(), management.CreateLocalTokenRequest{Label: "local client"})
 			if err != nil {
@@ -122,10 +190,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.logInfo(context.Background(), "tui_local_token_created", slog.Int64("local_id", created.Metadata.ID))
-			m.reveal = created.Token
 			m.revealTokenID = created.Metadata.ID
+			m.revealTokenPrefix = created.Metadata.TokenPrefix
+			m.revealTokenLast4 = created.Metadata.TokenLast4
 			_ = m.reload()
 		case "d":
+			if m.activeTab != tabAccounts {
+				return m, nil
+			}
 			m.clearReveal()
 			if len(m.tokenRows) == 0 {
 				return m, nil
@@ -138,6 +210,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.logInfo(context.Background(), "tui_local_token_disabled", slog.Int64("local_id", m.tokenRows[m.selected].ID))
 			_ = m.reload()
 		case "x":
+			if m.activeTab != tabAccounts {
+				return m, nil
+			}
 			m.clearReveal()
 			if err := m.disableFirstUpstreamCredential(); err != nil {
 				m.logError(context.Background(), "tui_upstream_credential_disable_failed", err)
@@ -146,6 +221,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			_ = m.reload()
 		case "a":
+			if m.activeTab != tabAccounts {
+				return m, nil
+			}
 			m.clearReveal()
 			instance, ok := firstAPIKeyProvider(m.registry)
 			if !ok {
@@ -157,6 +235,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.apiKeyInput = ""
 			return m, nil
 		case "p":
+			if m.activeTab != tabObservability {
+				return m, nil
+			}
 			m.clearReveal()
 			if err := m.pruneTelemetry(); err != nil {
 				m.logError(context.Background(), "tui_telemetry_prune_failed", err)
@@ -165,6 +246,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			_ = m.reload()
 		case "l":
+			if m.activeTab != tabAccounts {
+				return m, nil
+			}
 			m.clearReveal()
 			m.cancelOAuthLogin()
 			providerID, ok := firstOAuthLoginProvider(m.registry)
@@ -178,6 +262,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.oauthCancel = cancel
 			return m, m.startOAuthLoginCmd(loginCtx, providerID)
 		case "r":
+			if m.activeTab != tabAccounts {
+				return m, nil
+			}
 			m.clearReveal()
 			if err := m.refreshSelectedOAuthCredential(); err != nil {
 				m.logError(context.Background(), "tui_oauth_refresh_failed", err)
@@ -187,11 +274,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			_ = m.reload()
 		case "o":
+			if m.activeTab != tabAccounts {
+				return m, nil
+			}
 			m.clearReveal()
 			if len(m.oauthRows) > 0 {
 				m.oauthSelected = (m.oauthSelected + 1) % len(m.oauthRows)
 			}
 		case "f":
+			if m.activeTab != tabAccounts {
+				return m, nil
+			}
 			m.clearReveal()
 			if err := m.enableFirstFallbackPolicy(); err != nil {
 				m.logError(context.Background(), "tui_fallback_policy_update_failed", err)
@@ -200,6 +293,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			_ = m.reload()
 		case "F":
+			if m.activeTab != tabAccounts {
+				return m, nil
+			}
 			m.clearReveal()
 			if err := m.disableFirstFallbackPolicy(); err != nil {
 				m.logError(context.Background(), "tui_fallback_policy_update_failed", err)
@@ -215,13 +311,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.clearReveal()
 		case "down", "j":
 			m.clearReveal()
-			if m.selected < len(m.tokenRows)-1 {
-				m.selected++
+			if m.activeTab == tabAccounts {
+				m.selectNextLocalToken()
+			} else {
+				m.scrollActive(1)
 			}
 		case "up", "k":
 			m.clearReveal()
-			if m.selected > 0 {
-				m.selected--
+			if m.activeTab == tabAccounts {
+				m.selectPreviousLocalToken()
+			} else {
+				m.scrollActive(-1)
 			}
 		}
 	}
@@ -229,12 +329,66 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) View() string {
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212")).Render("ilonasin")
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s\n\nProviders: %d\nBind: %s\n\nLocal API tokens\n", title, len(m.cfg.Providers), m.cfg.Server.Bind)
-	if m.err != "" {
-		fmt.Fprintf(&b, "Error: %s\n", m.err)
+	width := m.viewWidth()
+	header := fmt.Sprintf("ilonasin  providers %d  bind %s", len(m.cfg.Providers), m.cfg.Server.Bind)
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212")).Render(clipPlainLine(header, width))
+	b.WriteString(title)
+	b.WriteByte('\n')
+	b.WriteString(m.tabBar(width))
+	b.WriteByte('\n')
+	status := m.statusLine()
+	if status != "" {
+		b.WriteString(clipPlainLine(status, width))
+		b.WriteByte('\n')
 	}
+	b.WriteString(m.renderViewport(m.activeTabBody()))
+	b.WriteByte('\n')
+	b.WriteString(clipPlainLine(m.footerLine(), width))
+	b.WriteByte('\n')
+	return b.String()
+}
+
+func (m Model) writeOverview(b *strings.Builder) {
+	fmt.Fprintf(b, "Providers: %d\nBind: %s\n", len(m.cfg.Providers), m.cfg.Server.Bind)
+	b.WriteString("\nProvider instances\n")
+	for _, instance := range m.providers {
+		apiKey := "api-key disabled"
+		if instance.APIKey {
+			apiKey = "api-key"
+		}
+		oauth := "oauth disabled"
+		if instance.OAuth {
+			oauth = "oauth"
+		}
+		fmt.Fprintf(b, "- %s %s %s %s %s\n", instance.ID, instance.Type, instance.BaseURL, apiKey, oauth)
+	}
+	b.WriteString("\nModel cache\n")
+	summaries := modelCacheSummaries(m.modelRows)
+	if len(summaries) == 0 {
+		b.WriteString("No cached models.\n")
+	}
+	for _, summary := range summaries {
+		fmt.Fprintf(b, "- %s %d models updated %s\n", summary.ProviderInstanceID, summary.Count, summary.UpdatedAt)
+	}
+	b.WriteString("\nObservability summary\n")
+	fmt.Fprintf(b, "- recent requests %d\n", len(m.requestRows))
+	for _, row := range m.usageRows {
+		fmt.Fprintf(b, "- %s %d req total %d cache_hit_rate %.2f cache_miss_rate %.2f reasoning_rate %.2f\n",
+			safeDisplay(row.ProviderInstanceID), row.RequestCount, row.TotalTokens,
+			row.CacheHitRate, row.CacheMissRate, row.ReasoningTokenRate)
+	}
+	for _, row := range m.latencyRows {
+		fmt.Fprintf(b, "- %s avg latency %dms upstream %dms ttft %dms tps_after_ttft %.2f\n",
+			safeDisplay(row.ProviderInstanceID), row.AverageLatencyMS,
+			row.AverageUpstreamLatencyMS, row.AverageTimeToFirstTokenMS,
+			row.AverageOutputTPSAfterTTFT)
+	}
+	m.writePruning(b)
+}
+
+func (m Model) writeAccounts(b *strings.Builder) {
+	b.WriteString("Local API tokens\n")
 	if len(m.tokenRows) == 0 {
 		b.WriteString("No local API tokens.\n")
 	}
@@ -247,25 +401,16 @@ func (m Model) View() string {
 		if token.Disabled {
 			state = "disabled"
 		}
-		fmt.Fprintf(&b, "%s %d %s %s...%s %s\n", cursor, token.ID, token.Label, token.TokenPrefix, token.TokenLast4, state)
+		fmt.Fprintf(b, "%s %d %s %s...%s %s\n", cursor, token.ID, safeDisplay(token.Label),
+			safeTokenFragmentDisplay(token.TokenPrefix, 8), safeTokenFragmentDisplay(token.TokenLast4, 4), state)
 	}
-	if m.reveal != "" {
-		fmt.Fprintf(&b, "\nNew token %s: %s\n", strconv.FormatInt(m.revealTokenID, 10), m.reveal)
+	if m.revealTokenID != 0 {
+		fmt.Fprintf(b, "\nNew token %s created: %s...%s\n",
+			strconv.FormatInt(m.revealTokenID, 10),
+			safeTokenFragmentDisplay(m.revealTokenPrefix, 8), safeTokenFragmentDisplay(m.revealTokenLast4, 4))
 	}
 	if m.apiKeyMode {
-		fmt.Fprintf(&b, "\nAdding API key for %s: %s\n", m.apiKeyProvider, strings.Repeat("*", len(m.apiKeyInput)))
-	}
-	b.WriteString("\nProvider instances\n")
-	for _, instance := range m.providers {
-		apiKey := "api-key disabled"
-		if instance.APIKey {
-			apiKey = "api-key"
-		}
-		oauth := "oauth disabled"
-		if instance.OAuth {
-			oauth = "oauth"
-		}
-		fmt.Fprintf(&b, "- %s %s %s %s %s\n", instance.ID, instance.Type, instance.BaseURL, apiKey, oauth)
+		fmt.Fprintf(b, "\nAdding API key for %s: %s\n", m.apiKeyProvider, strings.Repeat("*", len(m.apiKeyInput)))
 	}
 	b.WriteString("\nUpstream credentials\n")
 	if len(m.credentials) == 0 {
@@ -276,24 +421,235 @@ func (m Model) View() string {
 		if cred.Disabled {
 			state = "disabled"
 		}
-		fmt.Fprintf(&b, "- %d %s %s %s...%s group %s %s\n", cred.ID, safeDisplay(cred.ProviderInstanceID),
+		fmt.Fprintf(b, "- %d %s %s %s...%s group %s %s\n", cred.ID, safeDisplay(cred.ProviderInstanceID),
 			safeDisplay(cred.Label), safeDisplay(cred.SecretPrefix), safeDisplay(cred.SecretLast4),
 			safeDisplay(cred.FallbackGroup), state)
 	}
-	m.writeFallbackPolicies(&b)
-	m.writeOAuth(&b)
-	b.WriteString("\nModel cache\n")
-	summaries := modelCacheSummaries(m.modelRows)
-	if len(summaries) == 0 {
-		b.WriteString("No cached models.\n")
+	m.writeFallbackPolicies(b)
+	m.writeOAuth(b)
+}
+
+func (m Model) writeHelp(b *strings.Builder) {
+	b.WriteString("Keys\n")
+	b.WriteString("- tab / shift+tab switch tabs\n")
+	b.WriteString("- 1-4 jump to overview, accounts, observability, help\n")
+	b.WriteString("- up/down or j/k scroll content outside accounts\n")
+	b.WriteString("- up/down or j/k select local token on accounts\n")
+	b.WriteString("- pgup/pgdown, ctrl+u/ctrl+d, home/end scroll content\n")
+	b.WriteString("- n create local token on accounts\n")
+	b.WriteString("- a add API key on accounts\n")
+	b.WriteString("- d disable selected local token on accounts\n")
+	b.WriteString("- x disable first enabled API key credential on accounts\n")
+	b.WriteString("- l login or relogin OAuth on accounts\n")
+	b.WriteString("- o select OAuth account on accounts\n")
+	b.WriteString("- r refresh selected OAuth account on accounts\n")
+	b.WriteString("- f/F enable or disable first credential group fallback on accounts\n")
+	b.WriteString("- p prune telemetry older than 30 days on observability\n")
+	b.WriteString("- esc clears transient messages or cancels OAuth login\n")
+	b.WriteString("- q quits\n")
+	b.WriteString("\nPrivacy\n")
+	b.WriteString("The TUI renders snapshot metadata and redacted display values only. It does not render prompts, completions, request bodies, response bodies, raw streams, tool arguments, tool results, provider payloads, provider request IDs, full local tokens, or full provider account IDs.\n")
+}
+
+func (m Model) activeTabBody() string {
+	return m.tabBody(m.activeTab)
+}
+
+func (m Model) tabBody(tab tuiTab) string {
+	var b strings.Builder
+	switch tab {
+	case tabOverview:
+		m.writeOverview(&b)
+	case tabAccounts:
+		m.writeAccounts(&b)
+	case tabObservability:
+		m.writeObservability(&b)
+	case tabHelp:
+		m.writeHelp(&b)
+	default:
+		m.writeOverview(&b)
 	}
-	for _, summary := range summaries {
-		fmt.Fprintf(&b, "- %s %d models updated %s\n", summary.ProviderInstanceID, summary.Count, summary.UpdatedAt)
-	}
-	m.writeObservability(&b)
-	m.writePruning(&b)
-	b.WriteString("\nPress n to create local token, a to add API key, d to disable local token, x to disable API key, l to login/relogin OAuth, o/r to select/refresh OAuth, f/F to mark credential group, p to prune telemetry, q to quit.\n")
 	return b.String()
+}
+
+func (m Model) tabBar(width int) string {
+	active := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
+	inactive := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	parts := make([]string, 0, len(tuiTabs))
+	for _, tab := range tuiTabs {
+		label := " " + tab.label + " "
+		if tab.id == m.activeTab {
+			parts = append(parts, active.Render("["+label+"]"))
+		} else {
+			parts = append(parts, inactive.Render(" "+label+" "))
+		}
+	}
+	line := strings.Join(parts, " ")
+	if width > 0 && lipgloss.Width(line) > width {
+		return lipgloss.NewStyle().MaxWidth(width).Render(line)
+	}
+	return line
+}
+
+func (m Model) statusLine() string {
+	if m.err != "" {
+		return "Error: " + safeErrorMessage(m.err)
+	}
+	if m.revealTokenID != 0 {
+		return "New token " + strconv.FormatInt(m.revealTokenID, 10) + " metadata is visible on accounts."
+	}
+	if m.apiKeyMode {
+		return "Adding API key for " + safeDisplay(m.apiKeyProvider) + ": " + strings.Repeat("*", len(m.apiKeyInput))
+	}
+	if m.oauthChallenge != nil {
+		return "OAuth login for " + safeDisplay(m.oauthChallenge.ProviderInstanceID) + " is visible on accounts."
+	}
+	return ""
+}
+
+func (m Model) footerLine() string {
+	switch m.activeTab {
+	case tabAccounts:
+		return "tab switch  up/down select  pgup/pgdown scroll  n new token  a add key  d disable token  x disable key  l login  o/r OAuth  f/F fallback  q quit"
+	case tabObservability:
+		return "tab switch  up/down scroll  pgup/pgdown page  home/end jump  p prune  q quit"
+	case tabHelp:
+		return "tab switch  up/down scroll  q quit"
+	default:
+		return "tab switch  up/down scroll  q quit"
+	}
+}
+
+func (m Model) renderViewport(body string) string {
+	width := m.viewWidth()
+	height := m.viewportHeight()
+	lines := splitBodyLines(body)
+	offset := m.scrollOffsets[m.validActiveTab()]
+	maxOffset := maxInt(0, len(lines)-height)
+	if offset > maxOffset {
+		offset = maxOffset
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	out := make([]string, 0, height)
+	for i := 0; i < height; i++ {
+		index := offset + i
+		line := ""
+		if index < len(lines) {
+			line = lines[index]
+		}
+		out = append(out, clipPlainLine(line, width))
+	}
+	return strings.Join(out, "\n")
+}
+
+func splitBodyLines(body string) []string {
+	body = strings.TrimRight(body, "\n")
+	if body == "" {
+		return []string{""}
+	}
+	return strings.Split(body, "\n")
+}
+
+func (m Model) viewWidth() int {
+	if m.width > 0 {
+		return m.width
+	}
+	if width, err := strconv.Atoi(os.Getenv("COLUMNS")); err == nil && width > 0 {
+		return width
+	}
+	return 100
+}
+
+func (m Model) viewHeight() int {
+	if m.height > 0 {
+		return m.height
+	}
+	if height, err := strconv.Atoi(os.Getenv("LINES")); err == nil && height > 0 {
+		return height
+	}
+	return 30
+}
+
+func (m Model) viewportHeight() int {
+	reserved := 3
+	if m.statusLine() != "" {
+		reserved++
+	}
+	height := m.viewHeight() - reserved
+	if height < 1 {
+		return 1
+	}
+	return height
+}
+
+func (m Model) validActiveTab() tuiTab {
+	if m.activeTab < 0 || m.activeTab >= tuiTabCount {
+		return tabOverview
+	}
+	return m.activeTab
+}
+
+func (m Model) activeScrollMax() int {
+	return m.scrollMax(m.validActiveTab())
+}
+
+func (m Model) scrollMax(tab tuiTab) int {
+	lines := splitBodyLines(m.tabBody(tab))
+	return maxInt(0, len(lines)-m.viewportHeight())
+}
+
+func (m *Model) scrollActive(delta int) {
+	m.setActiveScroll(m.scrollOffsets[m.validActiveTab()] + delta)
+}
+
+func (m *Model) setActiveScroll(offset int) {
+	tab := m.validActiveTab()
+	maxOffset := m.scrollMax(tab)
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > maxOffset {
+		offset = maxOffset
+	}
+	m.scrollOffsets[tab] = offset
+}
+
+func (m *Model) clampScrolls() {
+	if m.activeTab < 0 || m.activeTab >= tuiTabCount {
+		m.activeTab = tabOverview
+	}
+	for _, tab := range tuiTabs {
+		maxOffset := m.scrollMax(tab.id)
+		if m.scrollOffsets[tab.id] > maxOffset {
+			m.scrollOffsets[tab.id] = maxOffset
+		}
+		if m.scrollOffsets[tab.id] < 0 {
+			m.scrollOffsets[tab.id] = 0
+		}
+	}
+}
+
+func clipPlainLine(line string, width int) string {
+	if width <= 0 {
+		return line
+	}
+	runes := []rune(line)
+	if len(runes) <= width {
+		return line
+	}
+	if width <= 3 {
+		return string(runes[:width])
+	}
+	return string(runes[:width-3]) + "..."
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func Run(cfg config.Config, registry provider.Registry, snapshot management.SnapshotClient, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, oauth management.OAuthClient, pruner management.TelemetryPruneClient, loggers ...*slog.Logger) error {
@@ -305,7 +661,7 @@ func Run(cfg config.Config, registry provider.Registry, snapshot management.Snap
 	if err := model.reload(); err != nil {
 		return err
 	}
-	_, err := tea.NewProgram(model).Run()
+	_, err := tea.NewProgram(model, tea.WithMouseCellMotion()).Run()
 	return err
 }
 
@@ -352,6 +708,7 @@ func (m *Model) applySnapshot(snapshot management.ManagementSnapshotResponse) {
 	if m.oauthSelected < 0 {
 		m.oauthSelected = 0
 	}
+	m.clampScrolls()
 }
 
 func providersFromSnapshot(rows []management.ProviderInstance) []provider.Instance {
@@ -479,12 +836,19 @@ func (m Model) writeObservability(b *strings.Builder) {
 		if row.ThinkingType != "" {
 			options += " thinking " + safeDisplay(row.ThinkingType)
 		}
-		fmt.Fprintf(b, "- %s %s %s status %d %s %s attempts %d auth_retry %d fallback %d%s msg %d tools %d images %d%s prompt %d completion %d total %d reasoning %d reasoning_rate %.2f cache_hit %d cache_hit_rate %.2f cache_miss %d cache_miss_rate %.2f cache_write %d cache_write_rate %.2f latency %dms upstream %dms ttft %dms tps_total %.2f tps_after_ttft %.2f\n",
+		fmt.Fprintf(b, "- %s %s %s status %d %s\n",
 			formatTime(row.StartedAt), route, requestModelDisplay(row),
-			row.HTTPStatus, safeDisplay(row.ErrorClass), credential, row.AttemptCount, row.AuthRetryCount,
-			row.FallbackCount, fallbackReason, row.MessageCount, row.ToolCount, row.ImageCount, options,
-			row.PromptTokens, row.CompletionTokens, row.TotalTokens, row.ReasoningTokens, row.ReasoningTokenRate,
-			row.CacheHitTokens, row.CacheHitRate, row.CacheMissTokens, row.CacheMissRate, row.CacheWriteTokens, row.CacheWriteRate,
+			row.HTTPStatus, safeDisplay(row.ErrorClass))
+		fmt.Fprintf(b, "  credential %s attempts %d auth_retry %d fallback %d%s\n",
+			credential, row.AttemptCount, row.AuthRetryCount, row.FallbackCount, fallbackReason)
+		fmt.Fprintf(b, "  shape msg %d tools %d images %d%s\n",
+			row.MessageCount, row.ToolCount, row.ImageCount, options)
+		fmt.Fprintf(b, "  tokens prompt %d completion %d total %d reasoning %d reasoning_rate %.2f\n",
+			row.PromptTokens, row.CompletionTokens, row.TotalTokens, row.ReasoningTokens, row.ReasoningTokenRate)
+		fmt.Fprintf(b, "  cache_hit %d cache_hit_rate %.2f\n", row.CacheHitTokens, row.CacheHitRate)
+		fmt.Fprintf(b, "  cache_miss %d cache_miss_rate %.2f\n", row.CacheMissTokens, row.CacheMissRate)
+		fmt.Fprintf(b, "  cache_write %d cache_write_rate %.2f\n", row.CacheWriteTokens, row.CacheWriteRate)
+		fmt.Fprintf(b, "  latency total %dms upstream %dms ttft %dms tps_total %.2f tps_after_ttft %.2f\n",
 			row.TotalLatencyMS, row.UpstreamLatencyMS, row.TimeToFirstTokenMS,
 			row.OutputTokensPerSecondTotal, row.OutputTokensPerSecondAfterTTFT)
 	}
@@ -493,11 +857,13 @@ func (m Model) writeObservability(b *strings.Builder) {
 		b.WriteString("No usage metadata.\n")
 	}
 	for _, row := range m.usageRows {
-		fmt.Fprintf(b, "- %s %d req prompt %d completion %d total %d reasoning %d reasoning_rate %.2f cache_hit %d cache_hit_rate %.2f cache_miss %d cache_miss_rate %.2f cache_write %d cache_write_rate %.2f cost_microunits %d\n",
-			safeDisplay(row.ProviderInstanceID), row.RequestCount, row.PromptTokens,
-			row.CompletionTokens, row.TotalTokens, row.ReasoningTokens,
-			row.ReasoningTokenRate, row.CacheHitTokens, row.CacheHitRate, row.CacheMissTokens, row.CacheMissRate,
-			row.CacheWriteTokens, row.CacheWriteRate, row.CostMicrounits)
+		fmt.Fprintf(b, "- %s %d req cost_microunits %d\n",
+			safeDisplay(row.ProviderInstanceID), row.RequestCount, row.CostMicrounits)
+		fmt.Fprintf(b, "  tokens prompt %d completion %d total %d reasoning %d reasoning_rate %.2f\n",
+			row.PromptTokens, row.CompletionTokens, row.TotalTokens, row.ReasoningTokens, row.ReasoningTokenRate)
+		fmt.Fprintf(b, "  cache_hit %d cache_hit_rate %.2f\n", row.CacheHitTokens, row.CacheHitRate)
+		fmt.Fprintf(b, "  cache_miss %d cache_miss_rate %.2f\n", row.CacheMissTokens, row.CacheMissRate)
+		fmt.Fprintf(b, "  cache_write %d cache_write_rate %.2f\n", row.CacheWriteTokens, row.CacheWriteRate)
 	}
 	b.WriteString("\nLatency\n")
 	if len(m.latencyRows) == 0 {
@@ -819,6 +1185,31 @@ func safeDisplay(value string) string {
 	return value
 }
 
+func safeTokenFragmentDisplay(value string, maxRunes int) string {
+	value = strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z':
+			return r
+		case r >= 'A' && r <= 'Z':
+			return r
+		case r >= '0' && r <= '9':
+			return r
+		case r == '_' || r == '-':
+			return r
+		default:
+			return -1
+		}
+	}, strings.TrimSpace(value))
+	if value == "" || maxRunes <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) > maxRunes {
+		return string(runes[:maxRunes])
+	}
+	return value
+}
+
 func safeEndpointDisplay(value string) string {
 	value = strings.TrimSpace(value)
 	switch value {
@@ -893,8 +1284,21 @@ func modelCacheSummaries(rows []management.ModelMetadata) []modelCacheSummary {
 }
 
 func (m *Model) clearReveal() {
-	m.reveal = ""
 	m.revealTokenID = 0
+	m.revealTokenPrefix = ""
+	m.revealTokenLast4 = ""
+}
+
+func (m *Model) selectNextLocalToken() {
+	if m.selected < len(m.tokenRows)-1 {
+		m.selected++
+	}
+}
+
+func (m *Model) selectPreviousLocalToken() {
+	if m.selected > 0 {
+		m.selected--
+	}
 }
 
 func (m Model) updateAPIKeyInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {

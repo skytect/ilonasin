@@ -33,6 +33,7 @@ type ChatCompletionRequest struct {
 	ResponseFormat      map[string]any         `json:"response_format,omitempty"`
 	Tools               []map[string]any       `json:"tools,omitempty"`
 	ToolChoice          any                    `json:"tool_choice,omitempty"`
+	ParallelToolCalls   *bool                  `json:"parallel_tool_calls,omitempty"`
 	Logprobs            *bool                  `json:"logprobs,omitempty"`
 	TopLogprobs         *int                   `json:"top_logprobs,omitempty"`
 	LogitBias           map[string]json.Number `json:"logit_bias,omitempty"`
@@ -87,6 +88,9 @@ func DecodeChatCompletion(r io.Reader) (ChatCompletionRequest, error) {
 		return ChatCompletionRequest{}, err
 	}
 	if err := validateRawLogitBias(raw); err != nil {
+		return ChatCompletionRequest{}, err
+	}
+	if err := validateRawParallelToolCalls(raw); err != nil {
 		return ChatCompletionRequest{}, err
 	}
 	toolNames, hasTools, err := validateRawTools(raw)
@@ -316,6 +320,9 @@ func MarshalUpstreamChatRequest(req ChatCompletionRequest, upstreamModel string)
 	}
 	if req.HasField("tool_choice") {
 		out["tool_choice"] = req.ToolChoice
+	}
+	if req.ParallelToolCalls != nil {
+		out["parallel_tool_calls"] = *req.ParallelToolCalls
 	}
 	if req.Stream {
 		out["stream"] = true
@@ -556,6 +563,7 @@ func validateTopLevelKeys(raw map[string]json.RawMessage) error {
 		"response_format":       true,
 		"tools":                 true,
 		"tool_choice":           true,
+		"parallel_tool_calls":   true,
 		"logprobs":              true,
 		"top_logprobs":          true,
 		"logit_bias":            true,
@@ -570,6 +578,22 @@ func validateTopLevelKeys(raw map[string]json.RawMessage) error {
 		if !allowed[key] {
 			return fmt.Errorf("unknown field %q", key)
 		}
+	}
+	return nil
+}
+
+func validateRawParallelToolCalls(raw map[string]json.RawMessage) error {
+	value, ok := raw["parallel_tool_calls"]
+	if !ok {
+		return nil
+	}
+	trimmed := bytes.TrimSpace(value)
+	if len(trimmed) == 0 || isJSONNull(trimmed) || (trimmed[0] != 't' && trimmed[0] != 'f') {
+		return errors.New("parallel_tool_calls must be a boolean")
+	}
+	var out bool
+	if err := json.Unmarshal(trimmed, &out); err != nil {
+		return errors.New("parallel_tool_calls must be a boolean")
 	}
 	return nil
 }

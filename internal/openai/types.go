@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 type ChatCompletionRequest struct {
@@ -37,6 +38,7 @@ type ChatCompletionRequest struct {
 	Prediction          map[string]any         `json:"prediction,omitempty"`
 	User                *string                `json:"user,omitempty"`
 	ServiceTier         *string                `json:"service_tier,omitempty"`
+	SessionID           *string                `json:"session_id,omitempty"`
 	Logprobs            *bool                  `json:"logprobs,omitempty"`
 	TopLogprobs         *int                   `json:"top_logprobs,omitempty"`
 	LogitBias           map[string]json.Number `json:"logit_bias,omitempty"`
@@ -103,6 +105,9 @@ func DecodeChatCompletion(r io.Reader) (ChatCompletionRequest, error) {
 		return ChatCompletionRequest{}, err
 	}
 	if err := validateRawServiceTier(raw); err != nil {
+		return ChatCompletionRequest{}, err
+	}
+	if err := validateRawSessionID(raw); err != nil {
 		return ChatCompletionRequest{}, err
 	}
 	toolNames, hasTools, err := validateRawTools(raw)
@@ -344,6 +349,9 @@ func MarshalUpstreamChatRequest(req ChatCompletionRequest, upstreamModel string)
 	}
 	if req.ServiceTier != nil {
 		out["service_tier"] = *req.ServiceTier
+	}
+	if req.SessionID != nil {
+		out["session_id"] = *req.SessionID
 	}
 	if req.Stream {
 		out["stream"] = true
@@ -588,6 +596,7 @@ func validateTopLevelKeys(raw map[string]json.RawMessage) error {
 		"prediction":            true,
 		"user":                  true,
 		"service_tier":          true,
+		"session_id":            true,
 		"logprobs":              true,
 		"top_logprobs":          true,
 		"logit_bias":            true,
@@ -690,6 +699,25 @@ func validateRawServiceTier(raw map[string]json.RawMessage) error {
 	default:
 		return errors.New("service_tier must be one of auto, default, flex, priority, scale")
 	}
+}
+
+func validateRawSessionID(raw map[string]json.RawMessage) error {
+	value, ok := raw["session_id"]
+	if !ok {
+		return nil
+	}
+	trimmed := bytes.TrimSpace(value)
+	if len(trimmed) == 0 || isJSONNull(trimmed) {
+		return errors.New("session_id must be a non-empty string up to 256 characters")
+	}
+	var out string
+	if err := json.Unmarshal(trimmed, &out); err != nil {
+		return errors.New("session_id must be a non-empty string up to 256 characters")
+	}
+	if out == "" || utf8.RuneCountInString(out) > 256 {
+		return errors.New("session_id must be a non-empty string up to 256 characters")
+	}
+	return nil
 }
 
 func validateRawParallelToolCalls(raw map[string]json.RawMessage) error {

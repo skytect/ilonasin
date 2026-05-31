@@ -110,7 +110,7 @@ func NewHTTPChatAdapter(client *http.Client) HTTPChatAdapter {
 
 func (a HTTPChatAdapter) ValidateChatRequest(instance Instance, req openai.ChatCompletionRequest) error {
 	commonUnsupported := []string{}
-	openRouterOnlyFields := []string{"top_k", "min_p", "top_a", "repetition_penalty", "seed", "logit_bias", "service_tier"}
+	openRouterOnlyFields := []string{"top_k", "min_p", "top_a", "repetition_penalty", "seed", "logit_bias", "service_tier", "session_id"}
 	switch instance.Type {
 	case "deepseek", "openrouter":
 		if err := rejectPresentFields(req, commonUnsupported...); err != nil {

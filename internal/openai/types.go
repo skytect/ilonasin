@@ -89,13 +89,25 @@ func DecodeChatCompletion(r io.Reader) (ChatCompletionRequest, error) {
 	if err := validateRawLogitBias(raw); err != nil {
 		return ChatCompletionRequest{}, err
 	}
+	toolNames, hasTools, err := validateRawTools(raw)
+	if err != nil {
+		return ChatCompletionRequest{}, err
+	}
+	if err := validateRawToolChoice(raw, toolNames, hasTools); err != nil {
+		return ChatCompletionRequest{}, err
+	}
 	var req ChatCompletionRequest
 	body, err := json.Marshal(raw)
 	if err != nil {
 		return ChatCompletionRequest{}, err
 	}
-	if err := json.Unmarshal(body, &req); err != nil {
+	typed := json.NewDecoder(bytes.NewReader(body))
+	typed.UseNumber()
+	if err := typed.Decode(&req); err != nil {
 		return ChatCompletionRequest{}, fmt.Errorf("invalid request JSON: %w", err)
+	}
+	if typed.Decode(&struct{}{}) != io.EOF {
+		return ChatCompletionRequest{}, errors.New("request body must contain a single JSON object")
 	}
 	req.PresentFields = map[string]bool{}
 	for key := range raw {
@@ -145,14 +157,31 @@ func (r ChatCompletionRequest) Validate() error {
 	if err := validateLogitBiasValues(r); err != nil {
 		return err
 	}
+	if err := validateToolValues(r); err != nil {
+		return err
+	}
 	for i, msg := range r.Messages {
 		switch msg.Role {
-		case "system", "user", "assistant":
+		case "system", "user":
+			if !isJSONString(msg.Content) {
+				return fmt.Errorf("messages[%d].content must be a JSON string", i)
+			}
+		case "assistant":
+			if len(msg.ToolCalls) == 0 && !isJSONString(msg.Content) {
+				return fmt.Errorf("messages[%d].content must be a JSON string", i)
+			}
+			if len(msg.ToolCalls) > 0 && len(bytes.TrimSpace(msg.Content)) > 0 && !isJSONString(msg.Content) && !isJSONNull(msg.Content) {
+				return fmt.Errorf("messages[%d].content must be a JSON string or null", i)
+			}
+		case "tool":
+			if msg.ToolCallID == "" {
+				return fmt.Errorf("messages[%d].tool_call_id is required", i)
+			}
+			if !isJSONString(msg.Content) {
+				return fmt.Errorf("messages[%d].content must be a JSON string", i)
+			}
 		default:
 			return fmt.Errorf("messages[%d].role is unsupported", i)
-		}
-		if !isJSONString(msg.Content) {
-			return fmt.Errorf("messages[%d].content must be a JSON string", i)
 		}
 	}
 	if !r.Stream && r.StreamOptions != nil {
@@ -281,6 +310,12 @@ func MarshalUpstreamChatRequest(req ChatCompletionRequest, upstreamModel string)
 	}
 	if req.HasField("logit_bias") {
 		out["logit_bias"] = req.LogitBias
+	}
+	if req.HasField("tools") {
+		out["tools"] = req.Tools
+	}
+	if req.HasField("tool_choice") {
+		out["tool_choice"] = req.ToolChoice
 	}
 	if req.Stream {
 		out["stream"] = true
@@ -600,6 +635,162 @@ func validateRawLogitBias(raw map[string]json.RawMessage) error {
 	return nil
 }
 
+func validateRawTools(raw map[string]json.RawMessage) (map[string]bool, bool, error) {
+	value, ok := raw["tools"]
+	if !ok {
+		return nil, false, nil
+	}
+	if isJSONNull(value) {
+		return nil, true, errors.New("tools must be an array")
+	}
+	var tools []json.RawMessage
+	if err := json.Unmarshal(value, &tools); err != nil {
+		return nil, true, errors.New("tools must be an array")
+	}
+	if len(tools) > 128 {
+		return nil, true, errors.New("tools supports at most 128 functions")
+	}
+	names := map[string]bool{}
+	for i, rawTool := range tools {
+		name, err := validateRawTool(rawTool, i)
+		if err != nil {
+			return nil, true, err
+		}
+		if names[name] {
+			return nil, true, fmt.Errorf("tools[%d].function.name is duplicated", i)
+		}
+		names[name] = true
+	}
+	return names, true, nil
+}
+
+func validateRawTool(raw json.RawMessage, index int) (string, error) {
+	var tool map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &tool); err != nil {
+		return "", fmt.Errorf("tools[%d] must be an object", index)
+	}
+	for key := range tool {
+		switch key {
+		case "type", "function":
+		default:
+			return "", fmt.Errorf("tools[%d] contains unsupported fields", index)
+		}
+	}
+	if err := requireRawStringValue(tool["type"], "function", fmt.Sprintf("tools[%d].type", index)); err != nil {
+		return "", err
+	}
+	rawFunction, ok := tool["function"]
+	if !ok || isJSONNull(rawFunction) {
+		return "", fmt.Errorf("tools[%d].function is required", index)
+	}
+	var function map[string]json.RawMessage
+	if err := json.Unmarshal(rawFunction, &function); err != nil {
+		return "", fmt.Errorf("tools[%d].function must be an object", index)
+	}
+	for key := range function {
+		switch key {
+		case "name", "description", "parameters", "strict":
+		default:
+			return "", fmt.Errorf("tools[%d].function contains unsupported fields", index)
+		}
+	}
+	name, err := requiredRawString(function["name"], fmt.Sprintf("tools[%d].function.name", index))
+	if err != nil {
+		return "", err
+	}
+	if !isFunctionName(name) {
+		return "", fmt.Errorf("tools[%d].function.name is invalid", index)
+	}
+	if rawDescription, ok := function["description"]; ok {
+		if _, err := requiredRawString(rawDescription, fmt.Sprintf("tools[%d].function.description", index)); err != nil {
+			return "", err
+		}
+	}
+	if rawParameters, ok := function["parameters"]; ok {
+		if isJSONNull(rawParameters) {
+			return "", fmt.Errorf("tools[%d].function.parameters must be an object", index)
+		}
+		var parameters map[string]json.RawMessage
+		if err := json.Unmarshal(rawParameters, &parameters); err != nil {
+			return "", fmt.Errorf("tools[%d].function.parameters must be an object", index)
+		}
+	}
+	if rawStrict, ok := function["strict"]; ok {
+		var strict bool
+		if err := json.Unmarshal(rawStrict, &strict); err != nil {
+			return "", fmt.Errorf("tools[%d].function.strict must be a boolean", index)
+		}
+		if strict {
+			return "", fmt.Errorf("tools[%d].function.strict is unsupported", index)
+		}
+	}
+	return name, nil
+}
+
+func validateRawToolChoice(raw map[string]json.RawMessage, toolNames map[string]bool, hasTools bool) error {
+	value, ok := raw["tool_choice"]
+	if !ok {
+		return nil
+	}
+	if isJSONNull(value) {
+		return errors.New("tool_choice must be none, auto, required, or a named function")
+	}
+	if choice, ok := rawJSONStringValue(value); ok {
+		switch choice {
+		case "none":
+			return nil
+		case "auto", "required":
+			if !hasTools || len(toolNames) == 0 {
+				return errors.New("tool_choice requires tools")
+			}
+			return nil
+		default:
+			return errors.New("tool_choice is unsupported")
+		}
+	}
+	if !hasTools || len(toolNames) == 0 {
+		return errors.New("tool_choice requires tools")
+	}
+	var choice map[string]json.RawMessage
+	if err := json.Unmarshal(value, &choice); err != nil {
+		return errors.New("tool_choice must be none, auto, required, or a named function")
+	}
+	for key := range choice {
+		switch key {
+		case "type", "function":
+		default:
+			return errors.New("tool_choice contains unsupported fields")
+		}
+	}
+	if err := requireRawStringValue(choice["type"], "function", "tool_choice.type"); err != nil {
+		return err
+	}
+	rawFunction, ok := choice["function"]
+	if !ok || isJSONNull(rawFunction) {
+		return errors.New("tool_choice.function is required")
+	}
+	var function map[string]json.RawMessage
+	if err := json.Unmarshal(rawFunction, &function); err != nil {
+		return errors.New("tool_choice.function must be an object")
+	}
+	for key := range function {
+		if key != "name" {
+			return errors.New("tool_choice.function contains unsupported fields")
+		}
+	}
+	name, err := requiredRawString(function["name"], "tool_choice.function.name")
+	if err != nil {
+		return err
+	}
+	if !isFunctionName(name) {
+		return errors.New("tool_choice.function.name is invalid")
+	}
+	if !toolNames[name] {
+		return errors.New("tool_choice.function.name is not in tools")
+	}
+	return nil
+}
+
 func parseRawLogprobs(raw map[string]json.RawMessage) (bool, bool, error) {
 	value, ok := raw["logprobs"]
 	if !ok {
@@ -862,6 +1053,44 @@ func validateLogitBiasValues(r ChatCompletionRequest) error {
 	return nil
 }
 
+func validateToolValues(r ChatCompletionRequest) error {
+	var toolNames map[string]bool
+	hasTools := r.HasField("tools")
+	if hasTools {
+		body, err := json.Marshal(r.Tools)
+		if err != nil {
+			return err
+		}
+		names, _, err := validateRawTools(map[string]json.RawMessage{"tools": body})
+		if err != nil {
+			return err
+		}
+		toolNames = names
+	}
+	if r.HasField("tool_choice") {
+		body, err := json.Marshal(r.ToolChoice)
+		if err != nil {
+			return err
+		}
+		if err := validateRawToolChoice(map[string]json.RawMessage{"tool_choice": body}, toolNames, hasTools); err != nil {
+			return err
+		}
+	}
+	for i, msg := range r.Messages {
+		if len(msg.ToolCalls) == 0 {
+			continue
+		}
+		body, err := json.Marshal(msg.ToolCalls)
+		if err != nil {
+			return err
+		}
+		if err := validateRawAssistantToolCalls(body, i); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func validateRawStreamOptions(raw map[string]json.RawMessage) error {
 	options, hasOptions := raw["stream_options"]
 	if !hasOptions {
@@ -906,14 +1135,130 @@ func validateRawMessages(raw json.RawMessage) error {
 		return fmt.Errorf("messages must be an array: %w", err)
 	}
 	for i, msg := range messages {
+		role, err := requiredRawString(msg["role"], fmt.Sprintf("messages[%d].role", i))
+		if err != nil {
+			return err
+		}
 		for key := range msg {
-			if key != "role" && key != "content" {
-				return fmt.Errorf("messages[%d].%s is not supported", i, key)
+			switch role {
+			case "system", "user":
+				if key != "role" && key != "content" {
+					return fmt.Errorf("messages[%d] contains unsupported fields", i)
+				}
+			case "assistant":
+				if key != "role" && key != "content" && key != "tool_calls" {
+					return fmt.Errorf("messages[%d] contains unsupported fields", i)
+				}
+			case "tool":
+				if key != "role" && key != "content" && key != "tool_call_id" {
+					return fmt.Errorf("messages[%d] contains unsupported fields", i)
+				}
+			default:
+				return fmt.Errorf("messages[%d].role is unsupported", i)
 			}
 		}
-		if rawContent, ok := msg["content"]; ok && !isJSONString(rawContent) {
-			return fmt.Errorf("messages[%d].content must be a JSON string", i)
+		switch role {
+		case "system", "user":
+			if rawContent, ok := msg["content"]; !ok || !isJSONString(rawContent) {
+				return fmt.Errorf("messages[%d].content must be a JSON string", i)
+			}
+		case "assistant":
+			_, hasToolCalls := msg["tool_calls"]
+			if rawContent, ok := msg["content"]; ok {
+				if hasToolCalls {
+					if !isJSONString(rawContent) && !isJSONNull(rawContent) {
+						return fmt.Errorf("messages[%d].content must be a JSON string or null", i)
+					}
+				} else if !isJSONString(rawContent) {
+					return fmt.Errorf("messages[%d].content must be a JSON string", i)
+				}
+			} else if !hasToolCalls {
+				return fmt.Errorf("messages[%d].content must be a JSON string", i)
+			}
+			if hasToolCalls {
+				if err := validateRawAssistantToolCalls(msg["tool_calls"], i); err != nil {
+					return err
+				}
+			}
+		case "tool":
+			if rawContent, ok := msg["content"]; !ok || !isJSONString(rawContent) {
+				return fmt.Errorf("messages[%d].content must be a JSON string", i)
+			}
+			if id, err := requiredRawString(msg["tool_call_id"], fmt.Sprintf("messages[%d].tool_call_id", i)); err != nil {
+				return err
+			} else if id == "" {
+				return fmt.Errorf("messages[%d].tool_call_id is required", i)
+			}
 		}
+	}
+	return nil
+}
+
+func validateRawAssistantToolCalls(raw json.RawMessage, messageIndex int) error {
+	if isJSONNull(raw) {
+		return fmt.Errorf("messages[%d].tool_calls must be an array", messageIndex)
+	}
+	var calls []json.RawMessage
+	if err := json.Unmarshal(raw, &calls); err != nil {
+		return fmt.Errorf("messages[%d].tool_calls must be an array", messageIndex)
+	}
+	if len(calls) == 0 {
+		return fmt.Errorf("messages[%d].tool_calls must not be empty", messageIndex)
+	}
+	for i, rawCall := range calls {
+		if err := validateRawAssistantToolCall(rawCall, messageIndex, i); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateRawAssistantToolCall(raw json.RawMessage, messageIndex, callIndex int) error {
+	var call map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &call); err != nil {
+		return fmt.Errorf("messages[%d].tool_calls[%d] must be an object", messageIndex, callIndex)
+	}
+	for key := range call {
+		switch key {
+		case "id", "type", "function":
+		default:
+			return fmt.Errorf("messages[%d].tool_calls[%d] contains unsupported fields", messageIndex, callIndex)
+		}
+	}
+	id, err := requiredRawString(call["id"], fmt.Sprintf("messages[%d].tool_calls[%d].id", messageIndex, callIndex))
+	if err != nil {
+		return err
+	}
+	if id == "" {
+		return fmt.Errorf("messages[%d].tool_calls[%d].id is required", messageIndex, callIndex)
+	}
+	if err := requireRawStringValue(call["type"], "function", fmt.Sprintf("messages[%d].tool_calls[%d].type", messageIndex, callIndex)); err != nil {
+		return err
+	}
+	rawFunction, ok := call["function"]
+	if !ok || isJSONNull(rawFunction) {
+		return fmt.Errorf("messages[%d].tool_calls[%d].function is required", messageIndex, callIndex)
+	}
+	var function map[string]json.RawMessage
+	if err := json.Unmarshal(rawFunction, &function); err != nil {
+		return fmt.Errorf("messages[%d].tool_calls[%d].function must be an object", messageIndex, callIndex)
+	}
+	for key := range function {
+		switch key {
+		case "name", "arguments":
+		default:
+			return fmt.Errorf("messages[%d].tool_calls[%d].function contains unsupported fields", messageIndex, callIndex)
+		}
+	}
+	name, err := requiredRawString(function["name"], fmt.Sprintf("messages[%d].tool_calls[%d].function.name", messageIndex, callIndex))
+	if err != nil {
+		return err
+	}
+	if !isFunctionName(name) {
+		return fmt.Errorf("messages[%d].tool_calls[%d].function.name is invalid", messageIndex, callIndex)
+	}
+	if _, err := requiredRawString(function["arguments"], fmt.Sprintf("messages[%d].tool_calls[%d].function.arguments", messageIndex, callIndex)); err != nil {
+		return err
 	}
 	return nil
 }
@@ -921,6 +1266,53 @@ func validateRawMessages(raw json.RawMessage) error {
 func isJSONString(raw json.RawMessage) bool {
 	raw = bytes.TrimSpace(raw)
 	return len(raw) >= 2 && raw[0] == '"' && raw[len(raw)-1] == '"'
+}
+
+func rawJSONStringValue(raw json.RawMessage) (string, bool) {
+	if !isJSONString(raw) {
+		return "", false
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", false
+	}
+	return value, true
+}
+
+func requiredRawString(raw json.RawMessage, field string) (string, error) {
+	value, ok := rawJSONStringValue(raw)
+	if !ok {
+		return "", fmt.Errorf("%s must be a string", field)
+	}
+	return value, nil
+}
+
+func requireRawStringValue(raw json.RawMessage, want, field string) error {
+	value, err := requiredRawString(raw, field)
+	if err != nil {
+		return err
+	}
+	if value != want {
+		return fmt.Errorf("%s is unsupported", field)
+	}
+	return nil
+}
+
+func isFunctionName(value string) bool {
+	if value == "" || len(value) > 64 {
+		return false
+	}
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '_' || r == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func isJSONNull(raw json.RawMessage) bool {
@@ -1018,6 +1410,13 @@ func normalizeStreamChoice(rawChoice json.RawMessage, index int) (map[string]any
 		if reasoning != nil {
 			delta["reasoning_content"] = *reasoning
 		}
+		if rawToolCalls, ok := deltaRaw["tool_calls"]; ok {
+			toolCalls, err := normalizeStreamToolCalls(rawToolCalls, index)
+			if err != nil {
+				return nil, false, err
+			}
+			delta["tool_calls"] = toolCalls
+		}
 		if len(delta) > 0 {
 			out["delta"] = delta
 		}
@@ -1052,6 +1451,114 @@ func normalizeStreamChoice(rawChoice json.RawMessage, index int) (map[string]any
 		}
 	}
 	return out, outputToken, nil
+}
+
+func normalizeStreamToolCalls(raw json.RawMessage, choiceIndex int) ([]any, error) {
+	if isJSONNull(raw) {
+		return nil, fmt.Errorf("upstream stream choices[%d].delta.tool_calls is invalid", choiceIndex)
+	}
+	var calls []json.RawMessage
+	if err := json.Unmarshal(raw, &calls); err != nil {
+		return nil, fmt.Errorf("upstream stream choices[%d].delta.tool_calls is invalid", choiceIndex)
+	}
+	if len(calls) == 0 {
+		return nil, fmt.Errorf("upstream stream choices[%d].delta.tool_calls is invalid", choiceIndex)
+	}
+	out := make([]any, 0, len(calls))
+	for i, rawCall := range calls {
+		call, err := normalizeStreamToolCall(rawCall, choiceIndex, i)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, call)
+	}
+	return out, nil
+}
+
+func normalizeStreamToolCall(raw json.RawMessage, choiceIndex, callIndex int) (map[string]any, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return nil, fmt.Errorf("upstream stream choices[%d].delta.tool_calls[%d] is invalid", choiceIndex, callIndex)
+	}
+	out := map[string]any{}
+	for key := range fields {
+		switch key {
+		case "index", "id", "type", "function":
+		default:
+			return nil, fmt.Errorf("upstream stream choices[%d].delta.tool_calls[%d] is invalid", choiceIndex, callIndex)
+		}
+	}
+	rawIndex, ok := fields["index"]
+	if !ok {
+		return nil, fmt.Errorf("upstream stream choices[%d].delta.tool_calls[%d] is invalid", choiceIndex, callIndex)
+	}
+	indexNum, err := parseJSONNumberToken("tool_call.index", rawIndex, "a supported integer")
+	if err != nil || strings.ContainsAny(indexNum.String(), ".eE") {
+		return nil, fmt.Errorf("upstream stream choices[%d].delta.tool_calls[%d] is invalid", choiceIndex, callIndex)
+	}
+	index, err := strconv.ParseInt(indexNum.String(), 10, 64)
+	if err != nil || index < 0 || index > math.MaxInt32 {
+		return nil, fmt.Errorf("upstream stream choices[%d].delta.tool_calls[%d] is invalid", choiceIndex, callIndex)
+	}
+	out["index"] = int(index)
+	if rawID, ok := fields["id"]; ok {
+		id, err := requiredRawString(rawID, "tool_call.id")
+		if err != nil || id == "" {
+			return nil, fmt.Errorf("upstream stream choices[%d].delta.tool_calls[%d] is invalid", choiceIndex, callIndex)
+		}
+		out["id"] = id
+	}
+	if rawType, ok := fields["type"]; ok {
+		typ, err := requiredRawString(rawType, "tool_call.type")
+		if err != nil || typ != "function" {
+			return nil, fmt.Errorf("upstream stream choices[%d].delta.tool_calls[%d] is invalid", choiceIndex, callIndex)
+		}
+		out["type"] = typ
+	}
+	if rawFunction, ok := fields["function"]; ok {
+		function, err := normalizeStreamToolCallFunction(rawFunction, choiceIndex, callIndex)
+		if err != nil {
+			return nil, err
+		}
+		out["function"] = function
+	}
+	if len(out) == 1 {
+		return nil, fmt.Errorf("upstream stream choices[%d].delta.tool_calls[%d] is invalid", choiceIndex, callIndex)
+	}
+	return out, nil
+}
+
+func normalizeStreamToolCallFunction(raw json.RawMessage, choiceIndex, callIndex int) (map[string]any, error) {
+	if isJSONNull(raw) {
+		return nil, fmt.Errorf("upstream stream choices[%d].delta.tool_calls[%d] is invalid", choiceIndex, callIndex)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return nil, fmt.Errorf("upstream stream choices[%d].delta.tool_calls[%d] is invalid", choiceIndex, callIndex)
+	}
+	out := map[string]any{}
+	for key, value := range fields {
+		switch key {
+		case "name":
+			name, err := requiredRawString(value, "tool_call.function.name")
+			if err != nil || !isFunctionName(name) {
+				return nil, fmt.Errorf("upstream stream choices[%d].delta.tool_calls[%d] is invalid", choiceIndex, callIndex)
+			}
+			out["name"] = name
+		case "arguments":
+			args, err := requiredRawString(value, "tool_call.function.arguments")
+			if err != nil {
+				return nil, fmt.Errorf("upstream stream choices[%d].delta.tool_calls[%d] is invalid", choiceIndex, callIndex)
+			}
+			out["arguments"] = args
+		default:
+			return nil, fmt.Errorf("upstream stream choices[%d].delta.tool_calls[%d] is invalid", choiceIndex, callIndex)
+		}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("upstream stream choices[%d].delta.tool_calls[%d] is invalid", choiceIndex, callIndex)
+	}
+	return out, nil
 }
 
 func normalizeStreamLogprobs(raw json.RawMessage, index int) (any, error) {

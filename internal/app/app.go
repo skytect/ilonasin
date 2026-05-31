@@ -9564,7 +9564,7 @@ func assertModelCacheRows(ctx context.Context, store *sqlite.Store) error {
 	deepseekFound := false
 	for _, row := range rows {
 		if row.ProviderInstanceID == "openrouter" && row.ModelID == "deepseek/deepseek-v4-pro" {
-			if row.DisplayName != "DeepSeek V4 Pro" || row.ContextLength != 1000000 || row.CapabilityFlags != "advanced_sampling,chat,json_object,logit_bias,logprobs,metadata,parallel_tool_calls,prediction,reasoning,sampling,service_tier,session_id,stream,tools,user" {
+			if row.DisplayName != "DeepSeek V4 Pro" || row.ContextLength != 1000000 || row.CapabilityFlags != "advanced_sampling,cache_control,chat,json_object,logit_bias,logprobs,metadata,model_fallbacks,parallel_tool_calls,prediction,reasoning,sampling,service_tier,session_id,stream,tools,user" {
 				return fmt.Errorf("openrouter model cache metadata missing")
 			}
 			for _, forbidden := range []string{
@@ -9573,10 +9573,8 @@ func assertModelCacheRows(ctx context.Context, store *sqlite.Store) error {
 				"raw_provider_payload",
 				"raw model private marker",
 				"raw-supported-parameter-marker",
-				"models",
 				"route",
 				"plugins",
-				"cache_control",
 				"modalities",
 				"image_config",
 				"stop_server_tools_when",

@@ -2079,6 +2079,10 @@ func openRouterCapabilityFlags(item map[string]any) string {
 			flags["session_id"] = true
 		case "metadata":
 			flags["metadata"] = true
+		case "models":
+			flags["model_fallbacks"] = true
+		case "cache_control":
+			flags["cache_control"] = true
 		}
 	}
 	out := make([]string, 0, len(flags))

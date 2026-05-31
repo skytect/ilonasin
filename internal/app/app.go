@@ -2709,10 +2709,42 @@ func newServeCheckUpstream() *serveCheckUpstream {
 		if model == "unsafe-resolved-model" {
 			responseModel = "requestid-unsafe-marker"
 		}
+		usage := serveCheckChatUsage(r.URL.Path, model)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintf(w, `{"id":"chatcmpl_check","object":"chat.completion","created":1,"model":%q,"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"prompt_cache_hit_tokens":1,"prompt_cache_miss_tokens":99,"prompt_tokens_details":{"cached_tokens":1,"cache_write_tokens":2,"unknown_cache_marker":"raw-provider-payload"},"completion_tokens_details":{"reasoning_tokens":0},"unknown_cost_marker":"raw-provider-payload"}}`, responseModel)
+		_, _ = fmt.Fprintf(w, `{"id":"chatcmpl_check","object":"chat.completion","created":1,"model":%q,"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":%s}`, responseModel, usage)
 	}))
 	return up
+}
+
+func serveCheckChatUsage(path, model string) string {
+	base := `"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"prompt_cache_hit_tokens":1,"prompt_cache_miss_tokens":99,"prompt_tokens_details":{"cached_tokens":1,"cache_write_tokens":2,"unknown_cache_marker":"raw-provider-payload"},"completion_tokens_details":{"reasoning_tokens":0}`
+	if path != "/api/v1/chat/completions" && model != "cost-ignored" {
+		return `{` + base + `,"unknown_cost_marker":"raw-provider-payload"}`
+	}
+	switch model {
+	case "cost-usage":
+		return `{` + base + `,"cost":0.001234,"cost_details":{"marker":"` + costDetailsMarker + `"},"unknown_cost_marker":"raw-provider-payload"}`
+	case "cost-rounding":
+		return `{` + base + `,"cost":0.0000005,"cost_details":{"marker":"` + costDetailsMarker + `"},"unknown_cost_marker":"raw-provider-payload"}`
+	case "cost-invalid-null":
+		return `{` + base + `,"cost":null,"cost_details":{"marker":"` + costDetailsMarker + `"},"unknown_cost_marker":"raw-provider-payload"}`
+	case "cost-invalid-string":
+		return `{` + base + `,"cost":"` + costDetailsMarker + `","cost_details":{"marker":"` + costDetailsMarker + `"},"unknown_cost_marker":"raw-provider-payload"}`
+	case "cost-invalid-object":
+		return `{` + base + `,"cost":{"marker":"` + costDetailsMarker + `"},"cost_details":{"marker":"` + costDetailsMarker + `"},"unknown_cost_marker":"raw-provider-payload"}`
+	case "cost-invalid-array":
+		return `{` + base + `,"cost":["` + costDetailsMarker + `"],"cost_details":{"marker":"` + costDetailsMarker + `"},"unknown_cost_marker":"raw-provider-payload"}`
+	case "cost-invalid-negative":
+		return `{` + base + `,"cost":-0.001,"cost_details":{"marker":"` + costDetailsMarker + `"},"unknown_cost_marker":"raw-provider-payload"}`
+	case "cost-invalid-overflow":
+		return `{` + base + `,"cost":1e309,"cost_details":{"marker":"` + costDetailsMarker + `"},"unknown_cost_marker":"raw-provider-payload"}`
+	case "cost-invalid-huge-exponent":
+		return `{` + base + `,"cost":1e1000000000,"cost_details":{"marker":"` + costDetailsMarker + `"},"unknown_cost_marker":"raw-provider-payload"}`
+	case "cost-ignored":
+		return `{` + base + `,"cost":0.001234,"cost_details":{"marker":"` + costDetailsMarker + `"},"unknown_cost_marker":"raw-provider-payload"}`
+	default:
+		return `{` + base + `,"unknown_cost_marker":"raw-provider-payload"}`
+	}
 }
 
 func validateServeCheckProviderOptions(path string, body map[string]any) error {
@@ -3402,7 +3434,7 @@ func (u *serveCheckUpstream) handleServeCheckCodexResponses(w http.ResponseWrite
 		write(`data: {"type":"response.failed","response":{"error":{"message":"raw failed marker"}}}` + "\n\n")
 	default:
 		write(`data: {"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"codex ok"}]}}` + "\n\n")
-		write(`data: {"type":"response.completed","response":{"id":"raw-provider-response-id-marker","usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7,"input_tokens_details":{"cached_tokens":1},"output_tokens_details":{"reasoning_tokens":2}}}}` + "\n\n")
+		write(`data: {"type":"response.completed","response":{"id":"raw-provider-response-id-marker","usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7,"input_tokens_details":{"cached_tokens":1},"output_tokens_details":{"reasoning_tokens":2},"cost":0.001234,"cost_details":{"marker":"` + costDetailsMarker + `"}}}}` + "\n\n")
 	}
 }
 
@@ -3787,9 +3819,18 @@ func (u *serveCheckUpstream) handleServeCheckStream(w http.ResponseWriter, r *ht
 		write(`data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"` + toolCallIDMarker + `","type":"function","function":{"name":"` + toolNameMarker + `","arguments":"{\"value\":\""}}]},"finish_reason":null}],"usage":null}` + "\n\n")
 		write(`data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"` + toolArgumentMarker + `\"}"}}]},"finish_reason":"tool_calls"}],"usage":null}` + "\n\n")
 	}
+	usage := serveCheckStreamUsage(r.URL.Path, model)
 	write(`data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"ok","reasoning_content":"r"}}],"usage":null}` + "\n\n")
-	write(`data: {"object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"prompt_cache_hit_tokens":1,"prompt_cache_miss_tokens":99,"prompt_tokens_details":{"cached_tokens":1,"cache_write_tokens":2,"unknown_cache_marker":"raw-provider-payload"},"completion_tokens_details":{"reasoning_tokens":0},"unknown_cost_marker":"raw-provider-payload"}}` + "\n\n")
+	write(`data: {"object":"chat.completion.chunk","choices":[],"usage":` + usage + `}` + "\n\n")
 	write("data: [DONE]\n\n")
+}
+
+func serveCheckStreamUsage(path, model string) string {
+	base := `"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"prompt_cache_hit_tokens":1,"prompt_cache_miss_tokens":99,"prompt_tokens_details":{"cached_tokens":1,"cache_write_tokens":2,"unknown_cache_marker":"raw-provider-payload"},"completion_tokens_details":{"reasoning_tokens":0}`
+	if path == "/api/v1/chat/completions" && model == "stream-cost-usage" {
+		return `{` + base + `,"cost":0.001234,"cost_details":{"marker":"` + costDetailsMarker + `"},"unknown_cost_marker":"raw-provider-payload"}`
+	}
+	return `{` + base + `,"unknown_cost_marker":"raw-provider-payload"}`
 }
 
 func (u *serveCheckUpstream) recordObservedAuth(model, auth string) {
@@ -3861,7 +3902,7 @@ func assertUnsupportedChatNoUpstream(base, token string, body []byte, fakeUpstre
 	if (strings.Contains(name, "sampling_penalty") || strings.Contains(name, "advanced_sampling")) && (bytes.Contains(respBody, []byte("invalid request JSON")) || bytes.Contains(respBody, []byte("cannot unmarshal"))) {
 		return fmt.Errorf("unsupported %s returned raw decode wording", name)
 	}
-	for _, marker := range []string{providerOptionPrivacyMarker, responseFormatPrivacyMarker, responseFormatSchemaMarker, logprobTokenMarker, logitBiasDecimalMarker, logitBiasExponentMarker, logitBiasOverflowMarker, predictionPrivacyMarker, "prediction-private-type", "prediction-private-extra", userPrivacyMarker, userIDPrivacyMarker, "parallel-tool-calls-private-marker", toolNameMarker, toolDescriptionMarker, toolSchemaNumberMarker, toolCallIDMarker, toolArgumentMarker, toolResultMarker, "1.75", "-1.25", penaltyOverflowMarker, "2.01", "-2.01", "2.0000000000000001", "-2.0000000000000001", "2.000000000000000000000000000000000000000000000000000000000000000000000000000000001", "9223372036854775807", "-9223372036854775808", "9223372036854775808", "-9223372036854775809", "1.0000000000000001", "2.0000000000000001", "100.0000000000000001", "-100.0000000000000001"} {
+	for _, marker := range []string{providerOptionPrivacyMarker, responseFormatPrivacyMarker, responseFormatSchemaMarker, logprobTokenMarker, logitBiasDecimalMarker, logitBiasExponentMarker, logitBiasOverflowMarker, costDetailsMarker, predictionPrivacyMarker, "prediction-private-type", "prediction-private-extra", userPrivacyMarker, userIDPrivacyMarker, "parallel-tool-calls-private-marker", toolNameMarker, toolDescriptionMarker, toolSchemaNumberMarker, toolCallIDMarker, toolArgumentMarker, toolResultMarker, "1.75", "-1.25", penaltyOverflowMarker, "2.01", "-2.01", "2.0000000000000001", "-2.0000000000000001", "2.000000000000000000000000000000000000000000000000000000000000000000000000000000001", "9223372036854775807", "-9223372036854775808", "9223372036854775808", "-9223372036854775809", "1.0000000000000001", "2.0000000000000001", "100.0000000000000001", "-100.0000000000000001"} {
 		if bytes.Contains(respBody, []byte(marker)) {
 			return fmt.Errorf("unsupported %s leaked private marker", name)
 		}
@@ -3882,7 +3923,7 @@ func exerciseCodexChatCheck(ctx context.Context, base, token string, fakeUpstrea
 	if err != nil || status != http.StatusOK {
 		return fmt.Errorf("codex chat success status=%d err=%v", status, err)
 	}
-	if !looksLikeChatCompletion(respBody) || !chatCompletionHasContent(respBody, "codex ok") || bytes.Contains(respBody, []byte("raw-provider-response-id-marker")) {
+	if !looksLikeChatCompletion(respBody) || !chatCompletionHasContent(respBody, "codex ok") || bytes.Contains(respBody, []byte("raw-provider-response-id-marker")) || bytes.Contains(respBody, []byte(costDetailsMarker)) {
 		return fmt.Errorf("codex chat response was not normalized")
 	}
 	if !fakeUpstream.sawExpected("/responses", "gpt-5.5-codex") {
@@ -4073,6 +4114,7 @@ func assertCodexStream(events []string, body []byte, model, wantContent string, 
 		bytes.Contains(body, []byte("oauth-access-secret-marker")) ||
 		bytes.Contains(body, []byte("oauth-refresh-secret-marker")) ||
 		bytes.Contains(body, []byte("ChatGPT-Account-ID")) ||
+		bytes.Contains(body, []byte(costDetailsMarker)) ||
 		bytes.Contains(body, []byte("duplicate item leak")) ||
 		bytes.Contains(body, []byte("duplicate stream leak")) {
 		return fmt.Errorf("codex stream leaked provider marker")
@@ -4844,6 +4886,7 @@ const logprobTokenMarker = "logprob-token-marker"
 const logitBiasDecimalMarker = "33.333333333333333333"
 const logitBiasExponentMarker = "1e-1"
 const logitBiasOverflowMarker = "1e309"
+const costDetailsMarker = "cost-details-private-marker"
 const predictionPrivacyMarker = "prediction_private_marker"
 const userPrivacyMarker = "user_private_marker"
 const userIDPrivacyMarker = "userid_private_marker"
@@ -5469,6 +5512,30 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 		if !fakeUpstream.sawExpected(expectedPath, "user-max") {
 			return fmt.Errorf("max user forwarding did not reach upstream provider=%s", instance.ID)
 		}
+		costBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}]}`, instance.ID+"/cost-usage"))
+		if status, _, err := postJSON(base+"/v1/chat/completions", token, costBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("OpenRouter cost usage provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if err := assertRequestCost(ctx, store, instance.ID, "cost-usage", 1234); err != nil {
+			return err
+		}
+		roundingBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}]}`, instance.ID+"/cost-rounding"))
+		if status, _, err := postJSON(base+"/v1/chat/completions", token, roundingBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("OpenRouter cost rounding provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if err := assertRequestCost(ctx, store, instance.ID, "cost-rounding", 1); err != nil {
+			return err
+		}
+		for _, invalidCost := range []string{"null", "string", "object", "array", "negative", "overflow", "huge-exponent"} {
+			modelName := "cost-invalid-" + invalidCost
+			body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}]}`, instance.ID+"/"+modelName))
+			if status, _, err := postJSON(base+"/v1/chat/completions", token, body); err != nil || status != http.StatusOK {
+				return fmt.Errorf("OpenRouter invalid cost provider=%s model=%s status=%d err=%v", instance.ID, modelName, status, err)
+			}
+			if err := assertRequestCost(ctx, store, instance.ID, modelName, 0); err != nil {
+				return err
+			}
+		}
 		combinedExtra := predictionExtra(predictionPrivacyMarker) + `,"user":"` + userPrivacyMarker + `",` + openRouterReasoningPrivacyProviderExtra() + `,` + openRouterJSONSchemaResponseFormatExtra() + `,"logprobs":true,"top_logprobs":20,"logit_bias":{"50256":` + logitBiasDecimalMarker + `},"parallel_tool_calls":true,"top_k":9223372036854775807,"max_completion_tokens":2,` + functionToolsExtra(`"auto"`)
 		combinedBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-options-combined", combinedExtra))
 		status, respBody, err = postJSON(base+"/v1/chat/completions", token, combinedBody)
@@ -5484,6 +5551,13 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 			return fmt.Errorf("provider options combined did not reach upstream provider=%s", instance.ID)
 		}
 	} else {
+		costIgnoredBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}]}`, instance.ID+"/cost-ignored"))
+		if status, _, err := postJSON(base+"/v1/chat/completions", token, costIgnoredBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("ignored cost usage provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if err := assertRequestCost(ctx, store, instance.ID, "cost-ignored", 0); err != nil {
+			return err
+		}
 		userOnlyBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-options-user-id", deepSeekUserIDExtra(userIDPrivacyMarker)))
 		if status, respBody, err = postJSON(base+"/v1/chat/completions", token, userOnlyBody); err != nil || status != http.StatusOK {
 			return fmt.Errorf("DeepSeek user_id provider_options provider=%s status=%d err=%v", instance.ID, status, err)
@@ -5814,7 +5888,7 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 			return err
 		}
 	}
-	for _, marker := range []string{"1.75", "-1.25", penaltyOverflowMarker, "9223372036854775807", "-9223372036854775808", advancedSamplingOverflowMarker, logitBiasDecimalMarker, logitBiasExponentMarker, logitBiasOverflowMarker, predictionPrivacyMarker, userPrivacyMarker, userIDPrivacyMarker, "parallel-tool-calls-private-marker", toolNameMarker, toolDescriptionMarker, toolSchemaNumberMarker, toolCallIDMarker, toolArgumentMarker, toolResultMarker} {
+	for _, marker := range []string{costDetailsMarker, "1.75", "-1.25", penaltyOverflowMarker, "9223372036854775807", "-9223372036854775808", advancedSamplingOverflowMarker, logitBiasDecimalMarker, logitBiasExponentMarker, logitBiasOverflowMarker, predictionPrivacyMarker, userPrivacyMarker, userIDPrivacyMarker, "parallel-tool-calls-private-marker", toolNameMarker, toolDescriptionMarker, toolSchemaNumberMarker, toolCallIDMarker, toolArgumentMarker, toolResultMarker} {
 		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
 			return err
 		}
@@ -5941,6 +6015,17 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 		}
 		if !fakeUpstream.sawExpectedStream(expectedPath, "stream-provider-privacy") {
 			return fmt.Errorf("stream provider privacy routing did not reach upstream provider=%s", instance.ID)
+		}
+		costBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true}}`, instance.ID+"/stream-cost-usage"))
+		status, _, _, raw, err := postStream(base+"/v1/chat/completions", token, costBody)
+		if err != nil || status != http.StatusOK {
+			return fmt.Errorf("stream OpenRouter cost usage provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if bytes.Contains(raw, []byte(costDetailsMarker)) {
+			return fmt.Errorf("stream OpenRouter cost usage leaked ignored cost marker")
+		}
+		if err := assertRequestCost(ctx, store, instance.ID, "stream-cost-usage", 1234); err != nil {
+			return err
 		}
 	}
 	maxCompletionBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},"max_completion_tokens":2}`, instance.ID+"/stream-max-completion-limit"))
@@ -6243,7 +6328,7 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 			return err
 		}
 	}
-	for _, marker := range []string{providerOptionPrivacyMarker, "1.75", "-1.25", penaltyOverflowMarker, logprobTokenMarker, logitBiasDecimalMarker, logitBiasExponentMarker, logitBiasOverflowMarker, predictionPrivacyMarker, userPrivacyMarker, userIDPrivacyMarker, "parallel-tool-calls-private-marker", toolNameMarker, toolDescriptionMarker, toolSchemaNumberMarker, toolCallIDMarker, toolArgumentMarker, toolResultMarker} {
+	for _, marker := range []string{providerOptionPrivacyMarker, costDetailsMarker, "1.75", "-1.25", penaltyOverflowMarker, logprobTokenMarker, logitBiasDecimalMarker, logitBiasExponentMarker, logitBiasOverflowMarker, predictionPrivacyMarker, userPrivacyMarker, userIDPrivacyMarker, "parallel-tool-calls-private-marker", toolNameMarker, toolDescriptionMarker, toolSchemaNumberMarker, toolCallIDMarker, toolArgumentMarker, toolResultMarker} {
 		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
 			return err
 		}
@@ -6903,7 +6988,7 @@ func exerciseSamplingPenaltyNoEligibleCheck(ctx context.Context, registry provid
 	if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, toolMessageBody, fakeUpstream, "/responses", "codex-noeligible-tools-messages", "codex noeligible tool messages"); err != nil {
 		return err
 	}
-	for _, marker := range []string{providerOptionPrivacyMarker, "1.75", "-1.25", penaltyOverflowMarker, "9223372036854775807", "-9223372036854775808", advancedSamplingOverflowMarker, logprobTokenMarker, logitBiasDecimalMarker, logitBiasExponentMarker, logitBiasOverflowMarker, predictionPrivacyMarker, userPrivacyMarker, userIDPrivacyMarker, "parallel-tool-calls-private-marker", toolNameMarker, toolDescriptionMarker, toolSchemaNumberMarker, toolCallIDMarker, toolArgumentMarker, toolResultMarker} {
+	for _, marker := range []string{providerOptionPrivacyMarker, costDetailsMarker, "1.75", "-1.25", penaltyOverflowMarker, "9223372036854775807", "-9223372036854775808", advancedSamplingOverflowMarker, logprobTokenMarker, logitBiasDecimalMarker, logitBiasExponentMarker, logitBiasOverflowMarker, predictionPrivacyMarker, userPrivacyMarker, userIDPrivacyMarker, "parallel-tool-calls-private-marker", toolNameMarker, toolDescriptionMarker, toolSchemaNumberMarker, toolCallIDMarker, toolArgumentMarker, toolResultMarker} {
 		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
 			return err
 		}
@@ -7091,6 +7176,25 @@ func assertRecordedCredentialID(ctx context.Context, store *sqlite.Store) error 
 	return nil
 }
 
+func assertRequestCost(ctx context.Context, store *sqlite.Store, providerID, requestedModel string, wantMicrounits int64) error {
+	var got int64
+	err := store.DB.QueryRowContext(ctx, `
+		SELECT cost_microunits
+		FROM request_metadata
+		WHERE requested_provider_instance = ?
+			AND requested_model = ?
+		ORDER BY id DESC
+		LIMIT 1
+	`, providerID, requestedModel).Scan(&got)
+	if err != nil {
+		return err
+	}
+	if got != wantMicrounits {
+		return fmt.Errorf("request cost provider=%s model=%s got=%d want=%d", providerID, requestedModel, got, wantMicrounits)
+	}
+	return nil
+}
+
 func assertResolvedModelMetadata(ctx context.Context, store *sqlite.Store, providerID, requestedModel, resolvedModel string) error {
 	var count int
 	err := store.DB.QueryRowContext(ctx, `
@@ -7142,6 +7246,7 @@ func assertCodexChatMetadata(ctx context.Context, store *sqlite.Store, model str
 			AND total_tokens = ?
 			AND reasoning_tokens = ?
 			AND cache_hit_tokens = ?
+			AND cost_microunits = 0
 			AND credential_id IS NOT NULL
 	`, model, model, status, errorClass, prompt, completion, total, reasoning, cached).Scan(&count)
 	if err != nil {
@@ -7189,6 +7294,7 @@ func assertCodexChatNoLeak(ctx context.Context, store *sqlite.Store) error {
 		"oauth-expired",
 		"oauth-missing",
 		"raw-provider-response-id-marker",
+		costDetailsMarker,
 		"raw codex",
 		"raw failed",
 		"raw incomplete",

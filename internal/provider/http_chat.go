@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/big"
 	"net"
 	"net/http"
 	"net/url"
@@ -510,6 +511,148 @@ func marshalChatCompletionsRequest(providerType string, req openai.ChatCompletio
 	return json.Marshal(out)
 }
 
+func openRouterCostMicrounitsFromChatCompletion(body []byte) int64 {
+	var payload struct {
+		Usage json.RawMessage `json:"usage"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return 0
+	}
+	return openRouterCostMicrounitsFromUsage(payload.Usage)
+}
+
+func openRouterCostMicrounitsFromStreamChunk(body []byte) int64 {
+	var payload struct {
+		Usage json.RawMessage `json:"usage"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return 0
+	}
+	return openRouterCostMicrounitsFromUsage(payload.Usage)
+}
+
+func openRouterCostMicrounitsFromUsage(rawUsage json.RawMessage) int64 {
+	rawUsage = bytes.TrimSpace(rawUsage)
+	if len(rawUsage) == 0 || bytes.Equal(rawUsage, []byte("null")) {
+		return 0
+	}
+	var usage map[string]json.RawMessage
+	if err := json.Unmarshal(rawUsage, &usage); err != nil {
+		return 0
+	}
+	rawCost, ok := usage["cost"]
+	if !ok {
+		return 0
+	}
+	return openRouterCostMicrounitsFromRawCost(rawCost)
+}
+
+func openRouterCostMicrounitsFromRawCost(rawCost json.RawMessage) int64 {
+	rawCost = bytes.TrimSpace(rawCost)
+	if len(rawCost) == 0 || bytes.Equal(rawCost, []byte("null")) {
+		return 0
+	}
+	if (rawCost[0] < '0' || rawCost[0] > '9') && rawCost[0] != '-' {
+		return 0
+	}
+	dec := json.NewDecoder(bytes.NewReader(rawCost))
+	dec.UseNumber()
+	var cost json.Number
+	if err := dec.Decode(&cost); err != nil {
+		return 0
+	}
+	if dec.Decode(&struct{}{}) != io.EOF {
+		return 0
+	}
+	return openRouterCreditMicrounits(cost.String())
+}
+
+func openRouterCreditMicrounits(value string) int64 {
+	if value == "" || len(value) > 128 || value[0] == '-' {
+		return 0
+	}
+	mantissa, exponent, ok := strings.Cut(value, "e")
+	if !ok {
+		mantissa, exponent, ok = strings.Cut(value, "E")
+	}
+	exp := 0
+	if ok {
+		if exponent == "" || len(exponent) > 4 {
+			return 0
+		}
+		parsed, err := strconv.Atoi(exponent)
+		if err != nil {
+			return 0
+		}
+		exp = parsed
+	}
+	digits, fractionDigits, ok := decimalDigits(mantissa)
+	if !ok {
+		return 0
+	}
+	digits = strings.TrimLeft(digits, "0")
+	if digits == "" {
+		return 0
+	}
+	decimalExp := exp - fractionDigits + 6
+	if decimalExp > 19 || decimalExp < -128 {
+		return 0
+	}
+	valueInt, ok := new(big.Int).SetString(digits, 10)
+	if !ok {
+		return 0
+	}
+	if decimalExp >= 0 {
+		valueInt.Mul(valueInt, pow10(decimalExp))
+		if valueInt.Cmp(new(big.Int).SetInt64(math.MaxInt64)) > 0 {
+			return 0
+		}
+		return valueInt.Int64()
+	}
+	divisor := pow10(-decimalExp)
+	quotient, remainder := new(big.Int).QuoRem(valueInt, divisor, new(big.Int))
+	if new(big.Int).Mul(remainder, big.NewInt(2)).Cmp(divisor) >= 0 {
+		quotient.Add(quotient, big.NewInt(1))
+	}
+	if quotient.Cmp(new(big.Int).SetInt64(math.MaxInt64)) > 0 {
+		return 0
+	}
+	return quotient.Int64()
+}
+
+func decimalDigits(value string) (string, int, bool) {
+	if value == "" {
+		return "", 0, false
+	}
+	var digits strings.Builder
+	fractionDigits := 0
+	seenDot := false
+	for _, r := range value {
+		switch {
+		case r >= '0' && r <= '9':
+			digits.WriteRune(r)
+			if seenDot {
+				fractionDigits++
+			}
+		case r == '.':
+			if seenDot {
+				return "", 0, false
+			}
+			seenDot = true
+		default:
+			return "", 0, false
+		}
+	}
+	if digits.Len() == 0 {
+		return "", 0, false
+	}
+	return digits.String(), fractionDigits, true
+}
+
+func pow10(exp int) *big.Int {
+	return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(exp)), nil)
+}
+
 func (a HTTPChatAdapter) CompleteChat(ctx context.Context, req ChatRequest) (ChatResult, error) {
 	start := time.Now()
 	if req.Instance.Type == "codex" {
@@ -595,6 +738,9 @@ func (a HTTPChatAdapter) CompleteChat(ctx context.Context, req ChatRequest) (Cha
 		return result, err
 	}
 	result.Usage = metadata.Usage
+	if req.Instance.Type == "openrouter" {
+		result.Usage.CostMicrounits = openRouterCostMicrounitsFromChatCompletion(respBody)
+	}
 	result.ResolvedModel = metadata.ResolvedModel
 	return result, nil
 }
@@ -961,7 +1107,7 @@ func (a HTTPChatAdapter) StreamChat(ctx context.Context, req ChatRequest, sink C
 		StatusCode:       http.StatusOK,
 		CompletionStatus: "completed",
 	}
-	if err := a.readStream(streamCtx, resp.Body, sink, &summary, start); err != nil {
+	if err := a.readStream(streamCtx, resp.Body, sink, &summary, start, req.Instance.Type); err != nil {
 		if summary.ErrorClass == "" {
 			summary.ErrorClass = classifyStreamReadError(streamCtx, err)
 		}
@@ -1729,7 +1875,7 @@ func (a HTTPChatAdapter) doStreamRequest(ctx context.Context, cancel context.Can
 	}
 }
 
-func (a HTTPChatAdapter) readStream(ctx context.Context, body io.ReadCloser, sink ChatStreamSink, summary *ChatStreamSummary, start time.Time) error {
+func (a HTTPChatAdapter) readStream(ctx context.Context, body io.ReadCloser, sink ChatStreamSink, summary *ChatStreamSummary, start time.Time, providerType string) error {
 	reader := bufio.NewReaderSize(body, a.maxStreamLineBytes()+1)
 	var parts [][]byte
 	eventBytes := 0
@@ -1738,7 +1884,7 @@ func (a HTTPChatAdapter) readStream(ctx context.Context, body io.ReadCloser, sin
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				if len(parts) > 0 {
-					if err := a.handleStreamEvent(ctx, bytes.Join(parts, []byte("\n")), sink, summary, start); err != nil {
+					if err := a.handleStreamEvent(ctx, bytes.Join(parts, []byte("\n")), sink, summary, start, providerType); err != nil {
 						return err
 					}
 					if summary.Done {
@@ -1759,7 +1905,7 @@ func (a HTTPChatAdapter) readStream(ctx context.Context, body io.ReadCloser, sin
 			if len(parts) == 0 {
 				continue
 			}
-			if err := a.handleStreamEvent(ctx, bytes.Join(parts, []byte("\n")), sink, summary, start); err != nil {
+			if err := a.handleStreamEvent(ctx, bytes.Join(parts, []byte("\n")), sink, summary, start, providerType); err != nil {
 				return err
 			}
 			parts = nil
@@ -1828,7 +1974,7 @@ func (a HTTPChatAdapter) readStreamLine(ctx context.Context, body io.Closer, rea
 	}
 }
 
-func (a HTTPChatAdapter) handleStreamEvent(ctx context.Context, data []byte, sink ChatStreamSink, summary *ChatStreamSummary, start time.Time) error {
+func (a HTTPChatAdapter) handleStreamEvent(ctx context.Context, data []byte, sink ChatStreamSink, summary *ChatStreamSummary, start time.Time, providerType string) error {
 	if bytes.Equal(bytes.TrimSpace(data), []byte("[DONE]")) {
 		if err := sink.WriteDone(ctx); err != nil {
 			summary.ErrorClass = "client_disconnected"
@@ -1876,6 +2022,9 @@ func (a HTTPChatAdapter) handleStreamEvent(ctx context.Context, data []byte, sin
 		summary.ResolvedModel = chunk.ResolvedModel
 	}
 	if chunk.HasUsage {
+		if providerType == "openrouter" {
+			chunk.Usage.CostMicrounits = openRouterCostMicrounitsFromStreamChunk(data)
+		}
 		summary.Usage = chunk.Usage
 		if summary.TimeToFirstTokenMS > 0 {
 			elapsedSeconds := time.Since(start).Seconds()

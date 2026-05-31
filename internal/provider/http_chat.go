@@ -406,15 +406,34 @@ func validateOpenRouterProvider(raw any) error {
 	if !ok || provider == nil {
 		return errors.New("provider_options.openrouter.provider must be an object")
 	}
-	if len(provider) != 1 {
-		return errors.New("provider_options.openrouter.provider only supports require_parameters")
+	if len(provider) == 0 {
+		return errors.New("provider_options.openrouter.provider must not be empty")
 	}
-	value, ok := provider["require_parameters"]
-	if !ok {
-		return errors.New("provider_options.openrouter.provider.require_parameters is required")
-	}
-	if _, ok := value.(bool); !ok {
-		return errors.New("provider_options.openrouter.provider.require_parameters must be a boolean")
+	for key, value := range provider {
+		switch key {
+		case "require_parameters":
+			if _, ok := value.(bool); !ok {
+				return errors.New("provider_options.openrouter.provider.require_parameters must be a boolean")
+			}
+		case "data_collection":
+			collection, ok := value.(string)
+			if !ok {
+				return errors.New("provider_options.openrouter.provider.data_collection must be a string")
+			}
+			if collection != "deny" {
+				return errors.New("provider_options.openrouter.provider.data_collection is unsupported")
+			}
+		case "zdr":
+			zdr, ok := value.(bool)
+			if !ok {
+				return errors.New("provider_options.openrouter.provider.zdr must be a boolean")
+			}
+			if !zdr {
+				return errors.New("provider_options.openrouter.provider.zdr is unsupported")
+			}
+		default:
+			return errors.New("provider_options.openrouter.provider contains an unsupported field")
+		}
 	}
 	return nil
 }

@@ -18,7 +18,7 @@ import (
 	"ilonasin/internal/openai"
 )
 
-const MaxCodexAggregateAssistantBytes = 16 << 20
+const MaxCodexAggregateAssistantBytes = 64 << 20
 
 var errCodexModelAuthFailed = errors.New("codex model metadata auth failed")
 

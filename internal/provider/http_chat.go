@@ -18,7 +18,7 @@ import (
 	"ilonasin/internal/openai"
 )
 
-const MaxUpstreamChatBodyBytes int64 = 16 << 20
+const MaxUpstreamChatBodyBytes int64 = 64 << 20
 const maxRetryAfter = 365 * 24 * time.Hour
 
 func readLimitedUpstreamBody(body io.Reader, limit int64) ([]byte, bool, error) {

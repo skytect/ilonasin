@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const MaxUpstreamModelsBodyBytes int64 = 16 << 20
+const MaxUpstreamModelsBodyBytes int64 = 64 << 20
 
 func (a HTTPChatAdapter) ListModels(ctx context.Context, req ModelRequest) (ModelResult, error) {
 	start := time.Now()

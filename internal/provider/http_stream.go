@@ -16,8 +16,8 @@ import (
 	"ilonasin/internal/openai"
 )
 
-const DefaultMaxStreamLineBytes = 1 << 20
-const DefaultMaxStreamEventBytes = 1 << 20
+const DefaultMaxStreamLineBytes = 64 << 20
+const DefaultMaxStreamEventBytes = 64 << 20
 const DefaultMaxStreamEvents = 1_000_000
 const DefaultStreamIdleTimeout = 120 * time.Second
 const DefaultStreamHeaderTimeout = 30 * time.Second

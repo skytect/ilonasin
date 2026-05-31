@@ -441,6 +441,10 @@ func validateOpenRouterProvider(raw any) error {
 			if err := validateOpenRouterPerformancePreference(key, value); err != nil {
 				return err
 			}
+		case "enforce_distillable_text":
+			if _, ok := value.(bool); !ok {
+				return errors.New("provider_options.openrouter.provider.enforce_distillable_text must be a boolean")
+			}
 		case "sort":
 			if err := validateOpenRouterProviderSort(value); err != nil {
 				return err

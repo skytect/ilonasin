@@ -108,7 +108,7 @@ func NewHTTPChatAdapter(client *http.Client) HTTPChatAdapter {
 }
 
 func (a HTTPChatAdapter) ValidateChatRequest(instance Instance, req openai.ChatCompletionRequest) error {
-	commonUnsupported := []string{"tools", "tool_choice", "logprobs", "top_logprobs"}
+	commonUnsupported := []string{"tools", "tool_choice"}
 	openRouterSamplingFields := []string{"top_k", "min_p", "top_a", "repetition_penalty", "seed"}
 	switch instance.Type {
 	case "deepseek", "openrouter":
@@ -128,7 +128,7 @@ func (a HTTPChatAdapter) ValidateChatRequest(instance Instance, req openai.ChatC
 		}
 		return validateProviderOptions(instance.Type, req)
 	case "codex":
-		unsupported := append(commonUnsupported, "provider_options", "max_tokens", "max_completion_tokens", "temperature", "top_p", "presence_penalty", "frequency_penalty", "stop", "response_format")
+		unsupported := append(commonUnsupported, "logprobs", "top_logprobs", "provider_options", "max_tokens", "max_completion_tokens", "temperature", "top_p", "presence_penalty", "frequency_penalty", "stop", "response_format")
 		unsupported = append(unsupported, openRouterSamplingFields...)
 		if err := rejectPresentFields(req, unsupported...); err != nil {
 			return err
@@ -1414,7 +1414,7 @@ func normalizeModels(instance Instance, body []byte) ([]ModelMetadata, error) {
 			meta.ContextLength = safeInt(item["context_length"])
 			meta.CapabilityFlags = openRouterCapabilityFlags(item)
 		case "deepseek":
-			meta.CapabilityFlags = "chat,json_object,reasoning,stream"
+			meta.CapabilityFlags = "chat,json_object,logprobs,reasoning,stream"
 		case "codex":
 			meta.CapabilityFlags = "chat,reasoning,stream"
 		}
@@ -1487,6 +1487,8 @@ func openRouterCapabilityFlags(item map[string]any) string {
 		switch param {
 		case "response_format":
 			flags["json_object"] = true
+		case "logprobs", "top_logprobs":
+			flags["logprobs"] = true
 		case "reasoning":
 			flags["reasoning"] = true
 		case "stream":

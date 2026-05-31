@@ -571,7 +571,7 @@ func exerciseModelCacheCheck(ctx context.Context, registry provider.Registry, cf
 		ProviderInstanceID: "deepseek",
 		ModelID:            "deepseek-v4-pro",
 		DisplayName:        "DeepSeek V4 Pro",
-		CapabilityFlags:    "chat,json_object,reasoning,stream",
+		CapabilityFlags:    "chat,json_object,logprobs,reasoning,stream",
 		ContextLength:      1000000,
 		UpdatedAt:          now,
 	}}); err != nil {
@@ -2548,6 +2548,12 @@ func newServeCheckUpstream() *serveCheckUpstream {
 				return
 			}
 		}
+		if strings.HasPrefix(model, "logprobs-") {
+			if err := validateServeCheckLogprobs(r.URL.Path, model, body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
 		if strings.HasPrefix(model, "sampling-penalty-") {
 			if err := validateServeCheckSamplingPenalties(r.URL.Path, model, body); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
@@ -2631,6 +2637,56 @@ func validateServeCheckMaxCompletionTokens(path string, body map[string]any) err
 		return fmt.Errorf("unexpected token limit path %s", path)
 	}
 	return nil
+}
+
+func validateServeCheckLogprobs(path, model string, body map[string]any) error {
+	if path != "/chat/completions" && path != "/api/v1/chat/completions" {
+		return fmt.Errorf("logprobs reached unsupported provider")
+	}
+	logprobs, hasLogprobs := body["logprobs"].(bool)
+	_, hasTopLogprobs := body["top_logprobs"]
+	switch model {
+	case "logprobs-true":
+		if !hasLogprobs || !logprobs || hasTopLogprobs {
+			return fmt.Errorf("invalid logprobs true forwarding")
+		}
+	case "logprobs-false":
+		if !hasLogprobs || logprobs || hasTopLogprobs {
+			return fmt.Errorf("invalid logprobs false forwarding")
+		}
+	case "logprobs-top":
+		if !hasLogprobs || !logprobs || !jsonNumberEquals(body["top_logprobs"], "20") {
+			return fmt.Errorf("invalid top_logprobs forwarding")
+		}
+	default:
+		return fmt.Errorf("unexpected logprobs model")
+	}
+	return nil
+}
+
+func streamInvalidLogprobsPayload(name string) string {
+	switch name {
+	case "string":
+		return `"logprob-token-marker"`
+	case "number":
+		return `1`
+	case "boolean":
+		return `true`
+	case "array":
+		return `[]`
+	case "unknown-key":
+		return `{"unknown":[{"token":"logprob-token-marker","logprob":-0.1}]}`
+	case "bad-content":
+		return `{"content":"logprob-token-marker"}`
+	case "bad-entry-object":
+		return `{"content":[{"token":1,"logprob":-0.1}]}`
+	case "bad-bytes":
+		return `{"content":[{"token":"logprob-token-marker","logprob":-0.1,"bytes":[256]}]}`
+	case "nested-top":
+		return `{"content":[{"token":"logprob-token-marker","logprob":-0.1,"top_logprobs":[{"token":"x","logprob":-0.2,"top_logprobs":[]}]}]}`
+	default:
+		return `"logprob-token-marker"`
+	}
 }
 
 func jsonNumberEquals(value any, want string) bool {
@@ -3026,7 +3082,7 @@ func (u *serveCheckUpstream) handleServeCheckModels(w http.ResponseWriter, r *ht
 		return
 	}
 	if r.URL.Path == "/api/v1/models" {
-		_, _ = w.Write([]byte(`{"data":[{"id":"deepseek/deepseek-v4-pro","name":"DeepSeek V4 Pro","description":"raw description marker","pricing":{"prompt":"secret"},"context_length":1000000,"supported_parameters":["tools","response_format","reasoning","logprobs"]},{"id":"","name":"bad"}]}`))
+		_, _ = w.Write([]byte(`{"data":[{"id":"deepseek/deepseek-v4-pro","name":"DeepSeek V4 Pro","description":"raw description marker","pricing":{"prompt":"secret"},"context_length":1000000,"supported_parameters":["tools","response_format","reasoning","logprobs","top_logprobs"]},{"id":"","name":"bad"}]}`))
 		return
 	}
 	_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"deepseek-v4-pro","object":"model","owned_by":"deepseek"},{"id":"","object":"model"}]}`))
@@ -3098,6 +3154,12 @@ func (u *serveCheckUpstream) handleServeCheckStream(w http.ResponseWriter, r *ht
 	}
 	if model == "stream-max-completion-limit" {
 		if err := validateServeCheckMaxCompletionTokens(r.URL.Path, body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	if strings.HasPrefix(model, "stream-logprobs-") && !strings.HasPrefix(model, "stream-logprobs-invalid-") {
+		if err := validateServeCheckLogprobs(r.URL.Path, strings.TrimPrefix(model, "stream-"), body); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -3182,6 +3244,10 @@ func (u *serveCheckUpstream) handleServeCheckStream(w http.ResponseWriter, r *ht
 		write(`data: {"object":"not-chat","choices":[]}` + "\n\n")
 		return
 	}
+	if strings.HasPrefix(model, "stream-logprobs-invalid-") {
+		write(`data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"ok"},"logprobs":` + streamInvalidLogprobsPayload(strings.TrimPrefix(model, "stream-logprobs-invalid-")) + `}],"usage":null}` + "\n\n")
+		return
+	}
 	if model == "stream-after-done" {
 		write(`data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"ok"}}],"usage":null}` + "\n\n")
 		write("data: [DONE]\n\n")
@@ -3212,6 +3278,9 @@ func (u *serveCheckUpstream) handleServeCheckStream(w http.ResponseWriter, r *ht
 	}
 	write(": keep-alive\n\n")
 	write(`data: {"id":"chunk_raw_id","object":"chat.completion.chunk","created":1,"model":"` + responseModel + `","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}],"usage":null,"provider":"raw-provider-extra"}` + "\n\n")
+	if strings.HasPrefix(model, "stream-logprobs-") {
+		write(`data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"ok"},"logprobs":{"content":[{"token":"` + logprobTokenMarker + `","logprob":-0.125,"bytes":[111,107],"top_logprobs":[{"token":"alt","logprob":-1.5,"bytes":null}]}],"reasoning_content":null}}],"usage":null}` + "\n\n")
+	}
 	write(`data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"ok","reasoning_content":"r"}}],"usage":null}` + "\n\n")
 	write(`data: {"object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"prompt_cache_hit_tokens":1,"prompt_cache_miss_tokens":99,"prompt_tokens_details":{"cached_tokens":1,"cache_write_tokens":2,"unknown_cache_marker":"raw-provider-payload"},"completion_tokens_details":{"reasoning_tokens":0},"unknown_cost_marker":"raw-provider-payload"}}` + "\n\n")
 	write("data: [DONE]\n\n")
@@ -3286,7 +3355,7 @@ func assertUnsupportedChatNoUpstream(base, token string, body []byte, fakeUpstre
 	if (strings.Contains(name, "sampling_penalty") || strings.Contains(name, "advanced_sampling")) && (bytes.Contains(respBody, []byte("invalid request JSON")) || bytes.Contains(respBody, []byte("cannot unmarshal"))) {
 		return fmt.Errorf("unsupported %s returned raw decode wording", name)
 	}
-	for _, marker := range []string{providerOptionPrivacyMarker, responseFormatPrivacyMarker, responseFormatSchemaMarker, "1.75", "-1.25", penaltyOverflowMarker, "2.01", "-2.01", "2.0000000000000001", "-2.0000000000000001", "2.000000000000000000000000000000000000000000000000000000000000000000000000000000001", "9223372036854775807", "-9223372036854775808", "9223372036854775808", "-9223372036854775809", "1.0000000000000001", "2.0000000000000001"} {
+	for _, marker := range []string{providerOptionPrivacyMarker, responseFormatPrivacyMarker, responseFormatSchemaMarker, logprobTokenMarker, "1.75", "-1.25", penaltyOverflowMarker, "2.01", "-2.01", "2.0000000000000001", "-2.0000000000000001", "2.000000000000000000000000000000000000000000000000000000000000000000000000000000001", "9223372036854775807", "-9223372036854775808", "9223372036854775808", "-9223372036854775809", "1.0000000000000001", "2.0000000000000001"} {
 		if bytes.Contains(respBody, []byte(marker)) {
 			return fmt.Errorf("unsupported %s leaked private marker", name)
 		}
@@ -3345,6 +3414,8 @@ func exerciseCodexChatCheck(ctx context.Context, base, token string, fakeUpstrea
 		{name: "top_a", extra: advancedSamplingExtra("top_a")},
 		{name: "repetition_penalty", extra: advancedSamplingExtra("repetition_penalty")},
 		{name: "seed", extra: advancedSamplingExtra("seed")},
+		{name: "logprobs", extra: `"logprobs":true`},
+		{name: "top_logprobs", extra: `"logprobs":true,"top_logprobs":20`},
 		{name: "stop", extra: `"stop":"x"`},
 		{name: "provider_options", extra: `"provider_options":{"codex":{"reasoning_effort":"high"}}`},
 	} {
@@ -4247,6 +4318,7 @@ const penaltyPresenceMarkerValue = 1.75
 const penaltyFrequencyMarkerValue = -1.25
 const penaltyOverflowMarker = "1e309"
 const advancedSamplingOverflowMarker = "1e309"
+const logprobTokenMarker = "logprob-token-marker"
 
 func advancedSamplingFields() []string {
 	return []string{"top_k", "min_p", "top_a", "repetition_penalty", "seed"}
@@ -4271,6 +4343,26 @@ func advancedSamplingExpectedValue(field string) string {
 
 func advancedSamplingExtra(field string) string {
 	return fmt.Sprintf(`%q:%s`, field, advancedSamplingExpectedValue(field))
+}
+
+func logprobsInvalidCases() []providerOptionInvalidCase {
+	return []providerOptionInvalidCase{
+		{name: "logprobs-null", extra: `"logprobs":null`},
+		{name: "logprobs-string", extra: `"logprobs":"true"`},
+		{name: "logprobs-object", extra: `"logprobs":{"value":true}`},
+		{name: "logprobs-array", extra: `"logprobs":[true]`},
+		{name: "top-null", extra: `"logprobs":true,"top_logprobs":null`},
+		{name: "top-string", extra: `"logprobs":true,"top_logprobs":"20"`},
+		{name: "top-bool", extra: `"logprobs":true,"top_logprobs":true`},
+		{name: "top-object", extra: `"logprobs":true,"top_logprobs":{"value":20}`},
+		{name: "top-array", extra: `"logprobs":true,"top_logprobs":[20]`},
+		{name: "top-float", extra: `"logprobs":true,"top_logprobs":1.5`},
+		{name: "top-negative", extra: `"logprobs":true,"top_logprobs":-1`},
+		{name: "top-high", extra: `"logprobs":true,"top_logprobs":21`},
+		{name: "top-overflow", extra: `"logprobs":true,"top_logprobs":9223372036854775808`},
+		{name: "top-without-logprobs", extra: `"top_logprobs":20`},
+		{name: "top-with-logprobs-false", extra: `"logprobs":false,"top_logprobs":20`},
+	}
 }
 
 func providerOptionsExtra(providerType string) string {
@@ -4553,6 +4645,26 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 	if !fakeUpstream.sawExpected(expectedPath, "max-completion-limit") {
 		return fmt.Errorf("max_completion_tokens did not reach upstream provider=%s", instance.ID)
 	}
+	for _, tc := range []struct {
+		model string
+		extra string
+	}{
+		{"logprobs-true", `"logprobs":true`},
+		{"logprobs-false", `"logprobs":false`},
+		{"logprobs-top", `"logprobs":true,"top_logprobs":20`},
+	} {
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+tc.model, tc.extra))
+		status, respBody, err := postJSON(base+"/v1/chat/completions", token, body)
+		if err != nil || status != http.StatusOK {
+			return fmt.Errorf("logprobs provider=%s model=%s status=%d err=%v", instance.ID, tc.model, status, err)
+		}
+		if bytes.Contains(respBody, []byte(logprobTokenMarker)) {
+			return fmt.Errorf("logprobs response echoed private marker")
+		}
+		if !fakeUpstream.sawExpected(expectedPath, tc.model) {
+			return fmt.Errorf("logprobs did not reach upstream provider=%s model=%s", instance.ID, tc.model)
+		}
+	}
 	if instance.Type == "openrouter" {
 		for _, tc := range []struct {
 			model string
@@ -4616,12 +4728,17 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 	}{
 		{name: "tools", extra: `"tools":[]`},
 		{name: "tool_choice", extra: `"tool_choice":null`},
-		{name: "logprobs", extra: `"logprobs":null`},
-		{name: "top_logprobs", extra: `"top_logprobs":null`},
 	} {
 		upstreamModel := "unsupported-" + tc.name
 		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
 		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" "+tc.name); err != nil {
+			return err
+		}
+	}
+	for _, tc := range logprobsInvalidCases() {
+		upstreamModel := "invalid-logprobs-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" logprobs "+tc.name); err != nil {
 			return err
 		}
 	}
@@ -4799,6 +4916,17 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 	if !fakeUpstream.sawExpectedStream(expectedPath, "stream-max-completion-limit") {
 		return fmt.Errorf("stream max_completion_tokens did not reach upstream provider=%s", instance.ID)
 	}
+	logprobsBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},"logprobs":true,"top_logprobs":20}`, instance.ID+"/stream-logprobs-top"))
+	status, _, _, raw, err := postStream(base+"/v1/chat/completions", token, logprobsBody)
+	if err != nil || status != http.StatusOK {
+		return fmt.Errorf("stream logprobs provider=%s status=%d err=%v", instance.ID, status, err)
+	}
+	if !bytes.Contains(raw, []byte(`"logprobs"`)) || !bytes.Contains(raw, []byte(logprobTokenMarker)) {
+		return fmt.Errorf("stream logprobs were not preserved")
+	}
+	if !fakeUpstream.sawExpectedStream(expectedPath, "stream-logprobs-top") {
+		return fmt.Errorf("stream logprobs did not reach upstream provider=%s", instance.ID)
+	}
 	if instance.Type == "openrouter" {
 		for _, tc := range []struct {
 			model string
@@ -4881,12 +5009,17 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 	}{
 		{name: "tools", extra: `"tools":[]`},
 		{name: "tool_choice", extra: `"tool_choice":null`},
-		{name: "logprobs", extra: `"logprobs":null`},
-		{name: "top_logprobs", extra: `"top_logprobs":null`},
 	} {
 		upstreamModel := "stream-unsupported-" + tc.name
 		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/"+upstreamModel, tc.extra))
 		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" stream "+tc.name); err != nil {
+			return err
+		}
+	}
+	for _, tc := range logprobsInvalidCases() {
+		upstreamModel := "stream-invalid-logprobs-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" stream logprobs "+tc.name); err != nil {
 			return err
 		}
 	}
@@ -4947,13 +5080,13 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 			return err
 		}
 	}
-	for _, marker := range []string{"1.75", "-1.25", penaltyOverflowMarker} {
+	for _, marker := range []string{"1.75", "-1.25", penaltyOverflowMarker, logprobTokenMarker} {
 		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
 			return err
 		}
 	}
 	preErrorBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true}}`, instance.ID+"/stream-error-before"))
-	status, _, _, raw, err := postStream(base+"/v1/chat/completions", token, preErrorBody)
+	status, _, _, raw, err = postStream(base+"/v1/chat/completions", token, preErrorBody)
 	if err != nil || status != http.StatusBadGateway || !hasStreamErrorEnvelope(raw) || bytes.Contains(raw, []byte("raw-provider-secret")) {
 		return fmt.Errorf("pre-stream provider error status=%d err=%v body_len=%d", status, err, len(raw))
 	}
@@ -4993,6 +5126,27 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 		_, _, _, _, _ = postStream(base+"/v1/chat/completions", token, body)
 		if err := assertRecordedStreamIncreased(ctx, store, tc.status, before); err != nil {
 			return fmt.Errorf("%s: %w", tc.model, err)
+		}
+	}
+	for _, name := range []string{"string", "number", "boolean", "array", "unknown-key", "bad-content", "bad-entry-object", "bad-bytes", "nested-top"} {
+		before, err := streamStatusCount(ctx, store, "upstream_invalid")
+		if err != nil {
+			return err
+		}
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},"logprobs":true}`, instance.ID+"/stream-logprobs-invalid-"+name))
+		status, _, _, raw, err := postStream(base+"/v1/chat/completions", token, body)
+		if err != nil || (status != http.StatusOK && status != http.StatusBadGateway) || bytes.Contains(raw, []byte(logprobTokenMarker)) {
+			return fmt.Errorf("stream invalid logprobs shape=%s status=%d err=%v body_len=%d", name, status, err, len(raw))
+		}
+		if status == http.StatusOK {
+			if !bytes.Contains(raw, []byte("upstream_stream_error")) {
+				return fmt.Errorf("stream invalid logprobs shape=%s did not return stream error", name)
+			}
+			if err := assertRecordedStreamIncreased(ctx, store, "upstream_invalid", before); err != nil {
+				return fmt.Errorf("stream invalid logprobs %s: %w", name, err)
+			}
+		} else if !hasStreamErrorEnvelope(raw) {
+			return fmt.Errorf("stream invalid logprobs shape=%s did not return error envelope", name)
 		}
 	}
 	afterDoneBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true}}`, instance.ID+"/stream-after-done"))
@@ -5280,6 +5434,8 @@ func exerciseCodexNoEligibleCacheCheck(ctx context.Context, registry provider.Re
 		{name: "null-max-completion", extra: `"max_completion_tokens":null`},
 		{name: "both-token-limits", extra: `"max_tokens":1,"max_completion_tokens":2`},
 		{name: "codex-max-completion", extra: `"max_completion_tokens":2`},
+		{name: "codex-logprobs", extra: `"logprobs":true`},
+		{name: "codex-top-logprobs", extra: `"logprobs":true,"top_logprobs":20`},
 	} {
 		upstreamModel := "codex-noeligible-" + tc.name
 		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, "codex/"+upstreamModel, tc.extra))
@@ -5396,6 +5552,13 @@ func exerciseSamplingPenaltyNoEligibleCheck(ctx context.Context, registry provid
 				return err
 			}
 		}
+		for _, tc := range logprobsInvalidCases() {
+			upstreamModel := "noeligible-invalid-logprobs-" + tc.name
+			body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+			if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, body, fakeUpstream, expectedPath, upstreamModel, "noeligible "+instance.ID+" logprobs "+tc.name); err != nil {
+				return err
+			}
+		}
 		for _, tc := range samplingPenaltyUnsupportedCases(instance.Type) {
 			upstreamModel := "noeligible-unsupported-penalty-" + tc.name
 			body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
@@ -5431,7 +5594,7 @@ func exerciseSamplingPenaltyNoEligibleCheck(ctx context.Context, registry provid
 			return err
 		}
 	}
-	for _, marker := range []string{"1.75", "-1.25", penaltyOverflowMarker, "9223372036854775807", "-9223372036854775808", advancedSamplingOverflowMarker} {
+	for _, marker := range []string{"1.75", "-1.25", penaltyOverflowMarker, "9223372036854775807", "-9223372036854775808", advancedSamplingOverflowMarker, logprobTokenMarker} {
 		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
 			return err
 		}
@@ -6017,13 +6180,20 @@ func assertModelCacheRows(ctx context.Context, store *sqlite.Store) error {
 		return fmt.Errorf("model cache stored %d rows", len(rows))
 	}
 	codexFound := false
+	deepseekFound := false
 	for _, row := range rows {
-		if row.ModelID == "deepseek/deepseek-v4-pro" {
-			if row.DisplayName != "DeepSeek V4 Pro" || row.ContextLength != 1000000 || row.CapabilityFlags != "chat,json_object,reasoning" {
+		if row.ProviderInstanceID == "openrouter" && row.ModelID == "deepseek/deepseek-v4-pro" {
+			if row.DisplayName != "DeepSeek V4 Pro" || row.ContextLength != 1000000 || row.CapabilityFlags != "chat,json_object,logprobs,reasoning" {
 				return fmt.Errorf("openrouter model cache metadata missing")
 			}
 			if strings.Contains(row.DisplayName, "raw description marker") || strings.Contains(row.CapabilityFlags, "pricing") {
 				return fmt.Errorf("model cache leaked raw provider metadata")
+			}
+		}
+		if row.ProviderInstanceID == "deepseek" && row.ModelID == "deepseek-v4-pro" {
+			deepseekFound = true
+			if row.CapabilityFlags != "chat,json_object,logprobs,reasoning,stream" {
+				return fmt.Errorf("deepseek model cache metadata mismatch")
 			}
 		}
 		if row.ProviderInstanceID == "codex" && row.ModelID == "gpt-5.5-codex" {
@@ -6035,6 +6205,9 @@ func assertModelCacheRows(ctx context.Context, store *sqlite.Store) error {
 	}
 	if !codexFound {
 		return fmt.Errorf("model cache missing codex oauth model")
+	}
+	if !deepseekFound {
+		return fmt.Errorf("model cache missing deepseek model")
 	}
 	return nil
 }

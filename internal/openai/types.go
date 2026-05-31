@@ -9,6 +9,7 @@ import (
 	"math"
 	"math/big"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -81,6 +82,9 @@ func DecodeChatCompletion(r io.Reader) (ChatCompletionRequest, error) {
 	if err := validateRawAdvancedSampling(raw); err != nil {
 		return ChatCompletionRequest{}, err
 	}
+	if err := validateRawLogprobs(raw); err != nil {
+		return ChatCompletionRequest{}, err
+	}
 	var req ChatCompletionRequest
 	body, err := json.Marshal(raw)
 	if err != nil {
@@ -129,6 +133,9 @@ func (r ChatCompletionRequest) Validate() error {
 		return err
 	}
 	if err := validateAdvancedSamplingValues(r); err != nil {
+		return err
+	}
+	if err := validateLogprobsValues(r); err != nil {
 		return err
 	}
 	for i, msg := range r.Messages {
@@ -258,6 +265,12 @@ func MarshalUpstreamChatRequest(req ChatCompletionRequest, upstreamModel string)
 	}
 	if req.ResponseFormat != nil {
 		out["response_format"] = req.ResponseFormat
+	}
+	if req.Logprobs != nil {
+		out["logprobs"] = *req.Logprobs
+	}
+	if req.TopLogprobs != nil {
+		out["top_logprobs"] = *req.TopLogprobs
 	}
 	if req.Stream {
 		out["stream"] = true
@@ -528,6 +541,61 @@ func validateRawAdvancedSampling(raw map[string]json.RawMessage) error {
 	return nil
 }
 
+func validateRawLogprobs(raw map[string]json.RawMessage) error {
+	logprobs, hasLogprobs, err := parseRawLogprobs(raw)
+	if err != nil {
+		return err
+	}
+	topLogprobs, hasTopLogprobs, err := parseRawTopLogprobs(raw)
+	if err != nil {
+		return err
+	}
+	if hasTopLogprobs {
+		if !hasLogprobs || !logprobs {
+			return errors.New("top_logprobs requires logprobs: true")
+		}
+		if topLogprobs < 0 || topLogprobs > 20 {
+			return errors.New("top_logprobs must be an integer between 0 and 20")
+		}
+	}
+	return nil
+}
+
+func parseRawLogprobs(raw map[string]json.RawMessage) (bool, bool, error) {
+	value, ok := raw["logprobs"]
+	if !ok {
+		return false, false, nil
+	}
+	trimmed := bytes.TrimSpace(value)
+	if len(trimmed) == 0 || isJSONNull(trimmed) || (trimmed[0] != 't' && trimmed[0] != 'f') {
+		return false, true, errors.New("logprobs must be a boolean")
+	}
+	var out bool
+	if err := json.Unmarshal(trimmed, &out); err != nil {
+		return false, true, errors.New("logprobs must be a boolean")
+	}
+	return out, true, nil
+}
+
+func parseRawTopLogprobs(raw map[string]json.RawMessage) (int, bool, error) {
+	value, ok := raw["top_logprobs"]
+	if !ok {
+		return 0, false, nil
+	}
+	num, err := parseJSONNumberToken("top_logprobs", value, "an integer between 0 and 20")
+	if err != nil {
+		return 0, true, err
+	}
+	if strings.ContainsAny(num.String(), ".eE") {
+		return 0, true, errors.New("top_logprobs must be an integer between 0 and 20")
+	}
+	parsed, ok := new(big.Int).SetString(num.String(), 10)
+	if !ok || parsed.Cmp(big.NewInt(0)) < 0 || parsed.Cmp(big.NewInt(20)) > 0 {
+		return 0, true, errors.New("top_logprobs must be an integer between 0 and 20")
+	}
+	return int(parsed.Int64()), true, nil
+}
+
 type advancedSamplingSpec struct {
 	field      string
 	integer    bool
@@ -678,6 +746,21 @@ func validateAdvancedSamplingValues(r ChatCompletionRequest) error {
 		}
 		if _, err := parseAdvancedSamplingNumber(spec, json.RawMessage(value.String())); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func validateLogprobsValues(r ChatCompletionRequest) error {
+	if r.HasField("logprobs") && r.Logprobs == nil {
+		return errors.New("logprobs must be a boolean")
+	}
+	if r.HasField("top_logprobs") {
+		if r.TopLogprobs == nil || *r.TopLogprobs < 0 || *r.TopLogprobs > 20 {
+			return errors.New("top_logprobs must be an integer between 0 and 20")
+		}
+		if r.Logprobs == nil || !*r.Logprobs {
+			return errors.New("top_logprobs requires logprobs: true")
 		}
 	}
 	return nil
@@ -853,6 +936,13 @@ func normalizeStreamChoice(rawChoice json.RawMessage, index int) (map[string]any
 			}
 		}
 	}
+	if rawLogprobs, ok := raw["logprobs"]; ok {
+		value, err := normalizeStreamLogprobs(rawLogprobs, index)
+		if err != nil {
+			return nil, false, err
+		}
+		out["logprobs"] = value
+	}
 	if len(out) == 0 {
 		return nil, false, fmt.Errorf("upstream stream choices[%d] has no supported fields", index)
 	}
@@ -866,6 +956,114 @@ func normalizeStreamChoice(rawChoice json.RawMessage, index int) (map[string]any
 		}
 	}
 	return out, outputToken, nil
+}
+
+func normalizeStreamLogprobs(raw json.RawMessage, index int) (any, error) {
+	if isJSONNull(raw) {
+		return nil, nil
+	}
+	var value map[string]any
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if err := dec.Decode(&value); err != nil {
+		return nil, fmt.Errorf("upstream stream choices[%d].logprobs is invalid", index)
+	}
+	if dec.Decode(&struct{}{}) != io.EOF {
+		return nil, fmt.Errorf("upstream stream choices[%d].logprobs is invalid", index)
+	}
+	if err := validateStreamLogprobsObject(value); err != nil {
+		return nil, fmt.Errorf("upstream stream choices[%d].logprobs is invalid", index)
+	}
+	return value, nil
+}
+
+func validateStreamLogprobsObject(value map[string]any) error {
+	for key, raw := range value {
+		switch key {
+		case "content", "reasoning_content":
+			if raw == nil {
+				continue
+			}
+			items, ok := raw.([]any)
+			if !ok {
+				return errors.New("invalid logprobs content")
+			}
+			for _, item := range items {
+				obj, ok := item.(map[string]any)
+				if !ok {
+					return errors.New("invalid logprobs token")
+				}
+				if err := validateStreamLogprobToken(obj, true); err != nil {
+					return err
+				}
+			}
+		default:
+			return errors.New("invalid logprobs key")
+		}
+	}
+	return nil
+}
+
+func validateStreamLogprobToken(value map[string]any, allowTopLogprobs bool) error {
+	if _, ok := value["token"].(string); !ok {
+		return errors.New("invalid logprobs token")
+	}
+	logprob, ok := value["logprob"].(json.Number)
+	if !ok || !jsonNumberFinite(logprob) {
+		return errors.New("invalid logprobs value")
+	}
+	for key, raw := range value {
+		switch key {
+		case "token", "logprob":
+		case "bytes":
+			if raw == nil {
+				continue
+			}
+			bytesValue, ok := raw.([]any)
+			if !ok {
+				return errors.New("invalid logprobs bytes")
+			}
+			for _, b := range bytesValue {
+				num, ok := b.(json.Number)
+				if !ok || !jsonNumberIntegerInRange(num, 0, 255) {
+					return errors.New("invalid logprobs bytes")
+				}
+			}
+		case "top_logprobs":
+			if !allowTopLogprobs {
+				return errors.New("invalid nested top_logprobs")
+			}
+			items, ok := raw.([]any)
+			if !ok {
+				return errors.New("invalid top_logprobs")
+			}
+			for _, item := range items {
+				obj, ok := item.(map[string]any)
+				if !ok {
+					return errors.New("invalid top_logprobs")
+				}
+				if err := validateStreamLogprobToken(obj, false); err != nil {
+					return err
+				}
+			}
+		default:
+			return errors.New("invalid logprobs token key")
+		}
+	}
+	return nil
+}
+
+func jsonNumberFinite(num json.Number) bool {
+	value, err := num.Float64()
+	return err == nil && !math.IsInf(value, 0) && !math.IsNaN(value)
+}
+
+func jsonNumberIntegerInRange(num json.Number, min, max int64) bool {
+	if strings.ContainsAny(num.String(), ".eE") {
+		return false
+	}
+	value, err := strconv.ParseInt(num.String(), 10, 64)
+	return err == nil && value >= min && value <= max
 }
 
 func requiredString(raw map[string]json.RawMessage, key string) (string, error) {

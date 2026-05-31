@@ -304,11 +304,36 @@ func validateDeepSeekOptions(raw any) error {
 			if effort != "high" && effort != "max" {
 				return errors.New("provider_options.deepseek.reasoning_effort is unsupported")
 			}
+		case "user_id":
+			userID, ok := value.(string)
+			if !ok {
+				return errors.New("provider_options.deepseek.user_id must be a string")
+			}
+			if !isDeepSeekUserID(userID) {
+				return errors.New("provider_options.deepseek.user_id is invalid")
+			}
 		default:
 			return errors.New("provider_options.deepseek contains an unsupported field")
 		}
 	}
 	return nil
+}
+
+func isDeepSeekUserID(value string) bool {
+	if value == "" || len(value) > 512 {
+		return false
+	}
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '_' || r == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func validateOpenRouterOptions(raw any) error {
@@ -447,6 +472,9 @@ func marshalChatCompletionsRequest(providerType string, req openai.ChatCompletio
 			}
 			if effort, ok := opts["reasoning_effort"]; ok {
 				out["reasoning_effort"] = effort
+			}
+			if userID, ok := opts["user_id"]; ok {
+				out["user_id"] = userID
 			}
 		case "openrouter":
 			opts := req.ReasoningOptions["openrouter"].(map[string]any)

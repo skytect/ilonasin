@@ -29,6 +29,9 @@ func (a HTTPChatAdapter) ValidateChatRequest(instance Instance, req openai.ChatC
 		if err := validateChatResponseFormat(instance.Type, req); err != nil {
 			return err
 		}
+		if err := rejectStrictTools(req); err != nil {
+			return err
+		}
 		return validateProviderOptions(instance.Type, req)
 	case "codex":
 		unsupported := append(commonUnsupported, "parallel_tool_calls", "prediction", "user", "logprobs", "top_logprobs", "max_tokens", "max_completion_tokens", "temperature", "top_p", "presence_penalty", "frequency_penalty", "stop", "response_format")
@@ -45,10 +48,27 @@ func (a HTTPChatAdapter) ValidateChatRequest(instance Instance, req openai.ChatC
 		if err := validateCodexToolTranscript(req); err != nil {
 			return err
 		}
+		if err := rejectStrictTools(req); err != nil {
+			return err
+		}
 		return validateProviderOptions(instance.Type, req)
 	default:
 		return fmt.Errorf("provider type %q does not support chat validation", instance.Type)
 	}
+}
+
+func rejectStrictTools(req openai.ChatCompletionRequest) error {
+	for i, tool := range req.Tools {
+		function, ok := tool["function"].(map[string]any)
+		if !ok {
+			continue
+		}
+		strict, ok := function["strict"].(bool)
+		if ok && strict {
+			return fmt.Errorf("tools[%d].function.strict is unsupported", i)
+		}
+	}
+	return nil
 }
 
 func validateCodexToolTranscript(req openai.ChatCompletionRequest) error {

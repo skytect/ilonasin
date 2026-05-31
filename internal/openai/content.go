@@ -135,7 +135,7 @@ func parseImageURLPart(raw json.RawMessage, index int) (string, string, error) {
 			return "", "", err
 		}
 		switch detail {
-		case "auto", "low", "high":
+		case "auto", "low", "high", "original":
 		default:
 			return "", "", fmt.Errorf("content[%d].image_url.detail is unsupported", index)
 		}

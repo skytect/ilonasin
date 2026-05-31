@@ -134,7 +134,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request, token c
 		s.recordNonStreamingChat(r, nc, exec, status, errorClass)
 		return
 	}
-	if err := writeResponsesSSE(w, r, localResponsesID(), message.Content, exec.final.result.Usage); err != nil {
+	if err := writeResponsesSSE(w, r, localResponsesID(), message, exec.final.result.Usage); err != nil {
 		exec.final.result.ErrorClass = "client_disconnected"
 		s.recordNonStreamingChat(r, nc, exec, http.StatusOK, "client_disconnected")
 		return
@@ -165,9 +165,6 @@ func responsesMessageResult(final chatAttempt) (openai.ChatCompletionMessageResu
 	if err != nil {
 		return openai.ChatCompletionMessageResult{}, http.StatusBadGateway, "upstream_invalid_response"
 	}
-	if message.HasToolCalls {
-		return openai.ChatCompletionMessageResult{}, http.StatusNotImplemented, "responses_tool_calls_unsupported"
-	}
 	return message, status, errorClass
 }
 
@@ -189,17 +186,13 @@ func writeResponsesPreStreamError(w http.ResponseWriter, final chatAttempt, stat
 		return errors.New("written")
 	}
 	if status < 200 || status >= 300 {
-		if errorClass == "responses_tool_calls_unsupported" {
-			writeError(w, status, "responses tool-call turns are not supported in this slice", "api_error", errorClass)
-			return errors.New("written")
-		}
 		writeError(w, status, "upstream request failed", "api_error", errorClass)
 		return errors.New("written")
 	}
 	return nil
 }
 
-func writeResponsesSSE(w http.ResponseWriter, r *http.Request, responseID, content string, usage openai.Usage) error {
+func writeResponsesSSE(w http.ResponseWriter, r *http.Request, responseID string, message openai.ChatCompletionMessageResult, usage openai.Usage) error {
 	flusher, _ := w.(http.Flusher)
 	header := w.Header()
 	header.Set("Content-Type", "text/event-stream")
@@ -212,16 +205,33 @@ func writeResponsesSSE(w http.ResponseWriter, r *http.Request, responseID, conte
 	}); err != nil {
 		return err
 	}
-	if err := writeResponseSSEEvent(r.Context(), w, flusher, "response.output_item.done", map[string]any{
-		"type": "response.output_item.done",
-		"item": map[string]any{
-			"id":      responseID + "_item_0",
-			"type":    "message",
-			"role":    "assistant",
-			"content": []any{map[string]any{"type": "output_text", "text": content}},
-		},
-	}); err != nil {
-		return err
+	itemIndex := 0
+	if message.Content != "" || !message.HasToolCalls {
+		if err := writeResponseSSEEvent(r.Context(), w, flusher, "response.output_item.done", map[string]any{
+			"type": "response.output_item.done",
+			"item": map[string]any{
+				"id":      fmt.Sprintf("%s_item_%d", responseID, itemIndex),
+				"type":    "message",
+				"role":    "assistant",
+				"content": []any{map[string]any{"type": "output_text", "text": message.Content}},
+			},
+		}); err != nil {
+			return err
+		}
+		itemIndex++
+	}
+	for _, call := range message.ToolCalls {
+		item, err := responseFunctionCallItem(responseID, itemIndex, call)
+		if err != nil {
+			return err
+		}
+		if err := writeResponseSSEEvent(r.Context(), w, flusher, "response.output_item.done", map[string]any{
+			"type": "response.output_item.done",
+			"item": item,
+		}); err != nil {
+			return err
+		}
+		itemIndex++
 	}
 	if err := writeResponseSSEEvent(r.Context(), w, flusher, "response.completed", map[string]any{
 		"type": "response.completed",
@@ -234,6 +244,23 @@ func writeResponsesSSE(w http.ResponseWriter, r *http.Request, responseID, conte
 		return err
 	}
 	return nil
+}
+
+func responseFunctionCallItem(responseID string, index int, call map[string]any) (map[string]any, error) {
+	callID, _ := call["id"].(string)
+	function, _ := call["function"].(map[string]any)
+	name, _ := function["name"].(string)
+	arguments, _ := function["arguments"].(string)
+	if callID == "" || name == "" {
+		return nil, errors.New("invalid tool call")
+	}
+	return map[string]any{
+		"id":        fmt.Sprintf("%s_item_%d", responseID, index),
+		"type":      "function_call",
+		"call_id":   callID,
+		"name":      name,
+		"arguments": arguments,
+	}, nil
 }
 
 func writeResponseSSEEvent(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, event string, payload map[string]any) error {

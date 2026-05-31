@@ -227,7 +227,7 @@ func ServeCheck(opts Options) error {
 	if err := exerciseCodexChatCheck(context.Background(), base, created2.Token, fakeUpstream, checkStore); err != nil {
 		return err
 	}
-	if err := exerciseLocalResponsesCheck(context.Background(), base, created2.Token, fakeUpstream, checkStore); err != nil {
+	if err := exerciseLocalResponsesCheck(context.Background(), rt.Config, base, created2.Token, fakeUpstream, checkStore); err != nil {
 		return fmt.Errorf("local responses check: %w", err)
 	}
 	if err := exerciseCodexServeOAuthRefreshCheck(context.Background(), rt.Config, fakeUpstream); err != nil {

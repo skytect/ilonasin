@@ -45,6 +45,7 @@ type ChatCompletionRequest struct {
 	LogitBias           map[string]json.Number `json:"logit_bias,omitempty"`
 	ReasoningOptions    map[string]any         `json:"provider_options,omitempty"`
 	PresentFields       map[string]bool        `json:"-"`
+	CodexResponsesTools []json.RawMessage      `json:"-"`
 }
 
 type Message struct {
@@ -245,6 +246,7 @@ type ChatCompletionMessageResult struct {
 	ChatCompletionMetadata
 	Content      string
 	HasToolCalls bool
+	ToolCalls    []map[string]any
 }
 
 func MessageContentString(msg Message) (string, error) {
@@ -447,11 +449,39 @@ func ExtractChatCompletionMessageResult(body []byte) (ChatCompletionMessageResul
 	if err != nil {
 		return ChatCompletionMessageResult{}, err
 	}
+	toolCalls, err := normalizeChatCompletionToolCalls(message.ToolCalls)
+	if err != nil {
+		return ChatCompletionMessageResult{}, err
+	}
 	return ChatCompletionMessageResult{
 		ChatCompletionMetadata: metadata,
 		Content:                message.Content,
-		HasToolCalls:           len(message.ToolCalls) > 0,
+		HasToolCalls:           len(toolCalls) > 0,
+		ToolCalls:              toolCalls,
 	}, nil
+}
+
+func normalizeChatCompletionToolCalls(calls []json.RawMessage) ([]map[string]any, error) {
+	if len(calls) == 0 {
+		return nil, nil
+	}
+	raw, err := json.Marshal(calls)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateRawAssistantToolCalls(raw, 0); err != nil {
+		return nil, err
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var out []map[string]any
+	if err := dec.Decode(&out); err != nil {
+		return nil, err
+	}
+	if dec.Decode(&struct{}{}) != io.EOF {
+		return nil, errors.New("upstream response tool_calls is invalid")
+	}
+	return out, nil
 }
 
 func extractChatCompletion(body []byte, includeMessage bool) (ChatCompletionMetadata, chatCompletionMessage, error) {
@@ -1048,9 +1078,6 @@ func validateRawTool(raw json.RawMessage, index int) (string, error) {
 		var strict bool
 		if err := json.Unmarshal(rawStrict, &strict); err != nil {
 			return "", fmt.Errorf("tools[%d].function.strict must be a boolean", index)
-		}
-		if strict {
-			return "", fmt.Errorf("tools[%d].function.strict is unsupported", index)
 		}
 	}
 	return name, nil

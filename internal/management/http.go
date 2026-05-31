@@ -12,10 +12,23 @@ const (
 	PathLocalTokens = "/_ilonasin/manage/local-tokens"
 )
 
-func Handler(service LocalTokenClient) http.Handler {
+type HandlerService interface {
+	LocalTokenClient
+	SnapshotClient
+}
+
+func Handler(service HandlerService) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+PathHealth, func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	})
+	mux.HandleFunc("GET "+PathSnapshot, func(w http.ResponseWriter, r *http.Request) {
+		resp, err := service.LoadManagementSnapshot(r.Context())
+		if err != nil {
+			writeError(w, http.StatusBadGateway)
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
 	})
 	mux.HandleFunc("GET "+PathLocalTokens, func(w http.ResponseWriter, r *http.Request) {
 		resp, err := service.ListLocalTokens(r.Context())

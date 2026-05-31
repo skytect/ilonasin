@@ -47,7 +47,7 @@ func ServeCheck(opts Options) error {
 	checkStore.Logger = rt.Logger
 	defer checkStore.Close()
 	checkDBPath := filepath.Join(checkDBDir, "ilonasin.sqlite")
-	mgmt, err := startManagementServer(context.Background(), rt.HomeDir, rt.ConfigPath, checkDBPath, checkStore)
+	mgmt, err := startManagementServer(context.Background(), rt.HomeDir, rt.ConfigPath, checkDBPath, rt.Registry, checkStore)
 	if err != nil {
 		return err
 	}
@@ -58,7 +58,13 @@ func ServeCheck(opts Options) error {
 	if err := exerciseManagementRouteIsolation(context.Background(), management.NewUnixLocalTokenClient(mgmt.socketPath)); err != nil {
 		return err
 	}
-	if second, err := startManagementServer(context.Background(), rt.HomeDir, rt.ConfigPath, checkDBPath, checkStore); err == nil {
+	if err := exerciseManagementSnapshot(context.Background(), management.NewUnixLocalTokenClient(mgmt.socketPath)); err != nil {
+		return err
+	}
+	if err := exerciseManagementSnapshotHTTPRoute(context.Background(), rt.HomeDir, rt.ConfigPath); err != nil {
+		return err
+	}
+	if second, err := startManagementServer(context.Background(), rt.HomeDir, rt.ConfigPath, checkDBPath, rt.Registry, checkStore); err == nil {
 		second.Close(context.Background())
 		return fmt.Errorf("second management server replaced live socket")
 	}
@@ -188,6 +194,9 @@ func ServeCheck(opts Options) error {
 	}
 	if status, err := getStatus(base+management.PathLocalTokens, ""); err != nil || status != http.StatusNotFound {
 		return fmt.Errorf("public management route status=%d err=%v", status, err)
+	}
+	if status, err := getStatus(base+management.PathSnapshot, ""); err != nil || status != http.StatusNotFound {
+		return fmt.Errorf("public management snapshot route status=%d err=%v", status, err)
 	}
 	if status, err := getStatus(base+"/v1/models", "oauth-access-secret-marker"); err != nil || status != http.StatusUnauthorized {
 		return fmt.Errorf("oauth credential authenticated as local token status=%d err=%v", status, err)

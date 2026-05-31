@@ -8,6 +8,7 @@ import (
 
 	"ilonasin/internal/credentials"
 	"ilonasin/internal/management"
+	"ilonasin/internal/provider"
 	"ilonasin/internal/storage/sqlite"
 )
 
@@ -17,14 +18,22 @@ type managementRuntime struct {
 	server     *http.Server
 }
 
-func startManagementServer(ctx context.Context, homeDir, configPath, databasePath string, store *sqlite.Store) (managementRuntime, error) {
+func startManagementServer(ctx context.Context, homeDir, configPath, databasePath string, registry provider.Registry, store *sqlite.Store) (managementRuntime, error) {
 	socketPath := management.SocketPath(homeDir, configPath, databasePath)
 	listener, owner, err := management.PrepareUnixListener(ctx, socketPath)
 	if err != nil {
 		return managementRuntime{}, err
 	}
+	upstreams := &credentials.UpstreamService{Registry: registry, Repo: store}
 	srv := &http.Server{
-		Handler:           management.Handler(management.Service{Tokens: credentials.Service{Repo: store}}),
+		Handler: management.Handler(management.Service{
+			Tokens:        credentials.Service{Repo: store},
+			Registry:      registry,
+			Upstreams:     upstreams,
+			OAuth:         upstreams,
+			ModelCache:    store,
+			Observability: store,
+		}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	errc := make(chan error, 1)

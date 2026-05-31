@@ -26,6 +26,7 @@ import (
 type Model struct {
 	cfg              config.Config
 	registry         provider.Registry
+	snapshot         management.SnapshotClient
 	tokens           management.LocalTokenClient
 	upstreams        credentials.UpstreamCredentialManager
 	oauth            credentials.OAuthMetadataReader
@@ -50,6 +51,7 @@ type Model struct {
 	healthRows       []metadata.HealthSummary
 	fallbackRows     []metadata.FallbackSummary
 	pruneResult      *metadata.PruneResult
+	pruningAvailable bool
 	selected         int
 	oauthSelected    int
 	reveal           string
@@ -332,9 +334,15 @@ func (m Model) View() string {
 	return b.String()
 }
 
-func Run(cfg config.Config, registry provider.Registry, tokens management.LocalTokenClient, upstreams credentials.UpstreamCredentialManager, oauth credentials.OAuthMetadataReader, modelCache ModelCacheReader, observability ObservabilityReader, pruner TelemetryPruner, loggers ...*slog.Logger) error {
+func Run(cfg config.Config, registry provider.Registry, snapshot management.SnapshotClient, tokens management.LocalTokenClient, upstreams credentials.UpstreamCredentialManager, oauth credentials.OAuthMetadataReader, modelCache ModelCacheReader, observability ObservabilityReader, pruner TelemetryPruner, loggers ...*slog.Logger) error {
+	if snapshot == nil {
+		return fmt.Errorf("management snapshot client is required")
+	}
 	model := NewModel(cfg, registry, tokens, upstreams, oauth, oauthRefreshController(oauth), oauthLoginController(oauth), modelCache, observability, pruner, nil, loggers...)
-	_ = model.reload()
+	model.snapshot = snapshot
+	if err := model.reload(); err != nil {
+		return err
+	}
 	_, err := tea.NewProgram(model).Run()
 	return err
 }
@@ -349,9 +357,15 @@ func oauthLoginController(oauth credentials.OAuthMetadataReader) credentials.OAu
 	return controller
 }
 
-func Check(cfg config.Config, registry provider.Registry, tokens management.LocalTokenClient, upstreams credentials.UpstreamCredentialManager, oauth credentials.OAuthMetadataReader, modelCache ModelCacheReader, observability ObservabilityReader, pruner TelemetryPruner, out io.Writer, loggers ...*slog.Logger) error {
+func Check(cfg config.Config, registry provider.Registry, snapshot management.SnapshotClient, tokens management.LocalTokenClient, upstreams credentials.UpstreamCredentialManager, oauth credentials.OAuthMetadataReader, modelCache ModelCacheReader, observability ObservabilityReader, pruner TelemetryPruner, out io.Writer, loggers ...*slog.Logger) error {
+	if snapshot == nil {
+		return fmt.Errorf("management snapshot client is required")
+	}
 	model := newCheckModel(cfg, registry, tokens, upstreams, oauth, oauthRefreshController(oauth), oauthLoginController(oauth), modelCache, observability, pruner, nil, loggers...)
-	_ = model.reload()
+	model.snapshot = snapshot
+	if err := model.reload(); err != nil {
+		return err
+	}
 	program := tea.NewProgram(model, tea.WithoutRenderer(), tea.WithInput(nil), tea.WithOutput(io.Discard))
 	if _, err := program.Run(); err != nil {
 		return err
@@ -902,6 +916,19 @@ func (c *cancelAwareOAuthLoginController) CompleteOAuthDeviceLogin(ctx context.C
 }
 
 func (m *Model) reload() error {
+	if m.snapshot != nil {
+		snapshot, err := m.snapshot.LoadManagementSnapshot(context.Background())
+		if err != nil {
+			m.err = err.Error()
+			return err
+		}
+		m.applySnapshot(snapshot)
+		return nil
+	}
+	return m.reloadDirect()
+}
+
+func (m *Model) reloadDirect() error {
 	if m.tokens == nil {
 		m.tokenRows = nil
 	} else {
@@ -1002,8 +1029,258 @@ func (m *Model) reload() error {
 	return nil
 }
 
+func (m *Model) applySnapshot(snapshot management.ManagementSnapshotResponse) {
+	m.tokenRows = snapshot.LocalTokens
+	m.providers = providersFromSnapshot(snapshot.Providers)
+	m.credentials = upstreamCredentialsFromSnapshot(snapshot.UpstreamCredentials)
+	m.fallbackPolicies = fallbackPoliciesFromSnapshot(snapshot.FallbackPolicies)
+	m.oauthRows = oauthCredentialsFromSnapshot(snapshot.OAuthCredentials)
+	m.accountRows = providerAccountsFromSnapshot(snapshot.ProviderAccounts)
+	m.modelRows = modelMetadataFromSnapshot(snapshot.ModelCache)
+	m.requestRows = requestSummariesFromSnapshot(snapshot.RecentRequests)
+	m.usageRows = usageSummariesFromSnapshot(snapshot.Usage)
+	m.latencyRows = latencySummariesFromSnapshot(snapshot.Latency)
+	m.streamRows = streamSummariesFromSnapshot(snapshot.Streams)
+	m.healthRows = healthSummariesFromSnapshot(snapshot.Health)
+	m.fallbackRows = fallbackSummariesFromSnapshot(snapshot.Fallbacks)
+	m.pruningAvailable = snapshot.PruningAvailable
+	m.credentials = m.visibleUpstreamCredentials(m.credentials)
+	m.fallbackPolicies = m.visibleFallbackPolicies(m.fallbackPolicies)
+	if m.selected >= len(m.tokenRows) {
+		m.selected = len(m.tokenRows) - 1
+	}
+	if m.selected < 0 {
+		m.selected = 0
+	}
+	if m.oauthSelected >= len(m.oauthRows) {
+		m.oauthSelected = len(m.oauthRows) - 1
+	}
+	if m.oauthSelected < 0 {
+		m.oauthSelected = 0
+	}
+}
+
+func providersFromSnapshot(rows []management.ProviderInstance) []provider.Instance {
+	out := make([]provider.Instance, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, provider.Instance{
+			ID:             row.ID,
+			Type:           row.Type,
+			BaseURL:        row.BaseURL,
+			AuthStyle:      row.AuthStyle,
+			Placeholder:    row.Placeholder,
+			APIKey:         row.APIKey,
+			OAuth:          row.OAuth,
+			OAuthRefresh:   row.OAuthRefresh,
+			Chat:           row.Chat,
+			ModelDiscovery: row.ModelDiscovery,
+		})
+	}
+	return out
+}
+
+func upstreamCredentialsFromSnapshot(rows []management.UpstreamCredential) []credentials.UpstreamCredentialMetadata {
+	out := make([]credentials.UpstreamCredentialMetadata, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, credentials.UpstreamCredentialMetadata{
+			ID:                 row.ID,
+			ProviderInstanceID: row.ProviderInstanceID,
+			Kind:               row.Kind,
+			Label:              row.Label,
+			SecretPrefix:       row.SecretPrefix,
+			SecretLast4:        row.SecretLast4,
+			FallbackGroup:      row.FallbackGroup,
+			CreatedAt:          row.CreatedAt,
+			DisabledAt:         row.DisabledAt,
+			Disabled:           row.Disabled,
+		})
+	}
+	return out
+}
+
+func fallbackPoliciesFromSnapshot(rows []management.FallbackPolicy) []credentials.FallbackPolicyMetadata {
+	out := make([]credentials.FallbackPolicyMetadata, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, credentials.FallbackPolicyMetadata{
+			ProviderInstanceID: row.ProviderInstanceID,
+			GroupLabel:         row.GroupLabel,
+			Enabled:            row.Enabled,
+			CredentialCount:    row.CredentialCount,
+			Explicit:           row.Explicit,
+		})
+	}
+	return out
+}
+
+func oauthCredentialsFromSnapshot(rows []management.OAuthCredential) []credentials.OAuthCredentialMetadata {
+	out := make([]credentials.OAuthCredentialMetadata, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, credentials.OAuthCredentialMetadata{
+			ID:                  row.ID,
+			ProviderInstanceID:  row.ProviderInstanceID,
+			Label:               row.Label,
+			AccountDisplayLabel: row.AccountDisplayLabel,
+			PlanLabel:           row.PlanLabel,
+			Scopes:              row.Scopes,
+			ExpiresAt:           row.ExpiresAt,
+			LastRefreshAt:       row.LastRefreshAt,
+			RefreshFailureClass: row.RefreshFailureClass,
+			CreatedAt:           row.CreatedAt,
+			DisabledAt:          row.DisabledAt,
+			Disabled:            row.Disabled,
+		})
+	}
+	return out
+}
+
+func providerAccountsFromSnapshot(rows []management.ProviderAccount) []credentials.ProviderAccountMetadata {
+	out := make([]credentials.ProviderAccountMetadata, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, credentials.ProviderAccountMetadata{
+			ID:                 row.ID,
+			ProviderInstanceID: row.ProviderInstanceID,
+			CredentialID:       row.CredentialID,
+			DisplayLabel:       row.DisplayLabel,
+			PlanLabel:          row.PlanLabel,
+			CreatedAt:          row.CreatedAt,
+		})
+	}
+	return out
+}
+
+func modelMetadataFromSnapshot(rows []management.ModelMetadata) []provider.ModelMetadata {
+	out := make([]provider.ModelMetadata, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, provider.ModelMetadata{
+			ProviderInstanceID: row.ProviderInstanceID,
+			ModelID:            row.ModelID,
+			DisplayName:        row.DisplayName,
+			CapabilityFlags:    row.Capabilities,
+			UpdatedAt:          row.UpdatedAt,
+		})
+	}
+	return out
+}
+
+func requestSummariesFromSnapshot(rows []management.RequestSummary) []metadata.RequestSummary {
+	out := make([]metadata.RequestSummary, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, metadata.RequestSummary{
+			ID:                     row.ID,
+			StartedAt:              row.StartedAt,
+			ProviderInstanceID:     row.ProviderInstanceID,
+			ModelID:                row.ModelID,
+			RequestedProviderID:    row.RequestedProviderID,
+			RequestedModelID:       row.RequestedModelID,
+			ResolvedProviderID:     row.ResolvedProviderID,
+			ResolvedModelID:        row.ResolvedModelID,
+			CredentialID:           row.CredentialID,
+			CredentialLabel:        row.CredentialLabel,
+			HTTPStatus:             row.HTTPStatus,
+			ErrorClass:             row.ErrorClass,
+			RetryCount:             row.RetryCount,
+			FallbackCount:          row.FallbackCount,
+			FallbackReason:         row.FallbackReason,
+			PromptTokens:           row.PromptTokens,
+			CompletionTokens:       row.CompletionTokens,
+			TotalTokens:            row.TotalTokens,
+			ReasoningTokens:        row.ReasoningTokens,
+			CacheHitTokens:         row.CacheHitTokens,
+			CacheWriteTokens:       row.CacheWriteTokens,
+			CostMicrounits:         row.CostMicrounits,
+			TotalLatencyMS:         row.TotalLatencyMS,
+			TimeToFirstTokenMS:     row.TimeToFirstTokenMS,
+			OutputTokensPerSecond:  row.OutputTokensPerSecond,
+			StreamCompletionStatus: row.StreamCompletionStatus,
+			StreamChunkCount:       row.StreamChunkCount,
+		})
+	}
+	return out
+}
+
+func usageSummariesFromSnapshot(rows []management.UsageSummary) []metadata.UsageSummary {
+	out := make([]metadata.UsageSummary, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, metadata.UsageSummary{
+			ProviderInstanceID: row.ProviderInstanceID,
+			RequestCount:       row.RequestCount,
+			PromptTokens:       row.PromptTokens,
+			CompletionTokens:   row.CompletionTokens,
+			TotalTokens:        row.TotalTokens,
+			ReasoningTokens:    row.ReasoningTokens,
+			CacheHitTokens:     row.CacheHitTokens,
+			CacheWriteTokens:   row.CacheWriteTokens,
+			CostMicrounits:     row.CostMicrounits,
+		})
+	}
+	return out
+}
+
+func latencySummariesFromSnapshot(rows []management.LatencySummary) []metadata.LatencySummary {
+	out := make([]metadata.LatencySummary, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, metadata.LatencySummary{
+			ProviderInstanceID:        row.ProviderInstanceID,
+			RequestCount:              row.RequestCount,
+			AverageLatencyMS:          row.AverageLatencyMS,
+			AverageTimeToFirstTokenMS: row.AverageTimeToFirstTokenMS,
+			AverageOutputTPS:          row.AverageOutputTPS,
+		})
+	}
+	return out
+}
+
+func streamSummariesFromSnapshot(rows []management.StreamSummary) []metadata.StreamSummary {
+	out := make([]metadata.StreamSummary, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, metadata.StreamSummary{
+			CompletionStatus: row.CompletionStatus,
+			StreamCount:      row.StreamCount,
+			ChunkCount:       row.ChunkCount,
+		})
+	}
+	return out
+}
+
+func healthSummariesFromSnapshot(rows []management.HealthSummary) []metadata.HealthSummary {
+	out := make([]metadata.HealthSummary, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, metadata.HealthSummary{
+			ProviderInstanceID: row.ProviderInstanceID,
+			ModelID:            row.ModelID,
+			CredentialID:       row.CredentialID,
+			CredentialLabel:    row.CredentialLabel,
+			EventClass:         row.EventClass,
+			HTTPStatus:         row.HTTPStatus,
+			ErrorClass:         row.ErrorClass,
+			OccurredAt:         row.OccurredAt,
+			RetryAfter:         row.RetryAfter,
+		})
+	}
+	return out
+}
+
+func fallbackSummariesFromSnapshot(rows []management.FallbackSummary) []metadata.FallbackSummary {
+	out := make([]metadata.FallbackSummary, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, metadata.FallbackSummary{
+			ID:                  row.ID,
+			RequestMetadataID:   row.RequestMetadataID,
+			OccurredAt:          row.OccurredAt,
+			ProviderInstanceID:  row.ProviderInstanceID,
+			ModelID:             row.ModelID,
+			FromCredentialID:    row.FromCredentialID,
+			FromCredentialLabel: row.FromCredentialLabel,
+			ToCredentialID:      row.ToCredentialID,
+			ToCredentialLabel:   row.ToCredentialLabel,
+			Reason:              row.Reason,
+		})
+	}
+	return out
+}
+
 func (m Model) writeOAuth(b *strings.Builder) {
-	if m.oauth == nil {
+	if m.oauth == nil && m.snapshot == nil {
 		return
 	}
 	b.WriteString("\nOAuth accounts\n")
@@ -1047,7 +1324,7 @@ func (m Model) writeOAuth(b *strings.Builder) {
 }
 
 func (m Model) writeFallbackPolicies(b *strings.Builder) {
-	if m.upstreams == nil {
+	if m.upstreams == nil && m.snapshot == nil {
 		return
 	}
 	b.WriteString("\nFallback policies\n")
@@ -1065,7 +1342,7 @@ func (m Model) writeFallbackPolicies(b *strings.Builder) {
 }
 
 func (m Model) writeObservability(b *strings.Builder) {
-	if m.observability == nil {
+	if m.observability == nil && m.snapshot == nil {
 		return
 	}
 	b.WriteString("\nRecent requests\n")
@@ -1136,7 +1413,7 @@ func (m Model) writeObservability(b *strings.Builder) {
 }
 
 func (m Model) writePruning(b *strings.Builder) {
-	if m.pruner == nil {
+	if m.pruner == nil && !m.pruningAvailable {
 		return
 	}
 	b.WriteString("\nTelemetry pruning\n")
@@ -1562,7 +1839,7 @@ func (m *Model) disableFirstFallbackPolicy() error {
 
 func (m Model) visibleFallbackPolicies(rows []credentials.FallbackPolicyMetadata) []credentials.FallbackPolicyMetadata {
 	allowed := map[string]bool{}
-	for _, instance := range m.registry.List() {
+	for _, instance := range m.visibleProviderRows() {
 		if instance.APIKey && !instance.Placeholder {
 			allowed[instance.ID] = true
 		}
@@ -1578,7 +1855,7 @@ func (m Model) visibleFallbackPolicies(rows []credentials.FallbackPolicyMetadata
 
 func (m Model) visibleUpstreamCredentials(rows []credentials.UpstreamCredentialMetadata) []credentials.UpstreamCredentialMetadata {
 	allowed := map[string]bool{}
-	for _, instance := range m.registry.List() {
+	for _, instance := range m.visibleProviderRows() {
 		if instance.APIKey && !instance.Placeholder {
 			allowed[instance.ID] = true
 		}
@@ -1590,6 +1867,13 @@ func (m Model) visibleUpstreamCredentials(rows []credentials.UpstreamCredentialM
 		}
 	}
 	return out
+}
+
+func (m Model) visibleProviderRows() []provider.Instance {
+	if len(m.providers) > 0 {
+		return m.providers
+	}
+	return m.registry.List()
 }
 
 func fallbackPolicyEnabled(rows []credentials.FallbackPolicyMetadata, providerInstanceID, groupLabel string) bool {

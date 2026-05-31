@@ -21,7 +21,7 @@ func Serve(opts Options) error {
 	}
 	defer rt.cleanup()
 	defer rt.Store.Close()
-	mgmt, err := startManagementServer(context.Background(), rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database, rt.Store)
+	mgmt, err := startManagementServer(context.Background(), rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database, rt.Registry, rt.Store)
 	if err != nil {
 		return err
 	}
@@ -74,8 +74,8 @@ func Manage(opts Options) error {
 		Logger:         rt.Logger,
 	}
 	tokenClient := management.NewUnixLocalTokenClient(management.SocketPath(rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database))
-	if _, err := tokenClient.ListLocalTokens(context.Background()); err != nil {
+	if _, err := tokenClient.LoadManagementSnapshot(context.Background()); err != nil {
 		return err
 	}
-	return tui.Run(rt.Config, rt.Registry, tokenClient, upstreams, upstreams, rt.Store, rt.Store, rt.Store, rt.Logger)
+	return tui.Run(rt.Config, rt.Registry, tokenClient, tokenClient, upstreams, upstreams, nil, nil, rt.Store, rt.Logger)
 }

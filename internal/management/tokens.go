@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"ilonasin/internal/credentials"
+	"ilonasin/internal/metadata"
+	"ilonasin/internal/provider"
 )
 
 type LocalToken struct {
@@ -45,7 +47,35 @@ type LocalTokenClient interface {
 }
 
 type Service struct {
-	Tokens credentials.LocalTokenManager
+	Tokens        credentials.LocalTokenManager
+	Registry      provider.Registry
+	Upstreams     UpstreamMetadataReader
+	OAuth         OAuthMetadataReader
+	ModelCache    ModelCacheReader
+	Observability ObservabilityReader
+}
+
+type UpstreamMetadataReader interface {
+	List(ctx context.Context) ([]credentials.UpstreamCredentialMetadata, error)
+	ListFallbackPolicies(ctx context.Context) ([]credentials.FallbackPolicyMetadata, error)
+}
+
+type OAuthMetadataReader interface {
+	ListOAuthCredentials(ctx context.Context) ([]credentials.OAuthCredentialMetadata, error)
+	ListProviderAccounts(ctx context.Context) ([]credentials.ProviderAccountMetadata, error)
+}
+
+type ModelCacheReader interface {
+	ListModelCache(ctx context.Context) ([]provider.ModelMetadata, error)
+}
+
+type ObservabilityReader interface {
+	RecentRequests(ctx context.Context, limit int) ([]metadata.RequestSummary, error)
+	UsageByProvider(ctx context.Context) ([]metadata.UsageSummary, error)
+	LatencyByProvider(ctx context.Context) ([]metadata.LatencySummary, error)
+	StreamSummary(ctx context.Context) ([]metadata.StreamSummary, error)
+	LatestHealth(ctx context.Context) ([]metadata.HealthSummary, error)
+	RecentFallbacks(ctx context.Context, limit int) ([]metadata.FallbackSummary, error)
 }
 
 func (s Service) ListLocalTokens(ctx context.Context) (ListLocalTokensResponse, error) {

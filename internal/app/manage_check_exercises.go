@@ -162,7 +162,7 @@ func exerciseLocalTokenCheck(ctx context.Context, homeDir, configPath string) er
 		return err
 	}
 	defer store.Close()
-	mgmt, err := startManagementServer(ctx, homeDir, configPath, filepath.Join(checkDBDir, "ilonasin.sqlite"), store)
+	mgmt, err := startManagementServer(ctx, homeDir, configPath, filepath.Join(checkDBDir, "ilonasin.sqlite"), provider.Registry{}, store)
 	if err != nil {
 		return err
 	}
@@ -172,6 +172,10 @@ func exerciseLocalTokenCheck(ctx context.Context, homeDir, configPath string) er
 		return err
 	}
 	if err := tui.ExerciseTokenLifecycle(ctx, client); err != nil {
+		mgmt.Close(ctx)
+		return err
+	}
+	if err := exerciseManagementSnapshot(ctx, client); err != nil {
 		mgmt.Close(ctx)
 		return err
 	}

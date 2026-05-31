@@ -26,13 +26,31 @@ func exerciseManagementRouteIsolation(ctx context.Context, client management.HTT
 	return nil
 }
 
+func exerciseManagementSnapshot(ctx context.Context, client management.HTTPTokenClient) error {
+	snapshot, err := client.LoadManagementSnapshot(ctx)
+	if err != nil {
+		return err
+	}
+	if len(snapshot.Providers) == 0 && len(snapshot.LocalTokens) == 0 && len(snapshot.UpstreamCredentials) == 0 {
+		return fmt.Errorf("management snapshot returned no rows")
+	}
+	return nil
+}
+
 func assertManagementSocketDirMode(socketPath string) error {
-	info, err := os.Stat(filepath.Dir(socketPath))
+	info, err := os.Lstat(filepath.Dir(socketPath))
 	if err != nil {
 		return err
 	}
 	if info.Mode().Perm() != 0o700 {
 		return fmt.Errorf("management socket dir mode=%#o", info.Mode().Perm())
+	}
+	socketInfo, err := os.Lstat(socketPath)
+	if err != nil {
+		return err
+	}
+	if socketInfo.Mode().Perm() != 0o600 {
+		return fmt.Errorf("management socket mode=%#o", socketInfo.Mode().Perm())
 	}
 	return nil
 }

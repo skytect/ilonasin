@@ -26,6 +26,14 @@ func (c HTTPTokenClient) ListLocalTokens(ctx context.Context) (ListLocalTokensRe
 	return out, nil
 }
 
+func (c HTTPTokenClient) LoadManagementSnapshot(ctx context.Context) (ManagementSnapshotResponse, error) {
+	var out ManagementSnapshotResponse
+	if err := c.do(ctx, http.MethodGet, PathSnapshot, nil, &out); err != nil {
+		return ManagementSnapshotResponse{}, err
+	}
+	return out, nil
+}
+
 func (c HTTPTokenClient) CreateLocalToken(ctx context.Context, req CreateLocalTokenRequest) (CreateLocalTokenResponse, error) {
 	var out CreateLocalTokenResponse
 	if err := c.do(ctx, http.MethodPost, PathLocalTokens, req, &out); err != nil {

@@ -23,12 +23,21 @@ func ManageCheck(opts Options) error {
 	if err != nil {
 		return err
 	}
-	mgmt, err := startManagementServer(context.Background(), rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database, rt.Store)
+	mgmt, err := startManagementServer(context.Background(), rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database, rt.Registry, rt.Store)
 	if err != nil {
 		return err
 	}
 	defer mgmt.Close(context.Background())
 	if err := exerciseLocalTokenCheck(context.Background(), rt.HomeDir, rt.ConfigPath); err != nil {
+		return err
+	}
+	if err := exerciseManagementSnapshotTUIReload(context.Background()); err != nil {
+		return err
+	}
+	if err := exerciseManagementSnapshotSanitization(context.Background()); err != nil {
+		return err
+	}
+	if err := exerciseManagementSnapshotHTTPRoute(context.Background(), rt.HomeDir, rt.ConfigPath); err != nil {
 		return err
 	}
 	if err := exerciseUpstreamCredentialCheck(context.Background(), rt.Registry, rt.Config, opts); err != nil {
@@ -68,7 +77,7 @@ func ManageCheck(opts Options) error {
 		Logger:         rt.Logger,
 	}
 	tokenClient := management.NewUnixLocalTokenClient(management.SocketPath(rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database))
-	if err := tui.Check(rt.Config, rt.Registry, tokenClient, upstreams, upstreams, rt.Store, rt.Store, rt.Store, &buf, rt.Logger); err != nil {
+	if err := tui.Check(rt.Config, rt.Registry, tokenClient, tokenClient, upstreams, upstreams, nil, nil, rt.Store, &buf, rt.Logger); err != nil {
 		return err
 	}
 	afterSnapshot, err := selectedHomeSnapshot(context.Background(), rt.Store, rt.ConfigPath)

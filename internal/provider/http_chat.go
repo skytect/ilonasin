@@ -416,6 +416,10 @@ func validateOpenRouterProvider(raw any) error {
 			if _, ok := value.(bool); !ok {
 				return errors.New("provider_options.openrouter.provider.require_parameters must be a boolean")
 			}
+		case "allow_fallbacks":
+			if _, ok := value.(bool); !ok {
+				return errors.New("provider_options.openrouter.provider.allow_fallbacks must be a boolean")
+			}
 		case "data_collection":
 			collection, ok := value.(string)
 			if !ok {

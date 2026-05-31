@@ -1,10 +1,12 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -21,7 +23,7 @@ import (
 	"ilonasin/internal/tui"
 )
 
-func exerciseUpstreamCredentialCheck(ctx context.Context, registry provider.Registry, cfg config.Config, opts Options) error {
+func exerciseUpstreamCredentialCheck(ctx context.Context, registry provider.Registry, cfg config.Config) error {
 	if _, ok := firstAPIKeyProvider(registry); !ok {
 		return nil
 	}
@@ -35,9 +37,143 @@ func exerciseUpstreamCredentialCheck(ctx context.Context, registry provider.Regi
 		return err
 	}
 	defer store.Close()
-	service := &credentials.UpstreamService{Registry: registry, Repo: store}
-	if err := tui.ExerciseUpstreamCredentialLifecycle(ctx, cfg, registry, service); err != nil {
+	configPath := filepath.Join(checkDBDir, "config.toml")
+	if err := os.WriteFile(configPath, []byte("server_bind = \"127.0.0.1:0\"\n"), 0o600); err != nil {
 		return err
+	}
+	mgmt, err := startManagementServer(ctx, checkDBDir, configPath, filepath.Join(checkDBDir, "ilonasin.sqlite"), registry, store)
+	if err != nil {
+		return err
+	}
+	defer mgmt.Close(ctx)
+	client := management.NewUnixLocalTokenClient(mgmt.socketPath)
+	service := &credentials.UpstreamService{Registry: registry, Repo: store}
+	if err := tui.ExerciseUpstreamCredentialLifecycle(ctx, cfg, registry, client, service); err != nil {
+		return err
+	}
+	if err := exerciseUpstreamCredentialManagementResponseSafety(ctx, client, store, registry); err != nil {
+		return err
+	}
+	return nil
+}
+
+func exerciseUpstreamCredentialManagementResponseSafety(ctx context.Context, client management.HTTPTokenClient, store *sqlite.Store, registry provider.Registry) error {
+	instance, ok := firstAPIKeyProvider(registry)
+	if !ok {
+		return nil
+	}
+	body := []byte(fmt.Sprintf(`{"provider_instance_id":%q,"label":"raw-provider-payload prompt marker","api_key":"sk-management-response-secret"}`, instance.ID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, client.BaseURL+management.PathUpstreamCredentials, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("management upstream response safety status=%d", resp.StatusCode)
+	}
+	for _, forbidden := range []string{"raw-provider-payload", "prompt marker", "sk-management-response-secret"} {
+		if bytes.Contains(respBody, []byte(forbidden)) {
+			return fmt.Errorf("management upstream response leaked forbidden marker")
+		}
+		var count int
+		if err := store.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM provider_credentials WHERE label LIKE ?`, "%"+forbidden+"%").Scan(&count); err != nil {
+			return err
+		}
+		if count != 0 {
+			return fmt.Errorf("management upstream storage leaked forbidden marker")
+		}
+	}
+	longKey := strings.Repeat("b", 140)
+	longBody := []byte(fmt.Sprintf(`{"provider_instance_id":%q,"label":%q,"api_key":%q}`, instance.ID, longKey, longKey))
+	req, err = http.NewRequestWithContext(ctx, http.MethodPost, client.BaseURL+management.PathUpstreamCredentials, bytes.NewReader(longBody))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = client.Client.Do(req)
+	if err != nil {
+		return err
+	}
+	respBody, err = io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	_ = resp.Body.Close()
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("management long label response safety status=%d", resp.StatusCode)
+	}
+	if bytes.Contains(respBody, []byte(longKey)) {
+		return fmt.Errorf("management long label response leaked full key")
+	}
+	var longLabelPrefixCount int
+	if err := store.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM provider_credentials WHERE label LIKE ?`, longKey[:32]+"%").Scan(&longLabelPrefixCount); err != nil {
+		return err
+	}
+	if longLabelPrefixCount != 0 {
+		return fmt.Errorf("management long label storage leaked key prefix")
+	}
+	if _, err := store.DB.ExecContext(ctx, `UPDATE provider_credentials SET label = 'long label safety checked' WHERE label = 'api key'`); err != nil {
+		return err
+	}
+	controlKey := "abcdefghijklmnop"
+	controlLabel := "abcd\nefghijklmnop"
+	controlBody := []byte(fmt.Sprintf(`{"provider_instance_id":%q,"label":%q,"api_key":%q}`, instance.ID, controlLabel, controlKey))
+	req, err = http.NewRequestWithContext(ctx, http.MethodPost, client.BaseURL+management.PathUpstreamCredentials, bytes.NewReader(controlBody))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = client.Client.Do(req)
+	if err != nil {
+		return err
+	}
+	respBody, err = io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	_ = resp.Body.Close()
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("management control label response safety status=%d", resp.StatusCode)
+	}
+	if bytes.Contains(respBody, []byte(controlKey)) {
+		return fmt.Errorf("management control label response leaked full key")
+	}
+	var controlLabelCount int
+	if err := store.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM provider_credentials WHERE label = ?`, controlKey).Scan(&controlLabelCount); err != nil {
+		return err
+	}
+	if controlLabelCount != 0 {
+		return fmt.Errorf("management control label storage leaked full key")
+	}
+	unsafeFallbackBody := []byte(fmt.Sprintf(`{"provider_instance_id":%q,"credential_kind":"api_key","group_label":"raw-provider-payload prompt marker"}`, instance.ID))
+	req, err = http.NewRequestWithContext(ctx, http.MethodPost, client.BaseURL+management.PathFallbackPolicies+"/enable", bytes.NewReader(unsafeFallbackBody))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = client.Client.Do(req)
+	if err != nil {
+		return err
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		return fmt.Errorf("management fallback unsafe group status=%d", resp.StatusCode)
+	}
+	var unsafeGroupCount int
+	if err := store.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM credential_fallback_policies WHERE group_label LIKE '%raw-provider-payload%' OR group_label LIKE '%prompt marker%'`).Scan(&unsafeGroupCount); err != nil {
+		return err
+	}
+	if unsafeGroupCount != 0 {
+		return fmt.Errorf("management fallback storage leaked unsafe group")
 	}
 	return nil
 }
@@ -108,7 +244,13 @@ func exerciseFallbackPolicyCheck(ctx context.Context, registry provider.Registry
 	if err != nil {
 		return err
 	}
-	if err := tui.ExerciseFallbackPolicyLifecycle(ctx, cfg, registry, service, service); err != nil {
+	mgmt, err := startManagementServer(ctx, checkDBDir, configPath, filepath.Join(checkDBDir, "ilonasin.sqlite"), registry, store)
+	if err != nil {
+		return err
+	}
+	defer mgmt.Close(ctx)
+	client := management.NewUnixLocalTokenClient(mgmt.socketPath)
+	if err := tui.ExerciseFallbackPolicyLifecycle(ctx, cfg, registry, client, service, service); err != nil {
 		return err
 	}
 	afterProtected, err := fallbackPolicyProtectedSnapshot(ctx, store, configPath)

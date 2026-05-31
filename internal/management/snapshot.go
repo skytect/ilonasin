@@ -564,18 +564,7 @@ func oauthProviderIDs(registry provider.Registry) map[string]bool {
 func upstreamCredentialsFromCredentials(rows []credentials.UpstreamCredentialMetadata) []UpstreamCredential {
 	out := make([]UpstreamCredential, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, UpstreamCredential{
-			ID:                 row.ID,
-			ProviderInstanceID: row.ProviderInstanceID,
-			Kind:               row.Kind,
-			Label:              row.Label,
-			SecretPrefix:       row.SecretPrefix,
-			SecretLast4:        row.SecretLast4,
-			FallbackGroup:      row.FallbackGroup,
-			CreatedAt:          row.CreatedAt,
-			DisabledAt:         row.DisabledAt,
-			Disabled:           row.Disabled,
-		})
+		out = append(out, upstreamCredentialFromCredentials(row))
 	}
 	return out
 }
@@ -583,14 +572,7 @@ func upstreamCredentialsFromCredentials(rows []credentials.UpstreamCredentialMet
 func fallbackPoliciesFromCredentials(rows []credentials.FallbackPolicyMetadata) []FallbackPolicy {
 	out := make([]FallbackPolicy, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, FallbackPolicy{
-			ProviderInstanceID: row.ProviderInstanceID,
-			CredentialKind:     row.CredentialKind,
-			GroupLabel:         row.GroupLabel,
-			Enabled:            row.Enabled,
-			CredentialCount:    row.CredentialCount,
-			Explicit:           row.Explicit,
-		})
+		out = append(out, fallbackPolicyFromCredentials(row))
 	}
 	return out
 }

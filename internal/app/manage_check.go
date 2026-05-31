@@ -4,6 +4,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
+	goruntime "runtime"
+	"strings"
 
 	"ilonasin/internal/credentials"
 	"ilonasin/internal/management"
@@ -40,7 +47,10 @@ func ManageCheck(opts Options) error {
 	if err := exerciseManagementSnapshotHTTPRoute(context.Background(), rt.HomeDir, rt.ConfigPath); err != nil {
 		return err
 	}
-	if err := exerciseUpstreamCredentialCheck(context.Background(), rt.Registry, rt.Config, opts); err != nil {
+	if err := assertProductionUpstreamMutationWiring(); err != nil {
+		return err
+	}
+	if err := exerciseUpstreamCredentialCheck(context.Background(), rt.Registry, rt.Config); err != nil {
 		return err
 	}
 	if err := exerciseFallbackPolicyCheck(context.Background(), rt.Registry, rt.Config); err != nil {
@@ -77,7 +87,7 @@ func ManageCheck(opts Options) error {
 		Logger:         rt.Logger,
 	}
 	tokenClient := management.NewUnixLocalTokenClient(management.SocketPath(rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database))
-	if err := tui.Check(rt.Config, rt.Registry, tokenClient, tokenClient, upstreams, upstreams, nil, nil, rt.Store, &buf, rt.Logger); err != nil {
+	if err := tui.Check(rt.Config, rt.Registry, tokenClient, tokenClient, tokenClient, upstreams, nil, nil, rt.Store, &buf, rt.Logger); err != nil {
 		return err
 	}
 	afterSnapshot, err := selectedHomeSnapshot(context.Background(), rt.Store, rt.ConfigPath)
@@ -91,4 +101,84 @@ func ManageCheck(opts Options) error {
 		_, _ = opts.Stdout.Write(buf.Bytes())
 	}
 	return nil
+}
+
+func assertProductionUpstreamMutationWiring() error {
+	root, err := sourceRoot()
+	if err != nil {
+		return err
+	}
+	if err := assertTUIUpstreamArg(filepath.Join(root, "internal/app/commands.go"), "Run"); err != nil {
+		return err
+	}
+	if err := assertTUIUpstreamArg(filepath.Join(root, "internal/app/manage_check.go"), "Check"); err != nil {
+		return err
+	}
+	checks := []struct {
+		path      string
+		forbidden string
+	}{
+		{path: "internal/tui/tui.go", forbidden: "func Run(cfg config.Config, registry provider.Registry, snapshot management.SnapshotClient, tokens management.LocalTokenClient, upstreams " + "credentials.UpstreamCredentialManager"},
+		{path: "internal/tui/tui.go", forbidden: "func Check(cfg config.Config, registry provider.Registry, snapshot management.SnapshotClient, tokens management.LocalTokenClient, upstreams " + "credentials.UpstreamCredentialManager"},
+		{path: "internal/tui/tui.go", forbidden: "upstreams        " + "credentials.UpstreamCredentialManager"},
+	}
+	for _, check := range checks {
+		body, err := os.ReadFile(filepath.Join(root, check.path))
+		if err != nil {
+			return err
+		}
+		if strings.Contains(string(body), check.forbidden) {
+			return fmt.Errorf("production upstream mutation wiring retained legacy dependency in %s", check.path)
+		}
+	}
+	return nil
+}
+
+func sourceRoot() (string, error) {
+	_, file, _, ok := goruntime.Caller(0)
+	if !ok {
+		return "", fmt.Errorf("source root unavailable")
+	}
+	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..")), nil
+}
+
+func assertTUIUpstreamArg(path, name string) error {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		return err
+	}
+	var found bool
+	var invalid bool
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || selector.Sel.Name != name {
+			return true
+		}
+		pkg, ok := selector.X.(*ast.Ident)
+		if !ok || pkg.Name != "tui" {
+			return true
+		}
+		found = true
+		if len(call.Args) < 5 || !identName(call.Args[4], "tokenClient") {
+			invalid = true
+		}
+		return true
+	})
+	if !found {
+		return fmt.Errorf("production tui.%s call missing in %s", name, path)
+	}
+	if invalid {
+		return fmt.Errorf("production tui.%s upstream mutation argument is not the management client", name)
+	}
+	return nil
+}
+
+func identName(expr ast.Expr, name string) bool {
+	ident, ok := expr.(*ast.Ident)
+	return ok && ident.Name == name
 }

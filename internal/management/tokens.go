@@ -47,12 +47,13 @@ type LocalTokenClient interface {
 }
 
 type Service struct {
-	Tokens        credentials.LocalTokenManager
-	Registry      provider.Registry
-	Upstreams     UpstreamMetadataReader
-	OAuth         OAuthMetadataReader
-	ModelCache    ModelCacheReader
-	Observability ObservabilityReader
+	Tokens            credentials.LocalTokenManager
+	Registry          provider.Registry
+	Upstreams         UpstreamMetadataReader
+	UpstreamMutations UpstreamMutationManager
+	OAuth             OAuthMetadataReader
+	ModelCache        ModelCacheReader
+	Observability     ObservabilityReader
 }
 
 type UpstreamMetadataReader interface {

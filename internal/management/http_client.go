@@ -50,6 +50,38 @@ func (c HTTPTokenClient) DisableLocalToken(ctx context.Context, req DisableLocal
 	return out, nil
 }
 
+func (c HTTPTokenClient) AddUpstreamAPIKey(ctx context.Context, req AddUpstreamAPIKeyRequest) (AddUpstreamAPIKeyResponse, error) {
+	var out AddUpstreamAPIKeyResponse
+	if err := c.do(ctx, http.MethodPost, PathUpstreamCredentials, req, &out); err != nil {
+		return AddUpstreamAPIKeyResponse{}, err
+	}
+	return out, nil
+}
+
+func (c HTTPTokenClient) DisableUpstreamCredential(ctx context.Context, req DisableUpstreamCredentialRequest) (DisableUpstreamCredentialResponse, error) {
+	var out DisableUpstreamCredentialResponse
+	if err := c.do(ctx, http.MethodPost, PathUpstreamCredentials+"/disable", req, &out); err != nil {
+		return DisableUpstreamCredentialResponse{}, err
+	}
+	return out, nil
+}
+
+func (c HTTPTokenClient) EnableFallbackPolicy(ctx context.Context, req FallbackPolicyRequest) (FallbackPolicyResponse, error) {
+	var out FallbackPolicyResponse
+	if err := c.do(ctx, http.MethodPost, PathFallbackPolicies+"/enable", req, &out); err != nil {
+		return FallbackPolicyResponse{}, err
+	}
+	return out, nil
+}
+
+func (c HTTPTokenClient) DisableFallbackPolicy(ctx context.Context, req FallbackPolicyRequest) (FallbackPolicyResponse, error) {
+	var out FallbackPolicyResponse
+	if err := c.do(ctx, http.MethodPost, PathFallbackPolicies+"/disable", req, &out); err != nil {
+		return FallbackPolicyResponse{}, err
+	}
+	return out, nil
+}
+
 func (c HTTPTokenClient) do(ctx context.Context, method, path string, body any, out any) error {
 	client := c.Client
 	if client == nil {

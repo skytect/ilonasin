@@ -2,19 +2,25 @@ package management
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
+
+	"ilonasin/internal/credentials"
 )
 
 const (
-	PathHealth      = "/_ilonasin/manage/health"
-	PathLocalTokens = "/_ilonasin/manage/local-tokens"
+	PathHealth              = "/_ilonasin/manage/health"
+	PathLocalTokens         = "/_ilonasin/manage/local-tokens"
+	PathUpstreamCredentials = "/_ilonasin/manage/upstream-credentials"
+	PathFallbackPolicies    = "/_ilonasin/manage/fallback-policies"
 )
 
 type HandlerService interface {
 	LocalTokenClient
 	SnapshotClient
+	UpstreamCredentialClient
 }
 
 func Handler(service HandlerService) http.Handler {
@@ -68,6 +74,58 @@ func Handler(service HandlerService) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, resp)
 	})
+	mux.HandleFunc("POST "+PathUpstreamCredentials, func(w http.ResponseWriter, r *http.Request) {
+		var req AddUpstreamAPIKeyRequest
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest)
+			return
+		}
+		resp, err := service.AddUpstreamAPIKey(r.Context(), req)
+		if err != nil {
+			writeManagementError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+	})
+	mux.HandleFunc("POST "+PathUpstreamCredentials+"/disable", func(w http.ResponseWriter, r *http.Request) {
+		var req DisableUpstreamCredentialRequest
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest)
+			return
+		}
+		resp, err := service.DisableUpstreamCredential(r.Context(), req)
+		if err != nil {
+			writeManagementError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+	})
+	mux.HandleFunc("POST "+PathFallbackPolicies+"/enable", func(w http.ResponseWriter, r *http.Request) {
+		var req FallbackPolicyRequest
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest)
+			return
+		}
+		resp, err := service.EnableFallbackPolicy(r.Context(), req)
+		if err != nil {
+			writeManagementError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+	})
+	mux.HandleFunc("POST "+PathFallbackPolicies+"/disable", func(w http.ResponseWriter, r *http.Request) {
+		var req FallbackPolicyRequest
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest)
+			return
+		}
+		resp, err := service.DisableFallbackPolicy(r.Context(), req)
+		if err != nil {
+			writeManagementError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+	})
 	return mux
 }
 
@@ -85,6 +143,21 @@ func decodeJSON(r *http.Request, out any) error {
 
 func writeError(w http.ResponseWriter, status int) {
 	writeJSON(w, status, map[string]string{"error": http.StatusText(status)})
+}
+
+func writeManagementError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, credentials.ErrCredentialNotFound):
+		writeError(w, http.StatusNotFound)
+	case errors.Is(err, credentials.ErrDuplicateCredential):
+		writeError(w, http.StatusConflict)
+	case errors.Is(err, credentials.ErrUnsupportedCredential),
+		errors.Is(err, credentials.ErrInvalidSecretDomain),
+		errors.Is(err, credentials.ErrInvalidOAuthInput):
+		writeError(w, http.StatusBadRequest)
+	default:
+		writeError(w, http.StatusBadGateway)
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

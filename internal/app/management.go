@@ -27,12 +27,13 @@ func startManagementServer(ctx context.Context, homeDir, configPath, databasePat
 	upstreams := &credentials.UpstreamService{Registry: registry, Repo: store}
 	srv := &http.Server{
 		Handler: management.Handler(management.Service{
-			Tokens:        credentials.Service{Repo: store},
-			Registry:      registry,
-			Upstreams:     upstreams,
-			OAuth:         upstreams,
-			ModelCache:    store,
-			Observability: store,
+			Tokens:            credentials.Service{Repo: store},
+			Registry:          registry,
+			Upstreams:         upstreams,
+			UpstreamMutations: upstreams,
+			OAuth:             upstreams,
+			ModelCache:        store,
+			Observability:     store,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}

@@ -39,6 +39,7 @@ type ChatCompletionRequest struct {
 	User                *string                `json:"user,omitempty"`
 	ServiceTier         *string                `json:"service_tier,omitempty"`
 	SessionID           *string                `json:"session_id,omitempty"`
+	Metadata            map[string]string      `json:"metadata,omitempty"`
 	Logprobs            *bool                  `json:"logprobs,omitempty"`
 	TopLogprobs         *int                   `json:"top_logprobs,omitempty"`
 	LogitBias           map[string]json.Number `json:"logit_bias,omitempty"`
@@ -108,6 +109,9 @@ func DecodeChatCompletion(r io.Reader) (ChatCompletionRequest, error) {
 		return ChatCompletionRequest{}, err
 	}
 	if err := validateRawSessionID(raw); err != nil {
+		return ChatCompletionRequest{}, err
+	}
+	if err := validateRawMetadata(raw); err != nil {
 		return ChatCompletionRequest{}, err
 	}
 	toolNames, hasTools, err := validateRawTools(raw)
@@ -353,6 +357,9 @@ func MarshalUpstreamChatRequest(req ChatCompletionRequest, upstreamModel string)
 	if req.SessionID != nil {
 		out["session_id"] = *req.SessionID
 	}
+	if req.HasField("metadata") {
+		out["metadata"] = req.Metadata
+	}
 	if req.Stream {
 		out["stream"] = true
 		if req.StreamOptions != nil {
@@ -597,6 +604,7 @@ func validateTopLevelKeys(raw map[string]json.RawMessage) error {
 		"user":                  true,
 		"service_tier":          true,
 		"session_id":            true,
+		"metadata":              true,
 		"logprobs":              true,
 		"top_logprobs":          true,
 		"logit_bias":            true,
@@ -716,6 +724,46 @@ func validateRawSessionID(raw map[string]json.RawMessage) error {
 	}
 	if out == "" || utf8.RuneCountInString(out) > 256 {
 		return errors.New("session_id must be a non-empty string up to 256 characters")
+	}
+	return nil
+}
+
+func validateRawMetadata(raw map[string]json.RawMessage) error {
+	value, ok := raw["metadata"]
+	if !ok {
+		return nil
+	}
+	trimmed := bytes.TrimSpace(value)
+	if len(trimmed) == 0 || isJSONNull(trimmed) || trimmed[0] != '{' {
+		return errors.New("metadata must be an object with up to 16 string pairs")
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &obj); err != nil {
+		return errors.New("metadata must be an object with up to 16 string pairs")
+	}
+	if len(obj) > 16 {
+		return errors.New("metadata must be an object with up to 16 string pairs")
+	}
+	keys := make([]string, 0, len(obj))
+	for key := range obj {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if key == "" || utf8.RuneCountInString(key) > 64 {
+			return errors.New("metadata keys must be non-empty strings up to 64 characters")
+		}
+		rawValue := bytes.TrimSpace(obj[key])
+		if len(rawValue) == 0 || isJSONNull(rawValue) || rawValue[0] != '"' {
+			return errors.New("metadata values must be strings up to 512 characters")
+		}
+		var out string
+		if err := json.Unmarshal(rawValue, &out); err != nil {
+			return errors.New("metadata values must be strings up to 512 characters")
+		}
+		if utf8.RuneCountInString(out) > 512 {
+			return errors.New("metadata values must be strings up to 512 characters")
+		}
 	}
 	return nil
 }

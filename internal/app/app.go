@@ -2718,6 +2718,54 @@ func newServeCheckUpstream() *serveCheckUpstream {
 				return
 			}
 		}
+		if model == "metadata-forwarding" {
+			if err := validateServeCheckMetadata(r.URL.Path, body, map[string]string{"trace": metadataPrivacyMarker}); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		if model == "metadata-empty" {
+			if err := validateServeCheckMetadata(r.URL.Path, body, map[string]string{}); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		if model == "metadata-empty-value" {
+			if err := validateServeCheckMetadata(r.URL.Path, body, map[string]string{"empty": ""}); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		if model == "metadata-pairs-max" {
+			if err := validateServeCheckMetadata(r.URL.Path, body, metadataPairs(16)); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		if model == "metadata-key-max" {
+			if err := validateServeCheckMetadata(r.URL.Path, body, map[string]string{strings.Repeat("k", 64): "value"}); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		if model == "metadata-key-multibyte-max" {
+			if err := validateServeCheckMetadata(r.URL.Path, body, map[string]string{strings.Repeat("\u00e9", 64): "value"}); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		if model == "metadata-value-max" {
+			if err := validateServeCheckMetadata(r.URL.Path, body, map[string]string{"value": strings.Repeat("v", 512)}); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		if model == "metadata-value-multibyte-max" {
+			if err := validateServeCheckMetadata(r.URL.Path, body, map[string]string{"value": strings.Repeat("\u00e9", 512)}); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
 		if model == "session-id-header-ignored" {
 			if r.Header.Get("X-Session-Id") != "" {
 				http.Error(w, "x-session-id header was forwarded", http.StatusBadRequest)
@@ -3225,6 +3273,23 @@ func validateServeCheckSessionID(path string, body map[string]any, want string) 
 	value, ok := body["session_id"].(string)
 	if !ok || value != want {
 		return fmt.Errorf("invalid session_id forwarding")
+	}
+	return nil
+}
+
+func validateServeCheckMetadata(path string, body map[string]any, want map[string]string) error {
+	if path != "/api/v1/chat/completions" {
+		return fmt.Errorf("metadata reached unsupported provider")
+	}
+	metadata, ok := body["metadata"].(map[string]any)
+	if !ok || len(metadata) != len(want) {
+		return fmt.Errorf("invalid metadata forwarding")
+	}
+	for key, wantValue := range want {
+		value, ok := metadata[key].(string)
+		if !ok || value != wantValue {
+			return fmt.Errorf("invalid metadata forwarding")
+		}
 	}
 	return nil
 }
@@ -3784,6 +3849,12 @@ func (u *serveCheckUpstream) handleServeCheckStream(w http.ResponseWriter, r *ht
 			return
 		}
 	}
+	if model == "stream-metadata-forwarding" {
+		if err := validateServeCheckMetadata(r.URL.Path, body, map[string]string{"trace": metadataPrivacyMarker}); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 	if model == "stream-session-id-header-ignored" {
 		if r.Header.Get("X-Session-Id") != "" {
 			http.Error(w, "x-session-id header was forwarded", http.StatusBadRequest)
@@ -3996,7 +4067,7 @@ func assertUnsupportedChatNoUpstream(base, token string, body []byte, fakeUpstre
 	if (strings.Contains(name, "sampling_penalty") || strings.Contains(name, "advanced_sampling")) && (bytes.Contains(respBody, []byte("invalid request JSON")) || bytes.Contains(respBody, []byte("cannot unmarshal"))) {
 		return fmt.Errorf("unsupported %s returned raw decode wording", name)
 	}
-	for _, marker := range []string{providerOptionPrivacyMarker, responseFormatPrivacyMarker, responseFormatSchemaMarker, logprobTokenMarker, logitBiasDecimalMarker, logitBiasExponentMarker, logitBiasOverflowMarker, costDetailsMarker, predictionPrivacyMarker, "prediction-private-type", "prediction-private-extra", userPrivacyMarker, serviceTierPrivacyMarker, sessionIDPrivacyMarker, userIDPrivacyMarker, "parallel-tool-calls-private-marker", toolNameMarker, toolDescriptionMarker, toolSchemaNumberMarker, toolCallIDMarker, toolArgumentMarker, toolResultMarker, "1.75", "-1.25", penaltyOverflowMarker, "2.01", "-2.01", "2.0000000000000001", "-2.0000000000000001", "2.000000000000000000000000000000000000000000000000000000000000000000000000000000001", "9223372036854775807", "-9223372036854775808", "9223372036854775808", "-9223372036854775809", "1.0000000000000001", "2.0000000000000001", "100.0000000000000001", "-100.0000000000000001"} {
+	for _, marker := range []string{providerOptionPrivacyMarker, responseFormatPrivacyMarker, responseFormatSchemaMarker, logprobTokenMarker, logitBiasDecimalMarker, logitBiasExponentMarker, logitBiasOverflowMarker, costDetailsMarker, predictionPrivacyMarker, "prediction-private-type", "prediction-private-extra", userPrivacyMarker, serviceTierPrivacyMarker, sessionIDPrivacyMarker, metadataPrivacyMarker, userIDPrivacyMarker, "parallel-tool-calls-private-marker", toolNameMarker, toolDescriptionMarker, toolSchemaNumberMarker, toolCallIDMarker, toolArgumentMarker, toolResultMarker, "1.75", "-1.25", penaltyOverflowMarker, "2.01", "-2.01", "2.0000000000000001", "-2.0000000000000001", "2.000000000000000000000000000000000000000000000000000000000000000000000000000000001", "9223372036854775807", "-9223372036854775808", "9223372036854775808", "-9223372036854775809", "1.0000000000000001", "2.0000000000000001", "100.0000000000000001", "-100.0000000000000001"} {
 		if bytes.Contains(respBody, []byte(marker)) {
 			return fmt.Errorf("unsupported %s leaked private marker", name)
 		}
@@ -4064,6 +4135,7 @@ func exerciseCodexChatCheck(ctx context.Context, base, token string, fakeUpstrea
 		{name: "user", extra: `"user":"` + userPrivacyMarker + `"`},
 		{name: "service_tier", extra: `"service_tier":"flex"`},
 		{name: "session_id", extra: `"session_id":"` + sessionIDPrivacyMarker + `"`},
+		{name: "metadata", extra: metadataExtra(map[string]string{"trace": metadataPrivacyMarker})},
 		{name: "tools", extra: functionToolsExtra("")},
 		{name: "tool_choice", extra: `"tool_choice":"none"`},
 		{name: "stop", extra: `"stop":"x"`},
@@ -4987,6 +5059,7 @@ const predictionPrivacyMarker = "prediction_private_marker"
 const userPrivacyMarker = "user_private_marker"
 const serviceTierPrivacyMarker = "service-tier-private-marker"
 const sessionIDPrivacyMarker = "session-id-private-marker"
+const metadataPrivacyMarker = "metadata-private-marker"
 const userIDPrivacyMarker = "userid_private_marker"
 const toolNameMarker = "tool_private_marker"
 const toolDescriptionMarker = "tool description private marker"
@@ -5253,6 +5326,50 @@ func sessionIDUnsupportedCases(providerType string) []providerOptionInvalidCase 
 	}
 	return []providerOptionInvalidCase{
 		{name: "session_id", extra: `"session_id":"` + sessionIDPrivacyMarker + `"`},
+	}
+}
+
+func metadataPairs(count int) map[string]string {
+	out := make(map[string]string, count)
+	for i := 0; i < count; i++ {
+		out[fmt.Sprintf("key%02d", i)] = fmt.Sprintf("value%02d", i)
+	}
+	return out
+}
+
+func metadataExtra(values map[string]string) string {
+	body, _ := json.Marshal(values)
+	return `"metadata":` + string(body)
+}
+
+func metadataInvalidCases() []providerOptionInvalidCase {
+	pairs := metadataPairs(17)
+	pairs["key00"] = metadataPrivacyMarker
+	return []providerOptionInvalidCase{
+		{name: "null", extra: `"metadata":null`},
+		{name: "bool", extra: `"metadata":true`},
+		{name: "number", extra: `"metadata":7`},
+		{name: "string", extra: `"metadata":"` + metadataPrivacyMarker + `"`},
+		{name: "array", extra: `"metadata":["` + metadataPrivacyMarker + `"]`},
+		{name: "value-null", extra: `"metadata":{"trace":null}`},
+		{name: "value-bool", extra: `"metadata":{"trace":true}`},
+		{name: "value-number", extra: `"metadata":{"trace":7}`},
+		{name: "value-object", extra: `"metadata":{"trace":{"value":"` + metadataPrivacyMarker + `"}}`},
+		{name: "value-array", extra: `"metadata":{"trace":["` + metadataPrivacyMarker + `"]}`},
+		{name: "empty-key", extra: `"metadata":{"":"` + metadataPrivacyMarker + `"}`},
+		{name: "too-many-17", extra: metadataExtra(pairs)},
+		{name: "key-too-long-65", extra: metadataExtra(map[string]string{strings.Repeat("k", 65): metadataPrivacyMarker})},
+		{name: "value-too-long-513", extra: metadataExtra(map[string]string{"trace": strings.Repeat("v", 513)})},
+		{name: "value-too-long-marker", extra: metadataExtra(map[string]string{"trace": metadataPrivacyMarker + strings.Repeat("v", 490)})},
+	}
+}
+
+func metadataUnsupportedCases(providerType string) []providerOptionInvalidCase {
+	if providerType == "openrouter" {
+		return nil
+	}
+	return []providerOptionInvalidCase{
+		{name: "metadata", extra: metadataExtra(map[string]string{"trace": metadataPrivacyMarker})},
 	}
 }
 
@@ -5716,6 +5833,40 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, sessionIDPrivacyMarker); err != nil {
 			return err
 		}
+		metadataBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/metadata-forwarding", metadataExtra(map[string]string{"trace": metadataPrivacyMarker})))
+		status, respBody, err = postJSON(base+"/v1/chat/completions", token, metadataBody)
+		if err != nil || status != http.StatusOK {
+			return fmt.Errorf("metadata forwarding provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if bytes.Contains(respBody, []byte(metadataPrivacyMarker)) {
+			return fmt.Errorf("metadata forwarding response echoed private marker")
+		}
+		if !fakeUpstream.sawExpected(expectedPath, "metadata-forwarding") {
+			return fmt.Errorf("metadata forwarding did not reach upstream provider=%s", instance.ID)
+		}
+		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, metadataPrivacyMarker); err != nil {
+			return err
+		}
+		for _, tc := range []struct {
+			name   string
+			values map[string]string
+		}{
+			{name: "metadata-empty", values: map[string]string{}},
+			{name: "metadata-empty-value", values: map[string]string{"empty": ""}},
+			{name: "metadata-pairs-max", values: metadataPairs(16)},
+			{name: "metadata-key-max", values: map[string]string{strings.Repeat("k", 64): "value"}},
+			{name: "metadata-key-multibyte-max", values: map[string]string{strings.Repeat("\u00e9", 64): "value"}},
+			{name: "metadata-value-max", values: map[string]string{"value": strings.Repeat("v", 512)}},
+			{name: "metadata-value-multibyte-max", values: map[string]string{"value": strings.Repeat("\u00e9", 512)}},
+		} {
+			body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+tc.name, metadataExtra(tc.values)))
+			if status, _, err := postJSON(base+"/v1/chat/completions", token, body); err != nil || status != http.StatusOK {
+				return fmt.Errorf("%s provider=%s status=%d err=%v", tc.name, instance.ID, status, err)
+			}
+			if !fakeUpstream.sawExpected(expectedPath, tc.name) {
+				return fmt.Errorf("%s did not reach upstream provider=%s", tc.name, instance.ID)
+			}
+		}
 		costBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}]}`, instance.ID+"/cost-usage"))
 		if status, _, err := postJSON(base+"/v1/chat/completions", token, costBody); err != nil || status != http.StatusOK {
 			return fmt.Errorf("OpenRouter cost usage provider=%s status=%d err=%v", instance.ID, status, err)
@@ -6044,6 +6195,13 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 			return err
 		}
 	}
+	for _, tc := range metadataInvalidCases() {
+		upstreamModel := "invalid-metadata-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" metadata "+tc.name); err != nil {
+			return err
+		}
+	}
 	for _, tc := range toolMessageInvalidBodies(instance.ID, false) {
 		if err := assertUnsupportedChatNoUpstream(base, token, tc.body, fakeUpstream, expectedPath, "invalid-tools-message-"+tc.name, instance.ID+" tools message "+tc.name); err != nil {
 			return err
@@ -6112,6 +6270,13 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 			return err
 		}
 	}
+	for _, tc := range metadataUnsupportedCases(instance.Type) {
+		upstreamModel := "unsupported-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" metadata unsupported "+tc.name); err != nil {
+			return err
+		}
+	}
 	if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, providerOptionPrivacyMarker); err != nil {
 		return err
 	}
@@ -6120,7 +6285,7 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 			return err
 		}
 	}
-	for _, marker := range []string{costDetailsMarker, "1.75", "-1.25", penaltyOverflowMarker, "9223372036854775807", "-9223372036854775808", advancedSamplingOverflowMarker, logitBiasDecimalMarker, logitBiasExponentMarker, logitBiasOverflowMarker, predictionPrivacyMarker, userPrivacyMarker, serviceTierPrivacyMarker, sessionIDPrivacyMarker, userIDPrivacyMarker, "parallel-tool-calls-private-marker", toolNameMarker, toolDescriptionMarker, toolSchemaNumberMarker, toolCallIDMarker, toolArgumentMarker, toolResultMarker} {
+	for _, marker := range []string{costDetailsMarker, "1.75", "-1.25", penaltyOverflowMarker, "9223372036854775807", "-9223372036854775808", advancedSamplingOverflowMarker, logitBiasDecimalMarker, logitBiasExponentMarker, logitBiasOverflowMarker, predictionPrivacyMarker, userPrivacyMarker, serviceTierPrivacyMarker, sessionIDPrivacyMarker, metadataPrivacyMarker, userIDPrivacyMarker, "parallel-tool-calls-private-marker", toolNameMarker, toolDescriptionMarker, toolSchemaNumberMarker, toolCallIDMarker, toolArgumentMarker, toolResultMarker} {
 		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
 			return err
 		}
@@ -6387,6 +6552,20 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, sessionIDPrivacyMarker); err != nil {
 			return err
 		}
+		metadataBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/stream-metadata-forwarding", metadataExtra(map[string]string{"trace": metadataPrivacyMarker})))
+		status, _, _, raw, err = postStream(base+"/v1/chat/completions", token, metadataBody)
+		if err != nil || status != http.StatusOK {
+			return fmt.Errorf("stream metadata forwarding provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if bytes.Contains(raw, []byte(metadataPrivacyMarker)) {
+			return fmt.Errorf("stream metadata forwarding echoed private marker")
+		}
+		if !fakeUpstream.sawExpectedStream(expectedPath, "stream-metadata-forwarding") {
+			return fmt.Errorf("stream metadata forwarding did not reach upstream provider=%s", instance.ID)
+		}
+		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, metadataPrivacyMarker); err != nil {
+			return err
+		}
 		for _, tc := range []struct {
 			model string
 			extra string
@@ -6578,6 +6757,13 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 			return err
 		}
 	}
+	for _, tc := range metadataInvalidCases() {
+		upstreamModel := "stream-invalid-metadata-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" stream metadata "+tc.name); err != nil {
+			return err
+		}
+	}
 	for _, tc := range samplingPenaltyUnsupportedCases(instance.Type) {
 		upstreamModel := "stream-unsupported-penalty-" + tc.name
 		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/"+upstreamModel, tc.extra))
@@ -6641,6 +6827,13 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 			return err
 		}
 	}
+	for _, tc := range metadataUnsupportedCases(instance.Type) {
+		upstreamModel := "stream-unsupported-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" stream metadata unsupported "+tc.name); err != nil {
+			return err
+		}
+	}
 	if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, providerOptionPrivacyMarker); err != nil {
 		return err
 	}
@@ -6649,7 +6842,7 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 			return err
 		}
 	}
-	for _, marker := range []string{providerOptionPrivacyMarker, costDetailsMarker, "1.75", "-1.25", penaltyOverflowMarker, logprobTokenMarker, logitBiasDecimalMarker, logitBiasExponentMarker, logitBiasOverflowMarker, predictionPrivacyMarker, userPrivacyMarker, serviceTierPrivacyMarker, sessionIDPrivacyMarker, userIDPrivacyMarker, "parallel-tool-calls-private-marker", toolNameMarker, toolDescriptionMarker, toolSchemaNumberMarker, toolCallIDMarker, toolArgumentMarker, toolResultMarker} {
+	for _, marker := range []string{providerOptionPrivacyMarker, costDetailsMarker, "1.75", "-1.25", penaltyOverflowMarker, logprobTokenMarker, logitBiasDecimalMarker, logitBiasExponentMarker, logitBiasOverflowMarker, predictionPrivacyMarker, userPrivacyMarker, serviceTierPrivacyMarker, sessionIDPrivacyMarker, metadataPrivacyMarker, userIDPrivacyMarker, "parallel-tool-calls-private-marker", toolNameMarker, toolDescriptionMarker, toolSchemaNumberMarker, toolCallIDMarker, toolArgumentMarker, toolResultMarker} {
 		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
 			return err
 		}
@@ -7050,6 +7243,10 @@ func exerciseCodexNoEligibleCacheCheck(ctx context.Context, registry provider.Re
 	if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, unsupportedSessionIDBody, fakeUpstream, "/responses", "codex-noeligible-session-id", "codex noeligible session_id"); err != nil {
 		return err
 	}
+	unsupportedMetadataBody := []byte(`{"model":"codex/codex-noeligible-metadata","messages":[{"role":"user","content":"check"}],` + metadataExtra(map[string]string{"trace": metadataPrivacyMarker}) + `}`)
+	if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, unsupportedMetadataBody, fakeUpstream, "/responses", "codex-noeligible-metadata", "codex noeligible metadata"); err != nil {
+		return err
+	}
 	for _, tc := range []struct {
 		name  string
 		extra string
@@ -7068,6 +7265,7 @@ func exerciseCodexNoEligibleCacheCheck(ctx context.Context, registry provider.Re
 		{name: "codex-prediction", extra: predictionExtra(predictionPrivacyMarker)},
 		{name: "codex-service-tier", extra: `"service_tier":"priority"`},
 		{name: "codex-session-id", extra: `"session_id":"` + sessionIDPrivacyMarker + `"`},
+		{name: "codex-metadata", extra: metadataExtra(map[string]string{"trace": metadataPrivacyMarker})},
 	} {
 		upstreamModel := "codex-noeligible-" + tc.name
 		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, "codex/"+upstreamModel, tc.extra))
@@ -7233,6 +7431,13 @@ func exerciseSamplingPenaltyNoEligibleCheck(ctx context.Context, registry provid
 				return err
 			}
 		}
+		for _, tc := range metadataInvalidCases() {
+			upstreamModel := "noeligible-invalid-metadata-" + tc.name
+			body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+			if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, body, fakeUpstream, expectedPath, upstreamModel, "noeligible "+instance.ID+" metadata "+tc.name); err != nil {
+				return err
+			}
+		}
 		for _, tc := range providerOptionInvalidCases(instance.Type) {
 			upstreamModel := "noeligible-invalid-options-" + tc.name
 			body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
@@ -7308,6 +7513,13 @@ func exerciseSamplingPenaltyNoEligibleCheck(ctx context.Context, registry provid
 				return err
 			}
 		}
+		for _, tc := range metadataUnsupportedCases(instance.Type) {
+			upstreamModel := "noeligible-unsupported-" + tc.name
+			body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+			if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, body, fakeUpstream, expectedPath, upstreamModel, "noeligible "+instance.ID+" metadata unsupported "+tc.name); err != nil {
+				return err
+			}
+		}
 	}
 	for _, tc := range []struct {
 		name  string
@@ -7347,7 +7559,7 @@ func exerciseSamplingPenaltyNoEligibleCheck(ctx context.Context, registry provid
 	if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, toolMessageBody, fakeUpstream, "/responses", "codex-noeligible-tools-messages", "codex noeligible tool messages"); err != nil {
 		return err
 	}
-	for _, marker := range []string{providerOptionPrivacyMarker, costDetailsMarker, "1.75", "-1.25", penaltyOverflowMarker, "9223372036854775807", "-9223372036854775808", advancedSamplingOverflowMarker, logprobTokenMarker, logitBiasDecimalMarker, logitBiasExponentMarker, logitBiasOverflowMarker, predictionPrivacyMarker, userPrivacyMarker, serviceTierPrivacyMarker, sessionIDPrivacyMarker, userIDPrivacyMarker, "parallel-tool-calls-private-marker", toolNameMarker, toolDescriptionMarker, toolSchemaNumberMarker, toolCallIDMarker, toolArgumentMarker, toolResultMarker} {
+	for _, marker := range []string{providerOptionPrivacyMarker, costDetailsMarker, "1.75", "-1.25", penaltyOverflowMarker, "9223372036854775807", "-9223372036854775808", advancedSamplingOverflowMarker, logprobTokenMarker, logitBiasDecimalMarker, logitBiasExponentMarker, logitBiasOverflowMarker, predictionPrivacyMarker, userPrivacyMarker, serviceTierPrivacyMarker, sessionIDPrivacyMarker, metadataPrivacyMarker, userIDPrivacyMarker, "parallel-tool-calls-private-marker", toolNameMarker, toolDescriptionMarker, toolSchemaNumberMarker, toolCallIDMarker, toolArgumentMarker, toolResultMarker} {
 		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
 			return err
 		}
@@ -7658,6 +7870,7 @@ func assertCodexChatNoLeak(ctx context.Context, store *sqlite.Store) error {
 		"raw failed",
 		"raw incomplete",
 		"leak-completion-marker",
+		metadataPrivacyMarker,
 		"codex ok",
 		"check",
 		"prior",

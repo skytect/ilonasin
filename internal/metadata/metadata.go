@@ -165,6 +165,16 @@ type QuotaSummary struct {
 	Count              int
 }
 
+type ActiveQuotaBlock struct {
+	ObservedAt   time.Time
+	CredentialID int64
+	HTTPStatus   int
+	ErrorClass   string
+	RetryAfter   *time.Time
+	ResetAt      *time.Time
+	ActiveUntil  time.Time
+}
+
 type PruneResult struct {
 	Cutoff    time.Time
 	Requests  int

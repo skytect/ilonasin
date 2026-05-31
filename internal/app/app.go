@@ -22,6 +22,7 @@ import (
 
 	"ilonasin/internal/config"
 	"ilonasin/internal/credentials"
+	"ilonasin/internal/metadata"
 	"ilonasin/internal/provider"
 	"ilonasin/internal/server"
 	"ilonasin/internal/storage/sqlite"
@@ -7919,18 +7920,24 @@ func exerciseCredentialFallbackCheck(ctx context.Context, base, token string, in
 		return err
 	}
 	status, respBody, err := postJSON(base+"/v1/chat/completions", token, body)
-	if err != nil || status != http.StatusBadGateway || bytes.Contains(respBody, []byte("raw fallback 503 body")) {
-		return fmt.Errorf("fallback disabled status=%d err=%v body_len=%d", status, err, len(respBody))
+	if err != nil || status != http.StatusOK || !looksLikeChatCompletion(respBody) || bytes.Contains(respBody, []byte("raw fallback 503 body")) {
+		return fmt.Errorf("default fallback status=%d err=%v body_len=%d", status, err, len(respBody))
 	}
-	if fakeUpstream.sawAuth("fallback-success", "sk-fallback-second") {
-		return fmt.Errorf("fallback used second credential while policy disabled")
+	if !fakeUpstream.sawAuth("fallback-success", "sk-fallback-first") || !fakeUpstream.sawAuth("fallback-success", "sk-fallback-second") {
+		return fmt.Errorf("default fallback did not attempt both credentials")
 	}
 	afterFallbacks, err := fallbackEventCount(ctx, store, instance.ID, "fallback-success")
 	if err != nil {
 		return err
 	}
-	if afterFallbacks != beforeFallbacks {
-		return fmt.Errorf("fallback event recorded while policy disabled")
+	if afterFallbacks != beforeFallbacks+1 {
+		return fmt.Errorf("default fallback events before=%d after=%d", beforeFallbacks, afterFallbacks)
+	}
+	if err := assertRequestFallbackMetadata(ctx, store, instance.ID, "fallback-success"); err != nil {
+		return err
+	}
+	if err := assertFallbackEvent(ctx, store, instance.ID, "fallback-success", first.ID, second.ID); err != nil {
+		return err
 	}
 	if err := upstreams.EnableFallbackGroup(ctx, instance.ID, credentials.CredentialKindAPIKey, credentials.DefaultFallbackGroup); err != nil {
 		return err
@@ -7944,6 +7951,7 @@ func exerciseCredentialFallbackCheck(ctx context.Context, base, token string, in
 			return fmt.Errorf("fallback policy resolved %d credentials after enable", len(resolved))
 		}
 	}
+	fakeUpstream.clearObservedAuth()
 	status, respBody, err = postJSON(base+"/v1/chat/completions", token, body)
 	if err != nil || status != http.StatusOK || !looksLikeChatCompletion(respBody) || bytes.Contains(respBody, []byte("raw fallback 503 body")) {
 		return fmt.Errorf("fallback enabled status=%d err=%v body_len=%d", status, err, len(respBody))
@@ -7964,12 +7972,7 @@ func exerciseCredentialFallbackCheck(ctx context.Context, base, token string, in
 		model  string
 		status int
 	}{
-		{"fallback-429", http.StatusTooManyRequests},
-		{"fallback-402", http.StatusPaymentRequired},
 		{"fallback-401", http.StatusUnauthorized},
-		{"fallback-retry-after-negative", http.StatusTooManyRequests},
-		{"fallback-retry-after-past", http.StatusTooManyRequests},
-		{"fallback-retry-after-too-far", http.StatusTooManyRequests},
 		{"fallback-malformed", http.StatusBadGateway},
 		{"fallback-too-large", http.StatusBadGateway},
 	}
@@ -7994,14 +7997,68 @@ func exerciseCredentialFallbackCheck(ctx context.Context, base, token string, in
 			return fmt.Errorf("%s recorded fallback event for quota/auth nonretry", tc.model)
 		}
 	}
+	quotaRetryCases := []struct {
+		model  string
+		status int
+	}{
+		{"fallback-429", http.StatusTooManyRequests},
+		{"fallback-402", http.StatusPaymentRequired},
+		{"fallback-retry-after-negative", http.StatusTooManyRequests},
+		{"fallback-retry-after-past", http.StatusTooManyRequests},
+		{"fallback-retry-after-too-far", http.StatusTooManyRequests},
+	}
+	for _, tc := range quotaRetryCases {
+		fakeUpstream.clearObservedAuth()
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"max_tokens":1}`, instance.ID+"/"+tc.model))
+		beforeFallbacks, err := fallbackEventCount(ctx, store, instance.ID, tc.model)
+		if err != nil {
+			return err
+		}
+		status, respBody, err = postJSON(base+"/v1/chat/completions", token, body)
+		if err != nil || status != http.StatusOK || !looksLikeChatCompletion(respBody) || bytes.Contains(respBody, []byte("raw fallback")) {
+			return fmt.Errorf("%s quota retry status=%d err=%v body_len=%d", tc.model, status, err, len(respBody))
+		}
+		if !fakeUpstream.sawAuth(tc.model, "sk-fallback-first") || !fakeUpstream.sawAuth(tc.model, "sk-fallback-second") {
+			return fmt.Errorf("%s did not attempt quota fallback credential", tc.model)
+		}
+		afterFallbacks, err := fallbackEventCount(ctx, store, instance.ID, tc.model)
+		if err != nil {
+			return err
+		}
+		if afterFallbacks != beforeFallbacks+1 {
+			return fmt.Errorf("%s quota retry fallback events before=%d after=%d", tc.model, beforeFallbacks, afterFallbacks)
+		}
+		if err := assertQuotaEvent(ctx, store, instance.ID, tc.model, "chat", tc.status, "upstream_http_error"); err != nil {
+			return err
+		}
+	}
 	if err := assertRetryAfterHealth(ctx, store, instance.ID, "fallback-429"); err != nil {
 		return err
 	}
-	if err := assertQuotaEvent(ctx, store, instance.ID, "fallback-429", "chat", http.StatusTooManyRequests, "upstream_http_error"); err != nil {
-		return err
+	exhaustedModel := "fallback-pool-exhausted"
+	exhaustedReset := time.Now().UTC().Add(10 * time.Minute)
+	for _, credentialID := range []int64{first.ID, second.ID} {
+		if err := store.RecordQuotaObservation(ctx, metadata.QuotaObservation{
+			ObservedAt:         time.Now().UTC(),
+			ProviderInstanceID: instance.ID,
+			CredentialID:       credentialID,
+			ModelID:            exhaustedModel,
+			Source:             "chat",
+			HTTPStatus:         http.StatusTooManyRequests,
+			ErrorClass:         "upstream_http_error",
+			ResetAt:            &exhaustedReset,
+		}); err != nil {
+			return fmt.Errorf("seed exhausted quota block: %w", err)
+		}
 	}
-	if err := assertQuotaEvent(ctx, store, instance.ID, "fallback-402", "chat", http.StatusPaymentRequired, "upstream_http_error"); err != nil {
-		return err
+	fakeUpstream.clearObservedAuth()
+	exhaustedBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"max_tokens":1}`, instance.ID+"/"+exhaustedModel))
+	status, respBody, err = postJSON(base+"/v1/chat/completions", token, exhaustedBody)
+	if err != nil || status != http.StatusTooManyRequests || bytes.Contains(respBody, []byte("raw fallback")) {
+		return fmt.Errorf("quota exhausted status=%d err=%v body_len=%d", status, err, len(respBody))
+	}
+	if fakeUpstream.sawAuth(exhaustedModel, "sk-fallback-first") || fakeUpstream.sawAuth(exhaustedModel, "sk-fallback-second") {
+		return fmt.Errorf("quota exhausted called upstream")
 	}
 	finalQuotaBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"max_tokens":1}`, instance.ID+"/fallback-final-429"))
 	beforeFallbacks, err = fallbackEventCount(ctx, store, instance.ID, "fallback-final-429")
@@ -8046,11 +8103,11 @@ func exerciseCredentialFallbackCheck(ctx context.Context, base, token string, in
 	}
 	stream429Body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true}}`, instance.ID+"/stream-fallback-429"))
 	status, _, _, respBody, err = postStream(base+"/v1/chat/completions", token, stream429Body)
-	if err != nil || status != http.StatusTooManyRequests || bytes.Contains(respBody, []byte("raw stream fallback 429 body")) {
+	if err != nil || status != http.StatusOK || !bytes.Contains(respBody, []byte("data: [DONE]")) || bytes.Contains(respBody, []byte("raw stream fallback 429 body")) {
 		return fmt.Errorf("stream 429 fallback status=%d err=%v body_len=%d", status, err, len(respBody))
 	}
-	if fakeUpstream.sawAuth("stream-fallback-429", "sk-fallback-second") {
-		return fmt.Errorf("stream 429 incorrectly attempted fallback credential")
+	if !fakeUpstream.sawAuth("stream-fallback-429", "sk-fallback-second") {
+		return fmt.Errorf("stream 429 did not attempt fallback credential")
 	}
 	if err := assertRetryAfterHealth(ctx, store, instance.ID, "stream-fallback-429"); err != nil {
 		return err
@@ -8072,18 +8129,18 @@ func exerciseCredentialFallbackCheck(ctx context.Context, base, token string, in
 		return err
 	}
 	status, _, _, respBody, err = postStream(base+"/v1/chat/completions", token, quotaBeforeBody)
-	if err != nil || status != http.StatusTooManyRequests || !hasStreamErrorEnvelopeCode(respBody, "rate_limit_exceeded") || bytes.Contains(respBody, []byte("raw stream fallback quota secret")) {
+	if err != nil || status != http.StatusOK || !bytes.Contains(respBody, []byte("data: [DONE]")) || bytes.Contains(respBody, []byte("raw stream fallback quota secret")) {
 		return fmt.Errorf("stream pre-start SSE quota status=%d err=%v body_len=%d", status, err, len(respBody))
 	}
-	if fakeUpstream.sawAuth("stream-fallback-quota-before", "sk-fallback-second") {
-		return fmt.Errorf("stream fallback occurred for pre-start SSE quota error")
+	if !fakeUpstream.sawAuth("stream-fallback-quota-before", "sk-fallback-second") {
+		return fmt.Errorf("stream fallback did not occur for pre-start SSE quota error")
 	}
 	afterFallbacks, err = fallbackEventCount(ctx, store, instance.ID, "stream-fallback-quota-before")
 	if err != nil {
 		return err
 	}
-	if afterFallbacks != beforeFallbacks {
-		return fmt.Errorf("stream pre-start SSE quota recorded fallback")
+	if afterFallbacks != beforeFallbacks+1 {
+		return fmt.Errorf("stream pre-start SSE quota fallback events before=%d after=%d", beforeFallbacks, afterFallbacks)
 	}
 	if err := assertQuotaEvent(ctx, store, instance.ID, "stream-fallback-quota-before", "stream", http.StatusTooManyRequests, "rate_limit_exceeded"); err != nil {
 		return err
@@ -8172,8 +8229,8 @@ func exerciseCodexAccountPoolingCheck(ctx context.Context, cfg config.Config, fa
 	if err != nil {
 		return err
 	}
-	if len(noPool) != 1 {
-		return fmt.Errorf("codex pooling gate resolved %d credentials without provider permission", len(noPool))
+	if len(noPool) != 2 {
+		return fmt.Errorf("codex default pooling resolved %d credentials", len(noPool))
 	}
 	fakeUpstream.clearObservedAuth()
 	checkRegistry := baseURLOverrideRegistry{Registry: pooledRegistry, baseURL: fakeUpstream.server.URL}
@@ -8249,18 +8306,22 @@ func exerciseCodexAccountPoolingCheck(ctx context.Context, cfg config.Config, fa
 		}
 		body := []byte(fmt.Sprintf(`{"model":"codex/%s","messages":[{"role":"user","content":"check"}]}`, model))
 		status, respBody, err := postJSON(testServer.URL+"/v1/chat/completions", created.Token, body)
-		if err != nil || status != http.StatusBadGateway || bytes.Contains(respBody, []byte("raw codex pool")) || bytes.Contains(respBody, []byte("raw failed marker")) {
-			return fmt.Errorf("codex account pooling no-fallback %s status=%d err=%v body_len=%d", model, status, err, len(respBody))
+		wantStatus := http.StatusOK
+		if model == "codex-pool-rate-limit" {
+			wantStatus = http.StatusBadGateway
 		}
-		if fakeUpstream.sawAuth("codex-chat", "oauth-pool-second") {
-			return fmt.Errorf("codex account pooling used second account for %s", model)
+		if err != nil || status != wantStatus || bytes.Contains(respBody, []byte("raw codex pool")) || bytes.Contains(respBody, []byte("raw failed marker")) {
+			return fmt.Errorf("codex account pooling quota %s status=%d err=%v body_len=%d", model, status, err, len(respBody))
+		}
+		if !fakeUpstream.sawAuth("codex-chat", "oauth-pool-second") {
+			return fmt.Errorf("codex account pooling did not use second account for %s", model)
 		}
 		afterFallbacks, err := fallbackEventCount(ctx, store, "codex", model)
 		if err != nil {
 			return err
 		}
-		if afterFallbacks != beforeFallbacks {
-			return fmt.Errorf("codex account pooling recorded fallback for %s", model)
+		if afterFallbacks != beforeFallbacks+1 {
+			return fmt.Errorf("codex account pooling quota fallback events before=%d after=%d for %s", beforeFallbacks, afterFallbacks, model)
 		}
 		if err := assertQuotaEvent(ctx, store, "codex", model, "chat", http.StatusBadGateway, "rate_limit_exceeded"); err != nil {
 			return err

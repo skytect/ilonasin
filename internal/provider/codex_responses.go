@@ -567,13 +567,15 @@ type codexResponsesResult struct {
 }
 
 type codexResponseParseState struct {
-	doneText    strings.Builder
-	deltaText   strings.Builder
-	sawDoneText bool
-	toolCalls   []map[string]any
-	toolState   codexResponseToolState
-	usage       openai.Usage
-	completed   bool
+	itemDoneText    strings.Builder
+	textDoneText    strings.Builder
+	deltaText       strings.Builder
+	sawItemDoneText bool
+	sawTextDoneText bool
+	toolCalls       []map[string]any
+	toolState       codexResponseToolState
+	usage           openai.Usage
+	completed       bool
 }
 
 type codexResponseToolState struct {
@@ -654,14 +656,14 @@ func (a HTTPChatAdapter) readCodexResponses(ctx context.Context, body io.ReadClo
 
 func (state *codexResponseParseState) codexResponsesResult() codexResponsesResult {
 	return codexResponsesResult{
-		Text:      codexFinalText(state.doneText, state.deltaText, state.sawDoneText),
+		Text:      codexFinalText(state.itemDoneText, state.textDoneText, state.deltaText, state.sawItemDoneText, state.sawTextDoneText),
 		ToolCalls: state.toolCalls,
 		Usage:     state.usage,
 	}
 }
 
 func (state *codexResponseParseState) aggregateBytes() int {
-	total := state.doneText.Len() + state.deltaText.Len()
+	total := state.itemDoneText.Len() + state.textDoneText.Len() + state.deltaText.Len()
 	for _, call := range state.toolState.calls {
 		total += call.Arguments.Len()
 	}
@@ -762,10 +764,10 @@ func handleCodexEvent(data []byte, state *codexResponseParseState) error {
 			return state.emitCodexFunctionCall(codexToolCallKey(event.Item.ID, event.Item.CallID))
 		case "message":
 			if event.Item.Role == "assistant" {
-				state.sawDoneText = true
+				state.sawItemDoneText = true
 				for _, content := range event.Item.Content {
 					if content.Type == "output_text" {
-						state.doneText.WriteString(content.Text)
+						state.itemDoneText.WriteString(content.Text)
 					}
 				}
 			}
@@ -776,8 +778,8 @@ func handleCodexEvent(data []byte, state *codexResponseParseState) error {
 		}
 	case "response.output_text.done":
 		if event.Text != "" {
-			state.sawDoneText = true
-			state.doneText.WriteString(event.Text)
+			state.sawTextDoneText = true
+			state.textDoneText.WriteString(event.Text)
 		}
 	case "response.output_text.delta":
 		state.deltaText.WriteString(event.Delta)
@@ -904,9 +906,12 @@ func (state *codexResponseParseState) flushCodexFunctionCalls() error {
 	return nil
 }
 
-func codexFinalText(doneText, deltaText strings.Builder, sawDoneText bool) string {
-	if sawDoneText {
-		return doneText.String()
+func codexFinalText(itemDoneText, textDoneText, deltaText strings.Builder, sawItemDoneText, sawTextDoneText bool) string {
+	if sawItemDoneText {
+		return itemDoneText.String()
+	}
+	if sawTextDoneText {
+		return textDoneText.String()
 	}
 	return deltaText.String()
 }

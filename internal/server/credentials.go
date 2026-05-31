@@ -88,9 +88,6 @@ func (s *Server) resolveModelCredentials(ctx context.Context, instance provider.
 		if err != nil {
 			return nil, err
 		}
-		if !instance.CodexAccountPooling && len(credentialsSet) > 1 {
-			credentialsSet = credentialsSet[:1]
-		}
 		out := make([]provider.BearerCredential, 0, len(credentialsSet))
 		for _, credential := range credentialsSet {
 			out = append(out, provider.BearerCredential{

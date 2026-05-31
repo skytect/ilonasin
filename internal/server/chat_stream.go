@@ -42,6 +42,21 @@ func retryableStreamAttempt(summary provider.ChatStreamSummary, err error, sinkS
 	}
 }
 
+func quotaRetryableStreamAttempt(summary provider.ChatStreamSummary, sinkStarted bool) bool {
+	if sinkStarted || summary.Started {
+		return false
+	}
+	status := summary.StatusCode
+	if status == 0 {
+		status = http.StatusBadGateway
+	}
+	errorClass := summary.ErrorClass
+	if errorClass == "" && status >= 400 {
+		errorClass = "upstream_http_error"
+	}
+	return isQuotaObservation(status, errorClass)
+}
+
 func healthFromStreamAttempt(addr routing.ModelAddress, attempt streamAttempt) metadata.HealthEvent {
 	status := attempt.summary.StatusCode
 	if status == 0 {
@@ -96,87 +111,124 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 	sink := &streamSink{w: w, flusher: flusher}
 	var final streamAttempt
 	var fallbackEvents []metadata.FallbackEvent
+	var quotaObservations []metadata.QuotaObservation
 	authRetries := 0
-	modelCredential := provider.BearerCredential{}
-	if len(sc.credentials) > 0 {
-		modelCredential = sc.credentials[0]
-	}
-	for i, credential := range sc.credentials {
-		summary, err := sc.adapter.StreamChat(r.Context(), provider.ChatRequest{
-			Instance:        sc.instance,
-			UpstreamModel:   sc.address.ProviderModelID,
-			Request:         sc.request,
-			Credential:      providerChatCredential(credential),
-			ModelCredential: modelCredential,
-		}, sink)
-		if s.shouldRefreshModelCredentialAfterStream401(sc.instance, summary, modelCredential) {
-			refreshed, refreshErr := s.refreshOAuthCredentialForRetryIfBearer(r.Context(), modelCredential)
-			if refreshErr != nil {
-				summary = provider.ChatStreamSummary{StatusCode: http.StatusBadGateway, ErrorClass: "upstream_auth_failed", CompletionStatus: "upstream_error", PreStreamError: true}
-				err = refreshErr
-			} else {
-				modelCredentialID := modelCredential.ID
-				modelCredential = refreshed
-				if credential.ID == modelCredentialID {
-					credential = refreshed
-				}
-				authRetries++
-				summary, err = sc.adapter.StreamChat(r.Context(), provider.ChatRequest{
-					Instance:        sc.instance,
-					UpstreamModel:   sc.address.ProviderModelID,
-					Request:         sc.request,
-					Credential:      providerChatCredential(credential),
-					ModelCredential: modelCredential,
-				}, sink)
-				if s.shouldRefreshModelCredentialAfterStream401(sc.instance, summary, modelCredential) || s.shouldRefreshOAuthAfterStream401(sc.instance, summary) {
-					summary.StatusCode = http.StatusBadGateway
-					summary.ErrorClass = "upstream_auth_failed"
-				}
-			}
-		} else if s.shouldRefreshOAuthAfterStream401(sc.instance, summary) {
-			refreshed, refreshErr := s.refreshOAuthCredentialForRetryIfBearer(r.Context(), credential)
-			if refreshErr != nil {
-				summary = provider.ChatStreamSummary{StatusCode: http.StatusBadGateway, ErrorClass: "upstream_auth_failed", CompletionStatus: "upstream_error", PreStreamError: true}
-				err = refreshErr
-			} else {
-				credential = refreshed
-				if modelCredential.ID == refreshed.ID {
+	plan := s.planCredentialAttempts(r.Context(), sc.address, sc.credentials)
+	modelCredential := plan.modelCredential
+	if plan.exhausted {
+		final = streamAttempt{summary: provider.ChatStreamSummary{
+			StatusCode:       http.StatusTooManyRequests,
+			ErrorClass:       "upstream_quota_pool_exhausted",
+			CompletionStatus: "upstream_error",
+			PreStreamError:   true,
+			RetryAfter:       plan.retryAfter,
+		}}
+	} else {
+		for i, credential := range plan.attempts {
+			summary, err := sc.adapter.StreamChat(r.Context(), provider.ChatRequest{
+				Instance:        sc.instance,
+				UpstreamModel:   sc.address.ProviderModelID,
+				Request:         sc.request,
+				Credential:      providerChatCredential(credential),
+				ModelCredential: modelCredential,
+			}, sink)
+			if s.shouldRefreshModelCredentialAfterStream401(sc.instance, summary, modelCredential) {
+				refreshed, refreshErr := s.refreshOAuthCredentialForRetryIfBearer(r.Context(), modelCredential)
+				if refreshErr != nil {
+					summary = provider.ChatStreamSummary{StatusCode: http.StatusBadGateway, ErrorClass: "upstream_auth_failed", CompletionStatus: "upstream_error", PreStreamError: true}
+					err = refreshErr
+				} else {
+					modelCredentialID := modelCredential.ID
 					modelCredential = refreshed
+					if credential.ID == modelCredentialID {
+						credential = refreshed
+					}
+					authRetries++
+					summary, err = sc.adapter.StreamChat(r.Context(), provider.ChatRequest{
+						Instance:        sc.instance,
+						UpstreamModel:   sc.address.ProviderModelID,
+						Request:         sc.request,
+						Credential:      providerChatCredential(credential),
+						ModelCredential: modelCredential,
+					}, sink)
+					if s.shouldRefreshModelCredentialAfterStream401(sc.instance, summary, modelCredential) || s.shouldRefreshOAuthAfterStream401(sc.instance, summary) {
+						summary.StatusCode = http.StatusBadGateway
+						summary.ErrorClass = "upstream_auth_failed"
+					}
 				}
-				authRetries++
-				summary, err = sc.adapter.StreamChat(r.Context(), provider.ChatRequest{
-					Instance:        sc.instance,
-					UpstreamModel:   sc.address.ProviderModelID,
-					Request:         sc.request,
-					Credential:      providerChatCredential(credential),
-					ModelCredential: modelCredential,
-				}, sink)
-				if s.shouldRefreshOAuthAfterStream401(sc.instance, summary) {
-					summary.StatusCode = http.StatusBadGateway
-					summary.ErrorClass = "upstream_auth_failed"
+			} else if s.shouldRefreshOAuthAfterStream401(sc.instance, summary) {
+				refreshed, refreshErr := s.refreshOAuthCredentialForRetryIfBearer(r.Context(), credential)
+				if refreshErr != nil {
+					summary = provider.ChatStreamSummary{StatusCode: http.StatusBadGateway, ErrorClass: "upstream_auth_failed", CompletionStatus: "upstream_error", PreStreamError: true}
+					err = refreshErr
+				} else {
+					credential = refreshed
+					if modelCredential.ID == refreshed.ID {
+						modelCredential = refreshed
+					}
+					authRetries++
+					summary, err = sc.adapter.StreamChat(r.Context(), provider.ChatRequest{
+						Instance:        sc.instance,
+						UpstreamModel:   sc.address.ProviderModelID,
+						Request:         sc.request,
+						Credential:      providerChatCredential(credential),
+						ModelCredential: modelCredential,
+					}, sink)
+					if s.shouldRefreshOAuthAfterStream401(sc.instance, summary) {
+						summary.StatusCode = http.StatusBadGateway
+						summary.ErrorClass = "upstream_auth_failed"
+					}
 				}
 			}
+			final = streamAttempt{credential: credential, summary: summary, err: err}
+			if shouldRecordStreamHealth(summary) {
+				s.recordHealth(r.Context(), healthFromStreamAttempt(sc.address, final))
+			}
+			status := summary.StatusCode
+			if status == 0 {
+				status = http.StatusBadGateway
+			}
+			errorClass := summary.ErrorClass
+			if errorClass == "" && status >= 400 {
+				errorClass = "upstream_http_error"
+			}
+			if isQuotaObservation(status, errorClass) {
+				quotaObservations = append(quotaObservations, metadata.QuotaObservation{
+					ObservedAt:         s.now(),
+					ProviderInstanceID: sc.address.ProviderInstanceID,
+					CredentialID:       credential.ID,
+					ModelID:            sc.address.ProviderModelID,
+					Source:             "stream",
+					HTTPStatus:         status,
+					ErrorClass:         errorClass,
+					RetryAfter:         summary.RetryAfter,
+				})
+			}
+			retryReason := ""
+			switch {
+			case summary.ErrorClass == "upstream_auth_failed":
+			case quotaRetryableStreamAttempt(summary, sink.started):
+				retryReason = "quota_retry"
+			case retryableStreamAttempt(summary, err, sink.started):
+				retryReason = "availability_retry"
+			}
+			if retryReason == "" || i == len(plan.attempts)-1 {
+				break
+			}
+			next := plan.attempts[i+1]
+			fallbackEvents = append(fallbackEvents, metadata.FallbackEvent{
+				OccurredAt:         time.Now(),
+				ProviderInstanceID: sc.address.ProviderInstanceID,
+				ModelID:            sc.address.ProviderModelID,
+				FromCredentialID:   credential.ID,
+				ToCredentialID:     next.ID,
+				Reason:             retryReason,
+				AllowedByPolicy:    true,
+			})
 		}
-		final = streamAttempt{credential: credential, summary: summary, err: err}
-		if shouldRecordStreamHealth(summary) {
-			s.recordHealth(r.Context(), healthFromStreamAttempt(sc.address, final))
-		}
-		if summary.ErrorClass == "upstream_auth_failed" || !retryableStreamAttempt(summary, err, sink.started) || i == len(sc.credentials)-1 {
-			break
-		}
-		next := sc.credentials[i+1]
-		fallbackEvents = append(fallbackEvents, metadata.FallbackEvent{
-			OccurredAt:         time.Now(),
-			ProviderInstanceID: sc.address.ProviderInstanceID,
-			ModelID:            sc.address.ProviderModelID,
-			FromCredentialID:   credential.ID,
-			ToCredentialID:     next.ID,
-			Reason:             "availability_retry",
-			AllowedByPolicy:    true,
-		})
 	}
 	summary := final.summary
-	if final.err != nil && !sink.started {
+	if (final.err != nil || summary.StatusCode >= 400) && !sink.started {
 		localStatus := summary.StatusCode
 		if localStatus < 400 || localStatus >= 500 {
 			localStatus = http.StatusBadGateway
@@ -240,17 +292,7 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 		CompletionStatus:      completionStatus,
 		ChunkCount:            summary.ChunkCount,
 	})
-	s.recordQuota(recordCtx, metadata.QuotaObservation{
-		RequestMetadataID:  requestID,
-		ObservedAt:         s.now(),
-		ProviderInstanceID: sc.address.ProviderInstanceID,
-		CredentialID:       final.credential.ID,
-		ModelID:            sc.address.ProviderModelID,
-		Source:             "stream",
-		HTTPStatus:         status,
-		ErrorClass:         errorClass,
-		RetryAfter:         summary.RetryAfter,
-	})
+	s.recordQuotaObservations(recordCtx, requestID, quotaObservations)
 	s.recordFallbacks(recordCtx, requestID, fallbackEvents)
 }
 

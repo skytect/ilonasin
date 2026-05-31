@@ -310,7 +310,7 @@ func (m Model) View() string {
 	}
 	m.writeObservability(&b)
 	m.writePruning(&b)
-	b.WriteString("\nPress n to create local token, a to add API key, d to disable local token, x to disable API key, l to login OAuth, o/r to select/refresh OAuth, f/F to toggle fallback, p to prune telemetry, q to quit.\n")
+	b.WriteString("\nPress n to create local token, a to add API key, d to disable local token, x to disable API key, l to login OAuth, o/r to select/refresh OAuth, f/F to mark credential group, p to prune telemetry, q to quit.\n")
 	return b.String()
 }
 
@@ -421,7 +421,7 @@ func ExerciseFallbackPolicyLifecycle(ctx context.Context, cfg config.Config, reg
 	model.snapshot = snapshot
 	_ = model.reload()
 	view := model.View()
-	if !strings.Contains(view, "Fallback policies") ||
+	if !strings.Contains(view, "Credential groups") ||
 		!strings.Contains(view, instance.ID+" default disabled credentials 2") {
 		return fmt.Errorf("fallback policy summary missing")
 	}
@@ -1052,9 +1052,9 @@ func (m Model) writeFallbackPolicies(b *strings.Builder) {
 	if m.upstreams == nil && m.snapshot == nil {
 		return
 	}
-	b.WriteString("\nFallback policies\n")
+	b.WriteString("\nCredential groups\n")
 	if len(m.fallbackPolicies) == 0 {
-		b.WriteString("No eligible fallback groups.\n")
+		b.WriteString("No credential group metadata.\n")
 	}
 	for _, row := range m.fallbackPolicies {
 		state := "disabled"

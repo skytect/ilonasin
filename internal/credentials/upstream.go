@@ -447,9 +447,6 @@ func (s *UpstreamService) ResolveOAuthBearers(ctx context.Context, providerInsta
 	if err != nil {
 		return nil, err
 	}
-	if !instance.CodexAccountPooling && len(out) > 1 {
-		return out[:1], nil
-	}
 	return out, nil
 }
 

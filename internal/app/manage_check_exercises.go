@@ -247,8 +247,8 @@ func exerciseFallbackPolicyCheck(ctx context.Context, registry provider.Registry
 	if err != nil {
 		return err
 	}
-	if len(resolved) != 1 {
-		return fmt.Errorf("fallback policy default resolved %d credentials", len(resolved))
+	if len(resolved) != 4 {
+		return fmt.Errorf("credential group default resolved %d credentials", len(resolved))
 	}
 	mgmt, err := startManagementServer(ctx, checkDBDir, configPath, filepath.Join(checkDBDir, "ilonasin.sqlite"), registry, store)
 	if err != nil {
@@ -270,7 +270,7 @@ func exerciseFallbackPolicyCheck(ctx context.Context, registry provider.Registry
 	if err != nil {
 		return err
 	}
-	if len(resolved) != 2 {
+	if len(resolved) != 4 {
 		return fmt.Errorf("fallback policy enable resolved %d credentials", len(resolved))
 	}
 	if _, err := client.DisableFallbackPolicy(ctx, management.FallbackPolicyRequest{
@@ -284,8 +284,8 @@ func exerciseFallbackPolicyCheck(ctx context.Context, registry provider.Registry
 	if err != nil {
 		return err
 	}
-	if len(resolved) != 1 {
-		return fmt.Errorf("fallback policy final resolved %d credentials", len(resolved))
+	if len(resolved) != 4 {
+		return fmt.Errorf("credential group final resolved %d credentials", len(resolved))
 	}
 	afterProtected, err := fallbackPolicyProtectedSnapshot(ctx, store, configPath)
 	if err != nil {

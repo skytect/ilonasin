@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"time"
 
 	"ilonasin/internal/metadata"
 	"ilonasin/internal/provider"
@@ -13,6 +14,10 @@ type MetadataRecorder interface {
 	RecordHealthEvent(context.Context, metadata.HealthEvent) error
 	RecordFallbackEvent(context.Context, metadata.FallbackEvent) error
 	RecordQuotaObservation(context.Context, metadata.QuotaObservation) error
+}
+
+type QuotaReader interface {
+	ActiveQuotaBlocks(context.Context, string, string, time.Time) ([]metadata.ActiveQuotaBlock, error)
 }
 
 type ProviderRegistry interface {

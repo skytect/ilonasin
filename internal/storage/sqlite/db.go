@@ -195,13 +195,13 @@ func scanLocalTokenMetadata(row localTokenScanner) (credentials.LocalTokenMetada
 	if err := row.Scan(&meta.ID, &meta.Label, &meta.TokenPrefix, &meta.TokenLast4, &created, &disabled); err != nil {
 		return credentials.LocalTokenMetadata{}, err
 	}
-	createdAt, err := time.Parse(time.RFC3339Nano, created)
+	createdAt, err := parseSQLiteTime(created)
 	if err != nil {
 		return credentials.LocalTokenMetadata{}, err
 	}
 	meta.CreatedAt = createdAt
 	if disabled.Valid {
-		disabledAt, err := time.Parse(time.RFC3339Nano, disabled.String)
+		disabledAt, err := parseSQLiteTime(disabled.String)
 		if err != nil {
 			return credentials.LocalTokenMetadata{}, err
 		}
@@ -372,27 +372,27 @@ func (s *Store) ListOAuthCredentials(ctx context.Context) ([]credentials.OAuthCr
 			&lastRefresh, &row.RefreshFailureClass, &created, &disabled); err != nil {
 			return nil, err
 		}
-		createdAt, err := time.Parse(time.RFC3339Nano, created)
+		createdAt, err := parseSQLiteTime(created)
 		if err != nil {
 			return nil, err
 		}
 		row.CreatedAt = createdAt
 		if expires.Valid {
-			expiresAt, err := time.Parse(time.RFC3339Nano, expires.String)
+			expiresAt, err := parseSQLiteTime(expires.String)
 			if err != nil {
 				return nil, err
 			}
 			row.ExpiresAt = &expiresAt
 		}
 		if lastRefresh.Valid {
-			refreshAt, err := time.Parse(time.RFC3339Nano, lastRefresh.String)
+			refreshAt, err := parseSQLiteTime(lastRefresh.String)
 			if err != nil {
 				return nil, err
 			}
 			row.LastRefreshAt = &refreshAt
 		}
 		if disabled.Valid {
-			disabledAt, err := time.Parse(time.RFC3339Nano, disabled.String)
+			disabledAt, err := parseSQLiteTime(disabled.String)
 			if err != nil {
 				return nil, err
 			}
@@ -422,7 +422,7 @@ func (s *Store) ListProviderAccounts(ctx context.Context) ([]credentials.Provide
 			&row.DisplayLabel, &row.PlanLabel, &created); err != nil {
 			return nil, err
 		}
-		createdAt, err := time.Parse(time.RFC3339Nano, created)
+		createdAt, err := parseSQLiteTime(created)
 		if err != nil {
 			return nil, err
 		}
@@ -519,24 +519,7 @@ func (s *Store) ResolveAPIKeyCredentials(ctx context.Context, providerInstanceID
 	if len(all) == 0 {
 		return nil, credentials.ErrNoEligibleCredential
 	}
-	group := all[0].FallbackGroup
-	enabled, err := s.fallbackGroupEnabled(ctx, providerInstanceID, credentials.CredentialKindAPIKey, group)
-	if err != nil {
-		return nil, err
-	}
-	if !enabled {
-		return all[:1], nil
-	}
-	out := all[:0]
-	for _, cred := range all {
-		if cred.FallbackGroup == group {
-			out = append(out, cred)
-		}
-	}
-	if len(out) == 0 {
-		return nil, credentials.ErrNoEligibleCredential
-	}
-	return out, nil
+	return all, nil
 }
 
 func (s *Store) ResolveOAuthBearerCredential(ctx context.Context, providerInstanceID string, now time.Time) (credentials.ResolvedOAuthBearerCredential, error) {
@@ -563,7 +546,7 @@ func (s *Store) ResolveOAuthBearerCredential(ctx context.Context, providerInstan
 		return credentials.ResolvedOAuthBearerCredential{}, credentials.ErrNoEligibleCredential
 	}
 	if expires.Valid {
-		expiresAt, err := time.Parse(time.RFC3339Nano, expires.String)
+		expiresAt, err := parseSQLiteTime(expires.String)
 		if err != nil {
 			return credentials.ResolvedOAuthBearerCredential{}, err
 		}
@@ -627,19 +610,8 @@ func (s *Store) ResolveOAuthBearerCredentials(ctx context.Context, providerInsta
 	if !ok {
 		return nil, credentials.ErrNoEligibleCredential
 	}
-	group := primary.FallbackGroup
-	enabled, err := s.fallbackGroupEnabled(ctx, providerInstanceID, credentials.CredentialKindOAuth, group)
-	if err != nil {
-		return nil, err
-	}
-	if !enabled {
-		return []credentials.ResolvedOAuthBearerCredential{primary}, nil
-	}
 	out := []credentials.ResolvedOAuthBearerCredential{primary}
 	for _, row := range candidates[1:] {
-		if row.fallback != group {
-			continue
-		}
 		credential, ok, err := s.materializeOAuthBearer(ctx, row, now, true)
 		if err != nil {
 			return nil, err
@@ -667,7 +639,7 @@ func (s *Store) materializeOAuthBearer(ctx context.Context, row oauthBearerRow, 
 		return credentials.ResolvedOAuthBearerCredential{}, false, nil
 	}
 	if row.expires.Valid {
-		expiresAt, err := time.Parse(time.RFC3339Nano, row.expires.String)
+		expiresAt, err := parseSQLiteTime(row.expires.String)
 		if err != nil {
 			return credentials.ResolvedOAuthBearerCredential{}, false, err
 		}
@@ -725,7 +697,7 @@ func (s *Store) ResolveOAuthBearerCredentialByID(ctx context.Context, credential
 		return credentials.ResolvedOAuthBearerCredential{}, err
 	}
 	if expires.Valid && !now.IsZero() {
-		expiresAt, err := time.Parse(time.RFC3339Nano, expires.String)
+		expiresAt, err := parseSQLiteTime(expires.String)
 		if err != nil {
 			return credentials.ResolvedOAuthBearerCredential{}, err
 		}
@@ -735,7 +707,7 @@ func (s *Store) ResolveOAuthBearerCredentialByID(ctx context.Context, credential
 		}
 		out.ExpiresAt = &expiresAt
 	} else if expires.Valid {
-		expiresAt, err := time.Parse(time.RFC3339Nano, expires.String)
+		expiresAt, err := parseSQLiteTime(expires.String)
 		if err != nil {
 			return credentials.ResolvedOAuthBearerCredential{}, err
 		}
@@ -995,13 +967,13 @@ func scanUpstreamCredentialMetadata(row localTokenScanner) (credentials.Upstream
 	if err := row.Scan(&meta.ID, &meta.ProviderInstanceID, &meta.Kind, &meta.Label, &meta.SecretPrefix, &meta.SecretLast4, &meta.FallbackGroup, &created, &disabled); err != nil {
 		return credentials.UpstreamCredentialMetadata{}, err
 	}
-	createdAt, err := time.Parse(time.RFC3339Nano, created)
+	createdAt, err := parseSQLiteTime(created)
 	if err != nil {
 		return credentials.UpstreamCredentialMetadata{}, err
 	}
 	meta.CreatedAt = createdAt
 	if disabled.Valid {
-		disabledAt, err := time.Parse(time.RFC3339Nano, disabled.String)
+		disabledAt, err := parseSQLiteTime(disabled.String)
 		if err != nil {
 			return credentials.UpstreamCredentialMetadata{}, err
 		}
@@ -1178,7 +1150,7 @@ func (s *Store) PruneTelemetryBefore(ctx context.Context, cutoff time.Time) (met
 			requestRows.Close()
 			return metadata.PruneResult{}, err
 		}
-		startedAt, err := time.Parse(time.RFC3339Nano, started)
+		startedAt, err := parseSQLiteTime(started)
 		if err != nil {
 			requestInsert.Close()
 			requestRows.Close()
@@ -1227,7 +1199,7 @@ func (s *Store) PruneTelemetryBefore(ctx context.Context, cutoff time.Time) (met
 			fallbackRows.Close()
 			return metadata.PruneResult{}, err
 		}
-		occurredAt, err := time.Parse(time.RFC3339Nano, occurred)
+		occurredAt, err := parseSQLiteTime(occurred)
 		if err != nil {
 			fallbackInsert.Close()
 			fallbackRows.Close()
@@ -1268,7 +1240,7 @@ func (s *Store) PruneTelemetryBefore(ctx context.Context, cutoff time.Time) (met
 			healthRows.Close()
 			return metadata.PruneResult{}, err
 		}
-		occurredAt, err := time.Parse(time.RFC3339Nano, occurred)
+		occurredAt, err := parseSQLiteTime(occurred)
 		if err != nil {
 			healthInsert.Close()
 			healthRows.Close()
@@ -1308,7 +1280,7 @@ func (s *Store) PruneTelemetryBefore(ctx context.Context, cutoff time.Time) (met
 			quotaRows.Close()
 			return metadata.PruneResult{}, err
 		}
-		observedAt, err := time.Parse(time.RFC3339Nano, observed)
+		observedAt, err := parseSQLiteTime(observed)
 		if err != nil {
 			quotaInsert.Close()
 			quotaRows.Close()
@@ -1412,7 +1384,7 @@ func (s *Store) RecentRequests(ctx context.Context, limit int) ([]metadata.Reque
 			&row.StreamCompletionStatus, &row.StreamChunkCount); err != nil {
 			return nil, err
 		}
-		startedAt, err := time.Parse(time.RFC3339Nano, started)
+		startedAt, err := parseSQLiteTime(started)
 		if err != nil {
 			return nil, err
 		}
@@ -1528,13 +1500,13 @@ func (s *Store) LatestHealth(ctx context.Context) ([]metadata.HealthSummary, err
 			&occurred, &retryAfter); err != nil {
 			return nil, err
 		}
-		occurredAt, err := time.Parse(time.RFC3339Nano, occurred)
+		occurredAt, err := parseSQLiteTime(occurred)
 		if err != nil {
 			return nil, err
 		}
 		row.OccurredAt = occurredAt
 		if retryAfter.Valid && retryAfter.String != "" {
-			parsed, err := time.Parse(time.RFC3339Nano, retryAfter.String)
+			parsed, err := parseSQLiteTime(retryAfter.String)
 			if err != nil {
 				return nil, err
 			}
@@ -1575,7 +1547,7 @@ func (s *Store) RecentFallbacks(ctx context.Context, limit int) ([]metadata.Fall
 			&row.Reason); err != nil {
 			return nil, err
 		}
-		occurredAt, err := time.Parse(time.RFC3339Nano, occurred)
+		occurredAt, err := parseSQLiteTime(occurred)
 		if err != nil {
 			return nil, err
 		}
@@ -1611,26 +1583,103 @@ func (s *Store) QuotaByProvider(ctx context.Context) ([]metadata.QuotaSummary, e
 			&observed, &retryAfter, &resetAt, &row.Count); err != nil {
 			return nil, err
 		}
-		observedAt, err := time.Parse(time.RFC3339Nano, observed)
+		observedAt, err := parseSQLiteTime(observed)
 		if err != nil {
 			return nil, err
 		}
 		row.ObservedAt = observedAt
 		if retryAfter.Valid && retryAfter.String != "" {
-			parsed, err := time.Parse(time.RFC3339Nano, retryAfter.String)
+			parsed, err := parseSQLiteTime(retryAfter.String)
 			if err != nil {
 				return nil, err
 			}
 			row.RetryAfter = &parsed
 		}
 		if resetAt.Valid && resetAt.String != "" {
-			parsed, err := time.Parse(time.RFC3339Nano, resetAt.String)
+			parsed, err := parseSQLiteTime(resetAt.String)
 			if err != nil {
 				return nil, err
 			}
 			row.ResetAt = &parsed
 		}
 		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+const activeQuotaFallbackCooldown = 10 * time.Minute
+
+func (s *Store) ActiveQuotaBlocks(ctx context.Context, providerInstanceID, modelID string, now time.Time) ([]metadata.ActiveQuotaBlock, error) {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	now = now.UTC()
+	rows, err := s.DB.QueryContext(ctx, `
+		SELECT qe.credential_id, qe.observed_at, qe.http_status, qe.error_class, qe.retry_after, qe.reset_at
+		FROM quota_events qe
+		JOIN (
+			SELECT credential_id, MAX(observed_at) AS observed_at
+			FROM quota_events
+			WHERE provider_instance_id = ?
+				AND model_id = ?
+				AND credential_id IS NOT NULL
+			GROUP BY credential_id
+		) latest ON latest.credential_id = qe.credential_id AND latest.observed_at = qe.observed_at
+		WHERE qe.provider_instance_id = ?
+			AND qe.model_id = ?
+			AND qe.credential_id IS NOT NULL
+		ORDER BY qe.credential_id ASC, qe.id DESC
+	`, providerInstanceID, modelID, providerInstanceID, modelID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	seen := map[int64]bool{}
+	var out []metadata.ActiveQuotaBlock
+	for rows.Next() {
+		var block metadata.ActiveQuotaBlock
+		var observed string
+		var retryAfter, resetAt sql.NullString
+		if err := rows.Scan(&block.CredentialID, &observed, &block.HTTPStatus, &block.ErrorClass, &retryAfter, &resetAt); err != nil {
+			return nil, err
+		}
+		if seen[block.CredentialID] {
+			continue
+		}
+		seen[block.CredentialID] = true
+		observedAt, err := parseSQLiteTime(observed)
+		if err != nil {
+			return nil, err
+		}
+		block.ObservedAt = observedAt.UTC()
+		activeUntil := block.ObservedAt.Add(activeQuotaFallbackCooldown)
+		if retryAfter.Valid && retryAfter.String != "" {
+			parsed, err := parseSQLiteTime(retryAfter.String)
+			if err != nil {
+				return nil, err
+			}
+			parsed = parsed.UTC()
+			block.RetryAfter = &parsed
+			if parsed.After(activeUntil) {
+				activeUntil = parsed
+			}
+		}
+		if resetAt.Valid && resetAt.String != "" {
+			parsed, err := parseSQLiteTime(resetAt.String)
+			if err != nil {
+				return nil, err
+			}
+			parsed = parsed.UTC()
+			block.ResetAt = &parsed
+			if parsed.After(activeUntil) {
+				activeUntil = parsed
+			}
+		}
+		if !activeUntil.After(now) {
+			continue
+		}
+		block.ActiveUntil = activeUntil
+		out = append(out, block)
 	}
 	return out, rows.Err()
 }
@@ -1683,7 +1732,7 @@ func (s *Store) ListModelCache(ctx context.Context) ([]provider.ModelMetadata, e
 			&model.CapabilityFlags, &model.ContextLength, &updated); err != nil {
 			return nil, err
 		}
-		updatedAt, err := time.Parse(time.RFC3339Nano, updated)
+		updatedAt, err := parseSQLiteTime(updated)
 		if err != nil {
 			return nil, err
 		}
@@ -1712,6 +1761,17 @@ func nullableTime(t *time.Time) any {
 		return nil
 	}
 	return t.UTC().Format(time.RFC3339Nano)
+}
+
+func parseSQLiteTime(value string) (time.Time, error) {
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err == nil {
+		return parsed, nil
+	}
+	if fallback, fallbackErr := time.ParseInLocation("2006-01-02 15:04:05", value, time.UTC); fallbackErr == nil {
+		return fallback, nil
+	}
+	return time.Time{}, err
 }
 
 func cloneTime(t *time.Time) *time.Time {

@@ -29,18 +29,28 @@ type chatAttempt struct {
 }
 
 type nonStreamExecution struct {
-	final          chatAttempt
-	fallbackEvents []metadata.FallbackEvent
-	authRetries    int
+	final             chatAttempt
+	fallbackEvents    []metadata.FallbackEvent
+	quotaObservations []metadata.QuotaObservation
+	authRetries       int
 }
 
 func (s *Server) executeNonStreamingChat(r *http.Request, nc nonStreamContext) nonStreamExecution {
 	exec := nonStreamExecution{}
-	modelCredential := provider.BearerCredential{}
-	if len(nc.credentials) > 0 {
-		modelCredential = nc.credentials[0]
+	plan := s.planCredentialAttempts(r.Context(), nc.address, nc.credentials)
+	modelCredential := plan.modelCredential
+	if plan.exhausted {
+		exec.final = chatAttempt{
+			result: provider.ChatResult{
+				StatusCode: http.StatusTooManyRequests,
+				ErrorClass: "upstream_quota_pool_exhausted",
+				RetryAfter: plan.retryAfter,
+				Latency:    time.Since(nc.start),
+			},
+		}
+		return exec
 	}
-	for i, credential := range nc.credentials {
+	for i, credential := range plan.attempts {
 		result, err := nc.adapter.CompleteChat(r.Context(), provider.ChatRequest{
 			Instance:        nc.instance,
 			UpstreamModel:   nc.address.ProviderModelID,
@@ -100,17 +110,39 @@ func (s *Server) executeNonStreamingChat(r *http.Request, nc nonStreamContext) n
 		if shouldRecordChatHealth(result) {
 			s.recordHealth(r.Context(), healthFromChatAttempt(nc.address, exec.final))
 		}
-		if result.ErrorClass == "upstream_auth_failed" || !retryableChatAttempt(result, err) || i == len(nc.credentials)-1 {
+		status := localChatStatus(result, err)
+		errorClass := localChatErrorClass(result, err, status)
+		if isQuotaObservation(status, errorClass) {
+			exec.quotaObservations = append(exec.quotaObservations, metadata.QuotaObservation{
+				ObservedAt:         s.now(),
+				ProviderInstanceID: nc.address.ProviderInstanceID,
+				CredentialID:       credential.ID,
+				ModelID:            nc.address.ProviderModelID,
+				Source:             "chat",
+				HTTPStatus:         status,
+				ErrorClass:         errorClass,
+				RetryAfter:         result.RetryAfter,
+			})
+		}
+		retryReason := ""
+		switch {
+		case result.ErrorClass == "upstream_auth_failed":
+		case quotaRetryableChatAttempt(result):
+			retryReason = "quota_retry"
+		case retryableChatAttempt(result, err):
+			retryReason = "availability_retry"
+		}
+		if retryReason == "" || i == len(plan.attempts)-1 {
 			break
 		}
-		next := nc.credentials[i+1]
+		next := plan.attempts[i+1]
 		exec.fallbackEvents = append(exec.fallbackEvents, metadata.FallbackEvent{
 			OccurredAt:         time.Now(),
 			ProviderInstanceID: nc.address.ProviderInstanceID,
 			ModelID:            nc.address.ProviderModelID,
 			FromCredentialID:   credential.ID,
 			ToCredentialID:     next.ID,
-			Reason:             "availability_retry",
+			Reason:             retryReason,
 			AllowedByPolicy:    true,
 		})
 	}
@@ -142,17 +174,7 @@ func (s *Server) recordNonStreamingChat(r *http.Request, nc nonStreamContext, ex
 		CostMicrounits:            exec.final.result.Usage.CostMicrounits,
 		TotalLatencyMS:            time.Since(nc.start).Milliseconds(),
 	})
-	s.recordQuota(recordCtx, metadata.QuotaObservation{
-		RequestMetadataID:  requestID,
-		ObservedAt:         s.now(),
-		ProviderInstanceID: nc.address.ProviderInstanceID,
-		CredentialID:       exec.final.credential.ID,
-		ModelID:            nc.address.ProviderModelID,
-		Source:             "chat",
-		HTTPStatus:         status,
-		ErrorClass:         errorClass,
-		RetryAfter:         exec.final.result.RetryAfter,
-	})
+	s.recordQuotaObservations(recordCtx, requestID, exec.quotaObservations)
 	s.recordFallbacks(recordCtx, requestID, exec.fallbackEvents)
 	return requestID
 }
@@ -247,6 +269,15 @@ func retryableChatAttempt(result provider.ChatResult, err error) bool {
 		return false
 	}
 	return retryableHTTPStatus(result.StatusCode)
+}
+
+func quotaRetryableChatAttempt(result provider.ChatResult) bool {
+	if result.InvalidBody || result.BodyTruncated {
+		return false
+	}
+	status := normalizedChatStatus(result)
+	errorClass := normalizedChatErrorClass(result, status)
+	return isQuotaObservation(status, errorClass)
 }
 
 func shouldRecordChatHealth(result provider.ChatResult) bool {

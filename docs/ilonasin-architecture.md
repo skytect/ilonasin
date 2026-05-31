@@ -245,9 +245,9 @@ The router should record metadata for:
 - credential label or credential ID,
 - fallback/retry behavior.
 
-### Fallback
+### Credential Pooling
 
-Initial fallback is constrained:
+Credential pooling is constrained:
 
 - same provider instance,
 - same provider model,
@@ -259,30 +259,40 @@ No cross-model fallback by default.
 
 No hidden downgrade or upgrade by default.
 
-Fallback across credentials/accounts should be explicit, auditable, and
-provider-policy-aware. It is especially relevant for subscription-style provider
-instances where multiple accounts may represent the same provider/model route.
+Pooling across API keys and OAuth accounts is default for a requested provider
+instance and model. It is especially relevant for provider instances where
+multiple credentials represent the same provider/model route.
 
-For API-key providers, account rotation can look like rate-limit evasion if
-misused. The architecture must distinguish availability fallback from quota or
-policy evasion.
+Pooling must remain auditable through metadata-only request, fallback, health,
+and quota rows. Fallback-policy rows are operator/display metadata; serving
+eligibility is the default same-provider credential pool.
 
 Allowed examples:
 
 - retry the same credential on transient network failure,
 - retry the same credential on retryable upstream `5xx`,
 - switch to another eligible credential for the same provider instance and same
-  model when the credential group explicitly allows it,
-- use subscription account fallback when provider terms and user configuration
-  allow it.
+  model on availability failure before a response is committed,
+- switch to another eligible credential for the same provider instance and same
+  model on quota pressure before a response is committed,
+- use subscription account pooling for Codex OAuth accounts without storing full
+  account IDs separately.
 
 Not allowed by default:
 
 - hidden cross-provider fallback,
 - hidden cross-model fallback,
-- hidden account cycling intended to bypass hard quota, payment, abuse, or
-  policy limits,
+- querying provider billing, balances, credits, plan limits, or account
+  settings to infer quota,
+- retry loops that cycle indefinitely through blocked credentials,
 - weakening privacy/routing constraints during fallback.
+
+Quota pooling uses only local quota observations already produced by routed
+requests. It may use provider `retry_after` or reset timing when already
+available in normalized metadata. If no retry/reset timing exists, the daemon
+may apply a short local cooldown to avoid immediately retrying a blocked
+credential. Fabricated local cooldowns are not provider reset times and must not
+be rendered as such.
 
 ### Observability and Logging
 

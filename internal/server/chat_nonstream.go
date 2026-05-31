@@ -28,10 +28,14 @@ type chatAttempt struct {
 	err        error
 }
 
-func (s *Server) handleNonStreamingChat(w http.ResponseWriter, r *http.Request, nc nonStreamContext) {
-	var final chatAttempt
-	var fallbackEvents []metadata.FallbackEvent
-	authRetries := 0
+type nonStreamExecution struct {
+	final          chatAttempt
+	fallbackEvents []metadata.FallbackEvent
+	authRetries    int
+}
+
+func (s *Server) executeNonStreamingChat(r *http.Request, nc nonStreamContext) nonStreamExecution {
+	exec := nonStreamExecution{}
 	modelCredential := provider.BearerCredential{}
 	if len(nc.credentials) > 0 {
 		modelCredential = nc.credentials[0]
@@ -55,7 +59,7 @@ func (s *Server) handleNonStreamingChat(w http.ResponseWriter, r *http.Request, 
 				if credential.ID == modelCredentialID {
 					credential = refreshed
 				}
-				authRetries++
+				exec.authRetries++
 				result, err = nc.adapter.CompleteChat(r.Context(), provider.ChatRequest{
 					Instance:        nc.instance,
 					UpstreamModel:   nc.address.ProviderModelID,
@@ -78,7 +82,7 @@ func (s *Server) handleNonStreamingChat(w http.ResponseWriter, r *http.Request, 
 				if modelCredential.ID == refreshed.ID {
 					modelCredential = refreshed
 				}
-				authRetries++
+				exec.authRetries++
 				result, err = nc.adapter.CompleteChat(r.Context(), provider.ChatRequest{
 					Instance:        nc.instance,
 					UpstreamModel:   nc.address.ProviderModelID,
@@ -92,15 +96,15 @@ func (s *Server) handleNonStreamingChat(w http.ResponseWriter, r *http.Request, 
 				}
 			}
 		}
-		final = chatAttempt{credential: credential, result: result, err: err}
+		exec.final = chatAttempt{credential: credential, result: result, err: err}
 		if shouldRecordChatHealth(result) {
-			s.recordHealth(r.Context(), healthFromChatAttempt(nc.address, final))
+			s.recordHealth(r.Context(), healthFromChatAttempt(nc.address, exec.final))
 		}
 		if result.ErrorClass == "upstream_auth_failed" || !retryableChatAttempt(result, err) || i == len(nc.credentials)-1 {
 			break
 		}
 		next := nc.credentials[i+1]
-		fallbackEvents = append(fallbackEvents, metadata.FallbackEvent{
+		exec.fallbackEvents = append(exec.fallbackEvents, metadata.FallbackEvent{
 			OccurredAt:         time.Now(),
 			ProviderInstanceID: nc.address.ProviderInstanceID,
 			ModelID:            nc.address.ProviderModelID,
@@ -110,40 +114,59 @@ func (s *Server) handleNonStreamingChat(w http.ResponseWriter, r *http.Request, 
 			AllowedByPolicy:    true,
 		})
 	}
+	return exec
+}
+
+func (s *Server) recordNonStreamingChat(r *http.Request, nc nonStreamContext, exec nonStreamExecution, status int, errorClass string) int64 {
+	recordCtx, cancel := nonStreamRecordContext(r, errorClass)
+	defer cancel()
+	requestID, _ := s.recordWithID(recordCtx, metadata.Request{
+		StartedAt:                 nc.start,
+		ClientTokenID:             nc.token.ID,
+		CredentialID:              exec.final.credential.ID,
+		RequestedProviderInstance: nc.address.ProviderInstanceID,
+		RequestedModel:            nc.address.ProviderModelID,
+		ResolvedProviderInstance:  nc.address.ProviderInstanceID,
+		ResolvedModel:             resolvedChatModel(nc.address.ProviderModelID, exec.final.result.ResolvedModel),
+		HTTPStatus:                status,
+		ErrorClass:                errorClass,
+		RetryCount:                exec.authRetries + len(exec.fallbackEvents),
+		FallbackCount:             len(exec.fallbackEvents),
+		FallbackReason:            fallbackReason(exec.fallbackEvents),
+		PromptTokens:              exec.final.result.Usage.PromptTokens,
+		CompletionTokens:          exec.final.result.Usage.CompletionTokens,
+		TotalTokens:               exec.final.result.Usage.TotalTokens,
+		ReasoningTokens:           exec.final.result.Usage.ReasoningTokens,
+		CacheHitTokens:            exec.final.result.Usage.CachedTokens,
+		CacheWriteTokens:          exec.final.result.Usage.CacheWriteTokens,
+		CostMicrounits:            exec.final.result.Usage.CostMicrounits,
+		TotalLatencyMS:            time.Since(nc.start).Milliseconds(),
+	})
+	s.recordFallbacks(recordCtx, requestID, exec.fallbackEvents)
+	return requestID
+}
+
+func nonStreamRecordContext(r *http.Request, errorClass string) (context.Context, context.CancelFunc) {
+	if errorClass != "client_disconnected" {
+		return r.Context(), func() {}
+	}
+	return context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
+}
+
+func nonStreamStatusAndError(final chatAttempt) (int, string) {
 	status := localChatStatus(final.result, final.err)
 	errorClass := localChatErrorClass(final.result, final.err, status)
 	if final.credential.Kind == provider.CredentialKindOAuthAccess && final.result.ErrorClass != "" {
 		errorClass = final.result.ErrorClass
 	}
-	recordCtx := r.Context()
-	if errorClass == "client_disconnected" {
-		var cancel context.CancelFunc
-		recordCtx, cancel = context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
-		defer cancel()
-	}
-	requestID, _ := s.recordWithID(recordCtx, metadata.Request{
-		StartedAt:                 nc.start,
-		ClientTokenID:             nc.token.ID,
-		CredentialID:              final.credential.ID,
-		RequestedProviderInstance: nc.address.ProviderInstanceID,
-		RequestedModel:            nc.address.ProviderModelID,
-		ResolvedProviderInstance:  nc.address.ProviderInstanceID,
-		ResolvedModel:             resolvedChatModel(nc.address.ProviderModelID, final.result.ResolvedModel),
-		HTTPStatus:                status,
-		ErrorClass:                errorClass,
-		RetryCount:                authRetries + len(fallbackEvents),
-		FallbackCount:             len(fallbackEvents),
-		FallbackReason:            fallbackReason(fallbackEvents),
-		PromptTokens:              final.result.Usage.PromptTokens,
-		CompletionTokens:          final.result.Usage.CompletionTokens,
-		TotalTokens:               final.result.Usage.TotalTokens,
-		ReasoningTokens:           final.result.Usage.ReasoningTokens,
-		CacheHitTokens:            final.result.Usage.CachedTokens,
-		CacheWriteTokens:          final.result.Usage.CacheWriteTokens,
-		CostMicrounits:            final.result.Usage.CostMicrounits,
-		TotalLatencyMS:            time.Since(nc.start).Milliseconds(),
-	})
-	s.recordFallbacks(recordCtx, requestID, fallbackEvents)
+	return status, errorClass
+}
+
+func (s *Server) handleNonStreamingChat(w http.ResponseWriter, r *http.Request, nc nonStreamContext) {
+	exec := s.executeNonStreamingChat(r, nc)
+	final := exec.final
+	status, errorClass := nonStreamStatusAndError(final)
+	s.recordNonStreamingChat(r, nc, exec, status, errorClass)
 	if errorClass == "client_disconnected" {
 		return
 	}

@@ -240,10 +240,12 @@ func marshalCodexResponsesRequest(req openai.ChatCompletionRequest, upstreamMode
 		Tools:             []any{},
 		ToolChoice:        "auto",
 		ParallelToolCalls: model.SupportsParallelToolCalls,
-		Store:             false,
-		Stream:            true,
-		Include:           []string{},
-		PromptCacheKey:    ids.ThreadID,
+		// Privacy boundary: ilonasin remains stateless with Codex backends.
+		// Do not ask upstream to persist prompts, completions, or response state.
+		Store:          false,
+		Stream:         true,
+		Include:        []string{},
+		PromptCacheKey: ids.ThreadID,
 		ClientMetadata: map[string]string{
 			"x-codex-installation-id": ids.InstallationID,
 		},

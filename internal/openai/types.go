@@ -241,6 +241,12 @@ type ChatCompletionMetadata struct {
 	ResolvedModel string
 }
 
+type ChatCompletionMessageResult struct {
+	ChatCompletionMetadata
+	Content      string
+	HasToolCalls bool
+}
+
 func MessageContentString(msg Message) (string, error) {
 	var text string
 	if err := json.Unmarshal(msg.Content, &text); err != nil {
@@ -429,6 +435,26 @@ func MarshalUpstreamChatRequest(req ChatCompletionRequest, upstreamModel string)
 }
 
 func ExtractChatCompletionMetadata(body []byte) (ChatCompletionMetadata, error) {
+	metadata, _, err := extractChatCompletion(body, false)
+	if err != nil {
+		return ChatCompletionMetadata{}, err
+	}
+	return metadata, nil
+}
+
+func ExtractChatCompletionMessageResult(body []byte) (ChatCompletionMessageResult, error) {
+	metadata, message, err := extractChatCompletion(body, true)
+	if err != nil {
+		return ChatCompletionMessageResult{}, err
+	}
+	return ChatCompletionMessageResult{
+		ChatCompletionMetadata: metadata,
+		Content:                message.Content,
+		HasToolCalls:           len(message.ToolCalls) > 0,
+	}, nil
+}
+
+func extractChatCompletion(body []byte, includeMessage bool) (ChatCompletionMetadata, chatCompletionMessage, error) {
 	var resp struct {
 		Object  string            `json:"object"`
 		Model   json.RawMessage   `json:"model"`
@@ -448,26 +474,26 @@ func ExtractChatCompletionMetadata(body []byte) (ChatCompletionMetadata, error) 
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return ChatCompletionMetadata{}, err
+		return ChatCompletionMetadata{}, chatCompletionMessage{}, err
 	}
 	if resp.Object != "chat.completion" {
-		return ChatCompletionMetadata{}, fmt.Errorf("upstream response object %q is unsupported", resp.Object)
+		return ChatCompletionMetadata{}, chatCompletionMessage{}, fmt.Errorf("upstream response object %q is unsupported", resp.Object)
 	}
 	if len(resp.Choices) == 0 {
-		return ChatCompletionMetadata{}, errors.New("upstream response choices are missing")
+		return ChatCompletionMetadata{}, chatCompletionMessage{}, errors.New("upstream response choices are missing")
 	}
 	for i, choice := range resp.Choices {
 		if len(bytes.TrimSpace(choice)) == 0 || bytes.Equal(bytes.TrimSpace(choice), []byte("null")) {
-			return ChatCompletionMetadata{}, fmt.Errorf("upstream response choices[%d] is empty", i)
+			return ChatCompletionMetadata{}, chatCompletionMessage{}, fmt.Errorf("upstream response choices[%d] is empty", i)
 		}
 	}
 	if resp.Usage == nil {
-		return ChatCompletionMetadata{}, errors.New("upstream response usage is missing")
+		return ChatCompletionMetadata{}, chatCompletionMessage{}, errors.New("upstream response usage is missing")
 	}
 	if resp.Usage.PromptTokens == nil || resp.Usage.CompletionTokens == nil || resp.Usage.TotalTokens == nil {
-		return ChatCompletionMetadata{}, errors.New("upstream response usage token fields are missing")
+		return ChatCompletionMetadata{}, chatCompletionMessage{}, errors.New("upstream response usage token fields are missing")
 	}
-	return ChatCompletionMetadata{
+	metadata := ChatCompletionMetadata{
 		ResolvedModel: safeResolvedModelFromRaw(resp.Model),
 		Usage: Usage{
 			PromptTokens:     *resp.Usage.PromptTokens,
@@ -477,7 +503,41 @@ func ExtractChatCompletionMetadata(body []byte) (ChatCompletionMetadata, error) 
 			CachedTokens:     firstPositive(resp.Usage.PromptTokensDetails.CachedTokens, resp.Usage.PromptCacheHitTokens),
 			CacheWriteTokens: positiveInt(resp.Usage.PromptTokensDetails.CacheWriteTokens),
 		},
-	}, nil
+	}
+	if !includeMessage {
+		return metadata, chatCompletionMessage{}, nil
+	}
+	message, err := chatCompletionChoiceMessage(resp.Choices[0])
+	if err != nil {
+		return ChatCompletionMetadata{}, chatCompletionMessage{}, err
+	}
+	return metadata, message, nil
+}
+
+type chatCompletionMessage struct {
+	Content   string
+	ToolCalls []json.RawMessage
+}
+
+func chatCompletionChoiceMessage(choice json.RawMessage) (chatCompletionMessage, error) {
+	var parsed struct {
+		Message struct {
+			Content   json.RawMessage   `json:"content"`
+			ToolCalls []json.RawMessage `json:"tool_calls"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal(choice, &parsed); err != nil {
+		return chatCompletionMessage{}, fmt.Errorf("upstream response choice is invalid")
+	}
+	content := strings.TrimSpace(string(parsed.Message.Content))
+	if content == "" || content == "null" {
+		return chatCompletionMessage{ToolCalls: parsed.Message.ToolCalls}, nil
+	}
+	var text string
+	if err := json.Unmarshal(parsed.Message.Content, &text); err != nil {
+		return chatCompletionMessage{}, errors.New("upstream response message content is unsupported")
+	}
+	return chatCompletionMessage{Content: text, ToolCalls: parsed.Message.ToolCalls}, nil
 }
 
 func ExtractUsage(body []byte) (Usage, error) {

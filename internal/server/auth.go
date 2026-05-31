@@ -49,8 +49,14 @@ func (s *Server) logAttrs(r *http.Request, level slog.Level, message string, att
 
 func routeLabel(r *http.Request) string {
 	switch {
+	case r.Method == http.MethodGet && r.URL.Path == "/models":
+		return "models"
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/models":
 		return "v1_models"
+	case r.Method == http.MethodPost && r.URL.Path == "/responses":
+		return "responses"
+	case r.Method == http.MethodPost && r.URL.Path == "/v1/responses":
+		return "v1_responses"
 	case r.Method == http.MethodPost && r.URL.Path == "/v1/chat/completions":
 		return "v1_chat_completions"
 	default:

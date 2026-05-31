@@ -2463,6 +2463,16 @@ func (u *serveCheckUpstream) handleServeCheckCodexResponses(w http.ResponseWrite
 			return
 		}
 	}
+	if body.Model == "codex-local-developer" {
+		if body.Instructions != "codex top instructions\n\ncodex developer marker" || len(body.Input) != 1 {
+			http.Error(w, "bad local responses developer input", http.StatusBadRequest)
+			return
+		}
+		if body.Input[0].Type != "message" || body.Input[0].Role != "user" || len(body.Input[0].Content) != 1 || body.Input[0].Content[0].Type != "input_text" || body.Input[0].Content[0].Text != "check" {
+			http.Error(w, "bad local responses developer user input", http.StatusBadRequest)
+			return
+		}
+	}
 	if body.Model == "codex-system-only" {
 		if body.Instructions != "system only" || len(body.Input) != 0 {
 			http.Error(w, "bad system-only input", http.StatusBadRequest)
@@ -3554,6 +3564,172 @@ func exerciseCodexChatCheck(ctx context.Context, base, token string, fakeUpstrea
 	}
 	if err := assertCodexChatNoLeak(ctx, store); err != nil {
 		return err
+	}
+	return nil
+}
+
+func exerciseLocalResponsesCheck(ctx context.Context, base, token string, fakeUpstream *serveCheckUpstream, store *sqlite.Store) error {
+	successBody := []byte(`{"model":"codex/gpt-5.5-codex","instructions":"codex system marker","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"check"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"prior"}]}],"tools":[],"tool_choice":"auto","parallel_tool_calls":true,"store":false,"stream":true,"include":[],"prompt_cache_key":"local-responses-cache-key","client_metadata":{"x-codex-installation-id":"local-responses-installation"}}`)
+	status, contentType, events, respBody, err := postStream(base+"/v1/responses", token, successBody)
+	if err != nil || status != http.StatusOK || !strings.HasPrefix(contentType, "text/event-stream") {
+		return fmt.Errorf("local responses success status=%d content_type=%q err=%v", status, contentType, err)
+	}
+	if err := assertLocalResponsesSSE(events, respBody, "codex ok"); err != nil {
+		return err
+	}
+	if !fakeUpstream.sawExpected("/responses", "gpt-5.5-codex") {
+		return fmt.Errorf("local responses did not call codex backend responses")
+	}
+	if err := assertCodexChatMetadata(ctx, store, "gpt-5.5-codex", http.StatusOK, "", 3, 4, 7, 2, 1); err != nil {
+		return err
+	}
+	if err := assertHealthSuccess(ctx, store, "codex", "gpt-5.5-codex"); err != nil {
+		return err
+	}
+	developerBody := []byte(`{"model":"codex/codex-local-developer","instructions":"codex top instructions","input":[{"type":"message","role":"developer","content":[{"type":"input_text","text":"codex developer marker"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"check"}]}],"store":false,"stream":true}`)
+	status, _, events, respBody, err = postStream(base+"/v1/responses", token, developerBody)
+	if err != nil || status != http.StatusOK {
+		return fmt.Errorf("local responses developer status=%d err=%v", status, err)
+	}
+	if err := assertLocalResponsesSSE(events, respBody, "codex ok"); err != nil {
+		return err
+	}
+	if !fakeUpstream.sawExpected("/responses", "codex-local-developer") {
+		return fmt.Errorf("local responses developer did not call codex backend responses")
+	}
+	if err := assertLatestCodexChatMetadata(ctx, store, "codex-local-developer", http.StatusOK, ""); err != nil {
+		return err
+	}
+	optionsBody := []byte(`{"model":"codex/codex-options","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"check"}]}],"reasoning":{"effort":"minimal","summary":"none"},"text":{"verbosity":"high"},"service_tier":"fast","store":false,"stream":true,"include":["reasoning.encrypted_content"]}`)
+	status, _, events, respBody, err = postStream(base+"/v1/responses", token, optionsBody)
+	if err != nil || status != http.StatusOK {
+		return fmt.Errorf("local responses options status=%d err=%v", status, err)
+	}
+	if err := assertLocalResponsesSSE(events, respBody, "codex ok"); err != nil {
+		return err
+	}
+	if !fakeUpstream.sawExpected("/responses", "codex-options") {
+		return fmt.Errorf("local responses options did not call codex backend responses")
+	}
+	if err := assertLatestCodexChatMetadata(ctx, store, "codex-options", http.StatusOK, ""); err != nil {
+		return err
+	}
+	bareBody := []byte(`{"model":"codex/codex-mixed-text","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"check"}]}],"tools":[{"type":"function","name":"ignored_tool","description":"ignored","parameters":{"type":"object","properties":{}}}],"tool_choice":"auto","parallel_tool_calls":false,"store":false,"stream":true,"include":[]}`)
+	status, _, events, respBody, err = postStream(base+"/responses", token, bareBody)
+	if err != nil || status != http.StatusOK {
+		return fmt.Errorf("bare local responses status=%d err=%v", status, err)
+	}
+	if err := assertLocalResponsesSSE(events, respBody, "codex done text"); err != nil {
+		return err
+	}
+	if !fakeUpstream.sawExpected("/responses", "codex-mixed-text") {
+		return fmt.Errorf("bare local responses did not call codex backend responses")
+	}
+	storeTrueModel := "local-responses-store-true"
+	storeTrueBody := []byte(fmt.Sprintf(`{"model":"codex/%s","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"check"}]}],"store":true,"stream":true}`, storeTrueModel))
+	if status, err := postStatus(base+"/v1/responses", token, storeTrueBody); err != nil || status != http.StatusBadRequest {
+		return fmt.Errorf("local responses store:true status=%d err=%v", status, err)
+	}
+	if fakeUpstream.sawExpected("/responses", storeTrueModel) {
+		return fmt.Errorf("local responses store:true reached upstream")
+	}
+	imageModel := "local-responses-image"
+	imageBody := []byte(fmt.Sprintf(`{"model":"codex/%s","input":[{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,AA==%s"}]}],"store":false,"stream":true}`, imageModel, imageURLPrivacyMarker))
+	if status, err := postStatus(base+"/v1/responses", token, imageBody); err != nil || status != http.StatusBadRequest {
+		return fmt.Errorf("local responses image status=%d err=%v", status, err)
+	}
+	if fakeUpstream.sawExpected("/responses", imageModel) {
+		return fmt.Errorf("local responses image reached upstream")
+	}
+	for _, tc := range []struct {
+		name  string
+		model string
+		body  string
+	}{
+		{
+			name:  "previous_response_id",
+			model: "local-responses-prev-state",
+			body:  `{"model":"codex/local-responses-prev-state","previous_response_id":"resp_private_state_marker","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"check"}]}],"store":false,"stream":true}`,
+		},
+		{
+			name:  "background",
+			model: "local-responses-background",
+			body:  `{"model":"codex/local-responses-background","background":true,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"check"}]}],"store":false,"stream":true}`,
+		},
+		{
+			name:  "metadata",
+			model: "local-responses-metadata",
+			body:  `{"model":"codex/local-responses-metadata","metadata":{"private":"responses-metadata-marker"},"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"check"}]}],"store":false,"stream":true}`,
+		},
+		{
+			name:  "item-id",
+			model: "local-responses-item-id",
+			body:  `{"model":"codex/local-responses-item-id","input":[{"type":"message","id":"responses-item-id-marker","role":"user","content":[{"type":"input_text","text":"check"}]}],"store":false,"stream":true}`,
+		},
+		{
+			name:  "item-status",
+			model: "local-responses-item-status",
+			body:  `{"model":"codex/local-responses-item-status","input":[{"type":"message","status":"responses-status-marker","role":"user","content":[{"type":"input_text","text":"check"}]}],"store":false,"stream":true}`,
+		},
+		{
+			name:  "function-output",
+			model: "local-responses-function-output",
+			body:  `{"model":"codex/local-responses-function-output","input":[{"type":"function_call_output","call_id":"responses-call-marker","output":"responses-tool-result-marker"}],"store":false,"stream":true}`,
+		},
+		{
+			name:  "file-input",
+			model: "local-responses-file",
+			body:  `{"model":"codex/local-responses-file","input":[{"type":"message","role":"user","content":[{"type":"input_file","file_id":"responses-file-marker"}]}],"store":false,"stream":true}`,
+		},
+	} {
+		if status, err := postStatus(base+"/v1/responses", token, []byte(tc.body)); err != nil || status != http.StatusBadRequest {
+			return fmt.Errorf("local responses rejected %s status=%d err=%v", tc.name, status, err)
+		}
+		if fakeUpstream.sawExpected("/responses", tc.model) {
+			return fmt.Errorf("local responses %s reached upstream", tc.name)
+		}
+	}
+	for _, marker := range []string{
+		imageURLPrivacyMarker,
+		"local-responses-cache-key",
+		"local-responses-installation",
+		"resp_private_state_marker",
+		"responses-metadata-marker",
+		"responses-item-id-marker",
+		"responses-status-marker",
+		"responses-call-marker",
+		"responses-tool-result-marker",
+		"responses-file-marker",
+	} {
+		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
+			return err
+		}
+	}
+	if err := assertCodexChatNoLeak(ctx, store); err != nil {
+		return err
+	}
+	return nil
+}
+
+func assertLocalResponsesSSE(events []string, body []byte, content string) error {
+	if len(events) != 3 {
+		return fmt.Errorf("local responses emitted %d events", len(events))
+	}
+	for _, typ := range []string{"response.created", "response.output_item.done", "response.completed"} {
+		if !bytes.Contains(body, []byte(`"type":"`+typ+`"`)) {
+			return fmt.Errorf("local responses missing %s", typ)
+		}
+	}
+	if !bytes.Contains(body, []byte(`"type":"output_text"`)) || !bytes.Contains(body, []byte(content)) {
+		return fmt.Errorf("local responses missing assistant output")
+	}
+	if !bytes.Contains(body, []byte(`"usage"`)) || !bytes.Contains(body, []byte(`"input_tokens"`)) || !bytes.Contains(body, []byte(`"output_tokens"`)) || !bytes.Contains(body, []byte(`"total_tokens"`)) {
+		return fmt.Errorf("local responses missing usage")
+	}
+	for _, forbidden := range []string{"raw-provider-response-id-marker", costDetailsMarker, "raw codex", imageURLPrivacyMarker} {
+		if bytes.Contains(body, []byte(forbidden)) {
+			return fmt.Errorf("local responses leaked forbidden marker %q", forbidden)
+		}
 	}
 	return nil
 }
@@ -8197,6 +8373,24 @@ func assertHealthEvents(ctx context.Context, store *sqlite.Store, providerInstan
 	}
 	if failures == 0 || successes == 0 || invalid != 0 {
 		return fmt.Errorf("health events failures=%d successes=%d invalid=%d", failures, successes, invalid)
+	}
+	return nil
+}
+
+func assertHealthSuccess(ctx context.Context, store *sqlite.Store, providerInstanceID, modelID string) error {
+	var count int
+	err := store.DB.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM health_events
+		WHERE provider_instance_id = ?
+			AND model_id = ?
+			AND event_class = 'upstream_success'
+	`, providerInstanceID, modelID).Scan(&count)
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return fmt.Errorf("health success missing provider=%s model=%s", providerInstanceID, modelID)
 	}
 	return nil
 }

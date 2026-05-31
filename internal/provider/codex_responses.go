@@ -143,6 +143,7 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 			slog.Int("status", http.StatusBadGateway),
 			slog.Int64("duration_ms", durationMS(start)),
 			slog.String("error_class", errorClass),
+			slog.String("error_reason", codexReadErrorReason(err)),
 		)
 		return ChatResult{StatusCode: http.StatusBadGateway, ContentType: "application/json", ErrorClass: errorClass, Latency: time.Since(start)}, err
 	}
@@ -714,10 +715,14 @@ func (state *codexResponseParseState) aggregateBytes() int {
 }
 
 type codexEventFailure struct {
-	class string
+	class  string
+	reason string
 }
 
 func (e codexEventFailure) Error() string {
+	if e.reason != "" {
+		return e.reason
+	}
 	return e.class
 }
 
@@ -727,6 +732,14 @@ func codexEventErrorClass(err error) string {
 		return failure.class
 	}
 	return "upstream_invalid_response"
+}
+
+func codexReadErrorReason(err error) string {
+	var failure codexEventFailure
+	if errors.As(err, &failure) && failure.reason != "" {
+		return failure.reason
+	}
+	return err.Error()
 }
 
 func handleCodexEvent(data []byte, state *codexResponseParseState) error {
@@ -779,8 +792,11 @@ func handleCodexEvent(data []byte, state *codexResponseParseState) error {
 	if err := json.Unmarshal(data, &event); err != nil {
 		return err
 	}
-	if unsupportedCodexToolEvent(event.Type) || (event.Item != nil && unsupportedCodexOutputItem(event.Item.Type)) {
-		return codexEventFailure{class: "upstream_invalid_response"}
+	if unsupportedCodexToolEvent(event.Type) {
+		return codexEventFailure{class: "upstream_invalid_response", reason: fmt.Sprintf("unsupported codex event type %q", event.Type)}
+	}
+	if event.Item != nil && unsupportedCodexOutputItem(event.Item.Type) {
+		return codexEventFailure{class: "upstream_invalid_response", reason: fmt.Sprintf("unsupported codex output item type %q", event.Item.Type)}
 	}
 	switch event.Type {
 	case "response.output_item.added":

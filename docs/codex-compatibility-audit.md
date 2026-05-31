@@ -4,6 +4,13 @@ Date: 2026-06-01
 
 Audited worktree commit: `9ea0ebf`
 
+Current implementation note: plans 092 through 094 changed several findings
+below. The original live audit remains useful historical evidence, but local
+Responses now has stateless routes, explicit `input_image` decoding, function
+tool definitions, function-call SSE output, and function-call-output follow-up
+input in direct smoke coverage. These fixes still need a fresh full live Codex
+switch-gate smoke before declaring normal Codex use ready.
+
 Codex CLI version: `codex-cli 0.135.0`
 
 ## Summary
@@ -16,16 +23,16 @@ root and `/v1` provider base URLs with the real credentials configured in
 `~/.ilonasin`. Codex CLI text also works through the real DeepSeek and
 OpenRouter provider instances when they are addressed through ilonasin.
 
-The blocker is normal agent behavior. Current Codex sends tool definitions, but
-the local Responses route does not preserve or implement them. A workspace edit
-task exited successfully but did not modify the file. A simulated upstream
-function call produces a local `501 responses_tool_calls_unsupported`, and
-Codex retries the failing turn. Multimodal use is also not compatible yet:
-`codex exec --image` exited successfully in the live smoke, but explicit
-Responses `input_image` is rejected by the local decoder.
+The historical blocker was normal agent behavior: tool definitions,
+function-call output, function-call-output follow-up input, and explicit
+`input_image` were not supported at audited commit `9ea0ebf`. Plans 092 through
+094 implemented direct local support for those families. Remaining switch risk
+is now broader Codex parity: fresh full live smokes, hosted or deferred tool
+families outside local function tools, developer/system ordering, reasoning
+effort, service tier behavior, retry UX, and privacy scans.
 
-Do not switch normal Codex use to `ilonasin` yet. Text-only smoke use is
-possible, but normal coding-agent use needs tool-loop support first.
+Do not switch normal Codex use to `ilonasin` yet. Text-only and direct local
+function-tool smokes are useful, but the full switch gate below is not complete.
 
 ## Safety
 
@@ -83,12 +90,12 @@ compatible coding-agent backend.
 | Reasoning minimal | Codex CLI config | Fail | Live `model_reasoning_effort="minimal"` timed out after repeated 502 `upstream_http_error` rows. | Blocking for reasoning-effort compatibility. | Inspect Codex option mapping and upstream request shape. |
 | Reasoning high | Codex CLI config | Partial | Live `model_reasoning_effort="high"` exited 0 with one 200 row. Direct local Codex reasoning API probes still returned 502. | Inconsistent, not enough for switching. | Add deterministic option-shape smoke and fix failing effort values. |
 | Fast or priority service tier | Codex CLI config | Fail | Live fast/service-tier probe timed out after repeated 502 `upstream_http_error` rows. | Blocking for fast-mode compatibility. | Fix service-tier mapping for Codex backend. |
-| Image via `--image` | Responses input | Partial | Live `codex exec --image` exited 0 with one 200 row, but direct explicit `input_image` returned 400 unsupported. | Blocking for multimodal use. | Implement and verify local Responses image input support. |
-| Explicit Responses image input | `POST /v1/responses` | Fail | Live direct API probe returned 400 before upstream dispatch. | Blocking for multimodal use. | Add local Responses image decoder and provider translation. |
-| Tool definitions | Responses request | Fail | Direct recorder observed Codex sending tool definitions. Ilonasin forwarded zero tools to the fake upstream. | Blocking for normal coding-agent use. | Preserve, translate, and support Responses tools. |
-| Tool-call loop | Responses output and follow-up | Fail | Fake upstream returned a function-call shape. Local route returned `501 responses_tool_calls_unsupported`, then Codex retried. | Blocking for normal coding-agent use. | Implement local Responses tool-call event output and follow-up input handling. |
+| Image via `--image` | Responses input | Partial | Live `codex exec --image` exited 0 with one 200 row. Plan 094 added direct explicit `input_image` local smoke coverage after this audit. | Needs fresh full live smoke. | Keep covered in switch-gate smokes. |
+| Explicit Responses image input | `POST /v1/responses` | Fixed locally after audit | At `9ea0ebf`, live direct API probe returned 400 before upstream dispatch. Plan 094 added local decoder and fake-upstream smoke coverage. | Needs fresh full live smoke. | Keep covered in switch-gate smokes. |
+| Tool definitions | Responses request | Fixed locally after audit | Direct recorder observed Codex sending tool definitions. Plan 094 now preserves representable function tools and filters unsupported Codex-only tool families. | Function tools improved; hosted/deferred tool parity remains limited. | Audit hosted/deferred tool families separately. |
+| Tool-call loop | Responses output and follow-up | Fixed locally after audit | At `9ea0ebf`, fake upstream returned a function-call shape and local route returned `501`. Plan 094 added function-call SSE output and function-call-output follow-up input. | Needs fresh full live smoke. | Keep covered in switch-gate smokes. |
 | Workspace edit through Codex CLI | Local workspace | Fail | Live `codex exec` exited 0, but the target file was unchanged. | Blocking for normal coding-agent use. | Implement tool preservation and tool-loop handling. |
-| Function-call output input | `POST /v1/responses` | Fail | Live direct API probe returned 400 unsupported for `function_call_output`. | Blocking for normal coding-agent use. | Decode tool-output follow-up input. |
+| Function-call output input | `POST /v1/responses` | Fixed locally after audit | At `9ea0ebf`, live direct API probe returned 400 unsupported for `function_call_output`. Plan 094 added direct local smoke coverage for function-call-output follow-up input. | Needs fresh full live smoke. | Keep covered in switch-gate smokes. |
 | Direct Codex chat text | `POST /v1/chat/completions` | Pass | Live direct API probe returned 200 with assistant message content. | Existing direct chat path still works. | Keep covered in smokes. |
 | Direct Codex chat reasoning/service tier | `POST /v1/chat/completions` | Fail | Live direct API probe returned 502 `upstream_http_error`. | Relevant to Codex option compatibility. | Fix Codex provider option mapping. |
 | DeepSeek JSON mode | `POST /v1/chat/completions` | Pass | Live direct API probe returned 200 with assistant message content. | Not a Codex blocker. | Keep provider smokes separate. |
@@ -100,19 +107,17 @@ compatible coding-agent backend.
 
 ## Blockers
 
-1. Tool-loop support is missing in local Responses.
+1. Full Codex tool parity is not proven.
 
-   Codex sends tool definitions as part of normal requests. The local route
-   currently accepts the envelope but drops the tool definitions before
-   upstream dispatch. If the upstream returns a function-call output, local
-   Responses returns `501 responses_tool_calls_unsupported`. This is the main
-   reason normal Codex use should not switch yet.
+   Function tool definitions, function-call SSE output, and
+   function-call-output follow-up input are now covered locally. Hosted,
+   deferred, namespaced, MCP, custom, tool-search, shell, and patch-style tool
+   families are still not full parity and need separate compatibility work.
 
-2. Multimodal support is not proven.
+2. Multimodal support needs a fresh full live switch-gate smoke.
 
-   The live `--image` probe exited 0, but explicit `input_image` still returns
-   400 from local Responses. That means the route is not multimodal-compatible
-   even if one CLI image smoke produced a text result.
+   The original explicit `input_image` failure is fixed locally, but this audit
+   has not been rerun end to end after plans 092 through 094.
 
 3. Reasoning and service tier behavior is unreliable.
 
@@ -123,18 +128,16 @@ compatible coding-agent backend.
 
 4. Health semantics are upstream-centered.
 
-   A tool-call probe can record upstream success and still fail locally with a
-   route-level `501`, because the fake upstream responded successfully before
-   local Responses rejected unsupported output. That is explainable, but the
-   report and future UI should distinguish upstream health from local route
-   compatibility.
+   The historical route-level `501` from a function-call output is fixed
+   locally, but the larger reporting issue remains: future UI should
+   distinguish upstream health from local route compatibility for unsupported
+   hosted, deferred, or namespaced Codex tool families.
 
 ## Next Plans
 
-- Plan 094: implement local Responses tool definitions, function-call event
+- Plan 094: implemented local Responses tool definitions, function-call event
   output, and tool-output follow-up input handling.
-- Plan 095: implement and verify local Responses multimodal input plus
-  Codex-compatible model capability metadata.
+- Plan 095: implement and verify Codex-compatible model capability metadata.
 - Plan 096: fix Codex reasoning-effort, verbosity, and fast or priority
   service-tier provider option mapping, with live Codex CLI smokes for each
   supported value.

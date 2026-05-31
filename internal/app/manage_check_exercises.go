@@ -416,11 +416,42 @@ func exerciseModelCacheCheck(ctx context.Context, registry provider.Registry, cf
 	}}); err != nil {
 		return err
 	}
+	if err := store.ReplaceModelCache(ctx, "codex", []provider.ModelMetadata{{
+		ProviderInstanceID: "codex",
+		ModelID:            "gpt-5.5-codex",
+		DisplayName:        "GPT 5.5 Codex",
+		CapabilityFlags:    "chat,parallel_tool_calls,reasoning,responses,service_tier,stream,tools,vision",
+		ContextLength:      0,
+		UpdatedAt:          now,
+	}}); err != nil {
+		return err
+	}
 	snapshot, err := management.Service{Registry: registry, ModelCache: store}.LoadManagementSnapshot(ctx)
 	if err != nil {
 		return err
 	}
+	if err := assertManagementCodexModelCapabilities(snapshot.ModelCache); err != nil {
+		return err
+	}
 	return tui.ExerciseModelCacheSummary(ctx, cfg, registry, &snapshotCheckClient{resp: snapshot})
+}
+
+func assertManagementCodexModelCapabilities(rows []management.ModelMetadata) error {
+	for _, row := range rows {
+		if row.ProviderInstanceID != "codex" || row.ModelID != "gpt-5.5-codex" {
+			continue
+		}
+		if row.Capabilities != "chat,parallel_tool_calls,reasoning,responses,service_tier,stream,tools,vision" {
+			return fmt.Errorf("management snapshot missing codex model capabilities")
+		}
+		for _, forbidden := range []string{"base_instructions", "priority", "flex", "low", "medium", "high", "xhigh", "secret"} {
+			if strings.Contains(row.DisplayName, forbidden) || strings.Contains(row.Capabilities, forbidden) {
+				return fmt.Errorf("management snapshot leaked codex model metadata")
+			}
+		}
+		return nil
+	}
+	return fmt.Errorf("management snapshot missing codex model capabilities")
 }
 
 func exerciseObservabilityCheck(ctx context.Context, registry provider.Registry, cfg config.Config) error {

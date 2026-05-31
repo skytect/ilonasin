@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -231,7 +232,7 @@ func normalizeCodexModels(instance Instance, body []byte) ([]ModelMetadata, erro
 		meta := ModelMetadata{
 			ProviderInstanceID: instance.ID,
 			ModelID:            id,
-			CapabilityFlags:    "chat,reasoning,stream",
+			CapabilityFlags:    codexCapabilityFlags(item),
 			UpdatedAt:          now,
 		}
 		if name, ok := item["display_name"].(string); ok {
@@ -247,6 +248,75 @@ func normalizeCodexModels(instance Instance, body []byte) ([]ModelMetadata, erro
 		return models[i].ModelID < models[j].ModelID
 	})
 	return models, nil
+}
+
+func codexCapabilityFlags(item map[string]any) string {
+	flags := map[string]bool{
+		"chat":      true,
+		"responses": true,
+		"stream":    true,
+		"tools":     true,
+	}
+	if codexStringField(item, "default_reasoning_level") != "" || len(codexArrayField(item, "supported_reasoning_levels")) > 0 {
+		flags["reasoning"] = true
+	}
+	if codexBoolField(item, "supports_parallel_tool_calls") {
+		flags["parallel_tool_calls"] = true
+	}
+	if hasCodexServiceTier(item) {
+		flags["service_tier"] = true
+	}
+	if hasCodexVisionCapability(item) {
+		flags["vision"] = true
+	}
+	out := make([]string, 0, len(flags))
+	for flag := range flags {
+		out = append(out, flag)
+	}
+	sort.Strings(out)
+	return strings.Join(out, ",")
+}
+
+func hasCodexServiceTier(item map[string]any) bool {
+	for _, raw := range codexArrayField(item, "service_tiers") {
+		tier, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch codexStringField(tier, "id") {
+		case "priority", "flex":
+			return true
+		}
+	}
+	return false
+}
+
+func hasCodexVisionCapability(item map[string]any) bool {
+	if _, ok := item["input_modalities"]; !ok {
+		return true
+	}
+	for _, raw := range codexArrayField(item, "input_modalities") {
+		value, ok := raw.(string)
+		if ok && value == "image" {
+			return true
+		}
+	}
+	return false
+}
+
+func codexStringField(item map[string]any, key string) string {
+	value, _ := item[key].(string)
+	return value
+}
+
+func codexBoolField(item map[string]any, key string) bool {
+	value, _ := item[key].(bool)
+	return value
+}
+
+func codexArrayField(item map[string]any, key string) []any {
+	value, _ := item[key].([]any)
+	return value
 }
 
 func validProviderModelID(id string) bool {

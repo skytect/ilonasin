@@ -2843,7 +2843,7 @@ func serveCheckCodexModelsJSON() string {
 		if slug == "codex-no-service-tier" {
 			b.WriteString(`,"display_name":"GPT 5.5 Codex","base_instructions":"codex base instructions","supports_parallel_tool_calls":true,"service_tiers":[],"raw_provider_payload":"secret"}`)
 		} else {
-			b.WriteString(`,"display_name":"GPT 5.5 Codex","base_instructions":"codex base instructions","supports_parallel_tool_calls":true,"default_reasoning_level":"medium","supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"},{"effort":"high"},{"effort":"xhigh"}],"service_tiers":[{"id":"priority"},{"id":"flex"}],"raw_provider_payload":"secret"}`)
+			b.WriteString(`,"display_name":"GPT 5.5 Codex","base_instructions":"codex base instructions","supports_parallel_tool_calls":true,"default_reasoning_level":"medium","supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"},{"effort":"high"},{"effort":"xhigh"}],"service_tiers":[{"id":"priority"},{"id":"flex"}],"input_modalities":["text","image"],"raw_provider_payload":"secret"}`)
 		}
 	}
 	b.WriteString(`]}`)
@@ -8828,8 +8828,24 @@ func assertModelCacheRows(ctx context.Context, store *sqlite.Store) error {
 		}
 		if row.ProviderInstanceID == "codex" && row.ModelID == "gpt-5.5-codex" {
 			codexFound = true
-			if row.CapabilityFlags != "chat,reasoning,stream" || row.DisplayName != "GPT 5.5 Codex" || row.ContextLength != 0 {
+			if row.CapabilityFlags != "chat,parallel_tool_calls,reasoning,responses,service_tier,stream,tools,vision" || row.DisplayName != "GPT 5.5 Codex" || row.ContextLength != 0 {
 				return fmt.Errorf("codex model cache metadata mismatch")
+			}
+			for _, forbidden := range []string{
+				"base_instructions",
+				"codex base instructions",
+				"raw_provider_payload",
+				"secret",
+				"priority",
+				"flex",
+				"low",
+				"medium",
+				"high",
+				"xhigh",
+			} {
+				if strings.Contains(row.DisplayName, forbidden) || strings.Contains(row.CapabilityFlags, forbidden) {
+					return fmt.Errorf("codex model cache leaked raw provider metadata")
+				}
 			}
 		}
 	}

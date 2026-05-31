@@ -14,6 +14,7 @@ import (
 	"ilonasin/internal/config"
 	"ilonasin/internal/credentials"
 	"ilonasin/internal/logging"
+	"ilonasin/internal/management"
 	"ilonasin/internal/server"
 	"ilonasin/internal/storage/sqlite"
 )
@@ -45,6 +46,31 @@ func ServeCheck(opts Options) error {
 	}
 	checkStore.Logger = rt.Logger
 	defer checkStore.Close()
+	checkDBPath := filepath.Join(checkDBDir, "ilonasin.sqlite")
+	mgmt, err := startManagementServer(context.Background(), rt.HomeDir, rt.ConfigPath, checkDBPath, checkStore)
+	if err != nil {
+		return err
+	}
+	defer mgmt.Close(context.Background())
+	if err := assertManagementSocketDirMode(mgmt.socketPath); err != nil {
+		return err
+	}
+	if err := exerciseManagementRouteIsolation(context.Background(), management.NewUnixLocalTokenClient(mgmt.socketPath)); err != nil {
+		return err
+	}
+	if second, err := startManagementServer(context.Background(), rt.HomeDir, rt.ConfigPath, checkDBPath, checkStore); err == nil {
+		second.Close(context.Background())
+		return fmt.Errorf("second management server replaced live socket")
+	}
+	nonSocket := filepath.Join(checkDBDir, "not-a-socket")
+	if err := os.WriteFile(nonSocket, []byte("not a socket"), 0o600); err != nil {
+		return err
+	}
+	if listener, owner, err := management.PrepareUnixListener(context.Background(), nonSocket); err == nil {
+		_ = listener.Close()
+		management.CleanupSocket(owner)
+		return fmt.Errorf("management listener replaced non-socket file")
+	}
 
 	tokenService := credentials.Service{Repo: checkStore}
 	checkNow := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
@@ -159,6 +185,9 @@ func ServeCheck(opts Options) error {
 	base := "http://" + listener.Addr().String()
 	if status, err := getStatus(base+"/v1/models", ""); err != nil || status != http.StatusUnauthorized {
 		return fmt.Errorf("unauthenticated models status=%d err=%v", status, err)
+	}
+	if status, err := getStatus(base+management.PathLocalTokens, ""); err != nil || status != http.StatusNotFound {
+		return fmt.Errorf("public management route status=%d err=%v", status, err)
 	}
 	if status, err := getStatus(base+"/v1/models", "oauth-access-secret-marker"); err != nil || status != http.StatusUnauthorized {
 		return fmt.Errorf("oauth credential authenticated as local token status=%d err=%v", status, err)

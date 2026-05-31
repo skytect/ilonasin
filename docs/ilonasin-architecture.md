@@ -14,7 +14,8 @@ configured provider instances.
 The first product target is not a hosted SaaS. It is a local service that:
 
 - exposes an OpenAI-compatible HTTP API for local clients,
-- stores mutable credentials and usage metadata in local SQLite,
+- stores mutable credentials and usage metadata in local SQLite owned by the
+  daemon,
 - uses static TOML config for provider instances and daemon bootstrap,
 - supports API-key and OAuth-style provider credentials,
 - offers a polished Bubble Tea/Lipgloss TUI for management,
@@ -124,7 +125,13 @@ SQLite is plaintext. It does not need database-level encryption in the initial
 architecture. The security posture relies on local file permissions, redaction,
 and clear user warnings.
 
-The TUI can mutate SQLite.
+The daemon owns SQLite mutation. `ilonasin manage` is a client of a local
+daemon-owned management API and should not write SQLite directly in the final
+architecture.
+
+During migration, direct TUI SQLite access is legacy implementation detail to be
+removed progressively. New management operations should be added on the
+daemon-owned management API, not as new direct TUI storage calls.
 
 SQLite stores:
 
@@ -144,7 +151,8 @@ those instances are stored in SQLite.
 
 Adding a new provider instance requires editing `config.toml` and reloading or
 restarting. Adding, refreshing, disabling, or deleting credentials for an
-existing provider instance is a TUI/SQLite operation.
+existing provider instance is a daemon management operation surfaced through
+`ilonasin manage`.
 
 ### Local API Auth
 
@@ -376,7 +384,8 @@ SQLite
   -> metadata-only usage ledger
 
 manage TUI
-  -> SQLite mutation and inspection
+  -> daemon-owned local management API
+  -> SQLite-backed mutation and inspection through the daemon
   -> OAuth/API-key auth flows
   -> usage/health views
 ```
@@ -428,12 +437,14 @@ Expected first-class views:
 - retry/fallback events,
 - local API token management.
 
-The TUI mutates SQLite only.
+The TUI talks to the daemon-owned local management API for mutable operations.
+The daemon performs SQLite reads and writes behind that management boundary.
 
 The TUI does not edit `config.toml`.
 
-Whether the TUI talks directly to SQLite or through a local admin socket is
-deferred.
+The management API should use a local-only internal transport, such as a Unix
+domain socket on Unix, and must not be exposed as part of the public
+OpenAI-compatible API surface.
 
 ## Conceptual SQLite Tables
 
@@ -473,7 +484,6 @@ parallel subagents:
 - Test framework and mocking strategy.
 - Provider adapter testing strategy.
 - Whether to use generated clients or handwritten provider adapters.
-- Whether `manage` talks directly to SQLite or through an admin API/socket.
 - XDG path support.
 - Exact Codex request fields for fast mode, reasoning effort, and subscription
   auth behavior.
@@ -494,9 +504,7 @@ Known candidate areas, not decisions:
 - Should credential records use labels visible in telemetry?
 - What is the exact policy for subscription account fallback under provider
   terms?
-- Should `manage` require the daemon to be running?
-- Should `serve` expose a separate admin socket, or should all admin state be
-  local SQLite only?
+- How should daemon management transport work on non-Unix platforms?
 - Should metadata pruning be manual, scheduled, or both?
 
 ## MVP Target

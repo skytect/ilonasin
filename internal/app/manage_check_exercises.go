@@ -14,6 +14,7 @@ import (
 
 	"ilonasin/internal/config"
 	"ilonasin/internal/credentials"
+	"ilonasin/internal/management"
 	"ilonasin/internal/metadata"
 	"ilonasin/internal/provider"
 	"ilonasin/internal/storage/sqlite"
@@ -150,7 +151,7 @@ func exerciseFallbackPolicyCheck(ctx context.Context, registry provider.Registry
 	return nil
 }
 
-func exerciseLocalTokenCheck(ctx context.Context) error {
+func exerciseLocalTokenCheck(ctx context.Context, homeDir, configPath string) error {
 	checkDBDir, err := os.MkdirTemp("", "ilonasin-manage-check-local-db-*")
 	if err != nil {
 		return err
@@ -161,7 +162,25 @@ func exerciseLocalTokenCheck(ctx context.Context) error {
 		return err
 	}
 	defer store.Close()
-	return tui.ExerciseTokenLifecycle(ctx, credentials.Service{Repo: store})
+	mgmt, err := startManagementServer(ctx, homeDir, configPath, filepath.Join(checkDBDir, "ilonasin.sqlite"), store)
+	if err != nil {
+		return err
+	}
+	client := management.NewUnixLocalTokenClient(management.SocketPath(homeDir, configPath, filepath.Join(checkDBDir, "ilonasin.sqlite")))
+	if err := exerciseManagementRouteIsolation(ctx, client); err != nil {
+		mgmt.Close(ctx)
+		return err
+	}
+	if err := tui.ExerciseTokenLifecycle(ctx, client); err != nil {
+		mgmt.Close(ctx)
+		return err
+	}
+	socketPath := mgmt.socketPath
+	mgmt.Close(ctx)
+	if _, err := os.Stat(socketPath); !os.IsNotExist(err) {
+		return fmt.Errorf("management socket was not removed")
+	}
+	return nil
 }
 
 func exerciseModelCacheCheck(ctx context.Context, registry provider.Registry, cfg config.Config) error {

@@ -10,13 +10,13 @@ const EnvName = "ILONASIN_HOME"
 
 func Resolve(envHome string) (string, error) {
 	if envHome != "" {
-		return filepath.Abs(expand(envHome))
+		return canonicalPath(expand(envHome))
 	}
 	userHome, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(userHome, ".ilonasin"), nil
+	return canonicalPath(filepath.Join(userHome, ".ilonasin"))
 }
 
 func Ensure(dir string) error {
@@ -59,4 +59,19 @@ func expand(path string) string {
 		}
 	}
 	return path
+}
+
+func canonicalPath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	eval, err := filepath.EvalSymlinks(abs)
+	if err == nil {
+		return eval, nil
+	}
+	if os.IsNotExist(err) {
+		return filepath.Clean(abs), nil
+	}
+	return "", err
 }

@@ -18,6 +18,7 @@ import (
 
 	"ilonasin/internal/config"
 	"ilonasin/internal/credentials"
+	"ilonasin/internal/management"
 	"ilonasin/internal/metadata"
 	"ilonasin/internal/provider"
 )
@@ -25,7 +26,7 @@ import (
 type Model struct {
 	cfg              config.Config
 	registry         provider.Registry
-	tokens           credentials.LocalTokenManager
+	tokens           management.LocalTokenClient
 	upstreams        credentials.UpstreamCredentialManager
 	oauth            credentials.OAuthMetadataReader
 	oauthRefresh     credentials.OAuthRefreshController
@@ -35,7 +36,7 @@ type Model struct {
 	pruner           TelemetryPruner
 	logger           *slog.Logger
 	now              func() time.Time
-	tokenRows        []credentials.LocalTokenMetadata
+	tokenRows        []management.LocalToken
 	providers        []provider.Instance
 	credentials      []credentials.UpstreamCredentialMetadata
 	fallbackPolicies []credentials.FallbackPolicyMetadata
@@ -81,11 +82,11 @@ type TelemetryPruner interface {
 	PruneTelemetryBefore(ctx context.Context, cutoff time.Time) (metadata.PruneResult, error)
 }
 
-func NewModel(cfg config.Config, registry provider.Registry, tokens credentials.LocalTokenManager, upstreams credentials.UpstreamCredentialManager, oauth credentials.OAuthMetadataReader, oauthRefresh credentials.OAuthRefreshController, oauthLogin credentials.OAuthDeviceLoginController, modelCache ModelCacheReader, observability ObservabilityReader, pruner TelemetryPruner, now func() time.Time, loggers ...*slog.Logger) Model {
+func NewModel(cfg config.Config, registry provider.Registry, tokens management.LocalTokenClient, upstreams credentials.UpstreamCredentialManager, oauth credentials.OAuthMetadataReader, oauthRefresh credentials.OAuthRefreshController, oauthLogin credentials.OAuthDeviceLoginController, modelCache ModelCacheReader, observability ObservabilityReader, pruner TelemetryPruner, now func() time.Time, loggers ...*slog.Logger) Model {
 	return Model{cfg: cfg, registry: registry, tokens: tokens, upstreams: upstreams, oauth: oauth, oauthRefresh: oauthRefresh, oauthLogin: oauthLogin, modelCache: modelCache, observability: observability, pruner: pruner, now: now, logger: firstLogger(loggers)}
 }
 
-func newCheckModel(cfg config.Config, registry provider.Registry, tokens credentials.LocalTokenManager, upstreams credentials.UpstreamCredentialManager, oauth credentials.OAuthMetadataReader, oauthRefresh credentials.OAuthRefreshController, oauthLogin credentials.OAuthDeviceLoginController, modelCache ModelCacheReader, observability ObservabilityReader, pruner TelemetryPruner, now func() time.Time, loggers ...*slog.Logger) Model {
+func newCheckModel(cfg config.Config, registry provider.Registry, tokens management.LocalTokenClient, upstreams credentials.UpstreamCredentialManager, oauth credentials.OAuthMetadataReader, oauthRefresh credentials.OAuthRefreshController, oauthLogin credentials.OAuthDeviceLoginController, modelCache ModelCacheReader, observability ObservabilityReader, pruner TelemetryPruner, now func() time.Time, loggers ...*slog.Logger) Model {
 	return Model{cfg: cfg, registry: registry, tokens: tokens, upstreams: upstreams, oauth: oauth, oauthRefresh: oauthRefresh, oauthLogin: oauthLogin, modelCache: modelCache, observability: observability, pruner: pruner, now: now, logger: firstLogger(loggers), quitOnInit: true, checkMode: true}
 }
 
@@ -143,7 +144,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "n":
 			m.clearReveal()
-			created, err := m.tokens.Create(context.Background(), "local client")
+			created, err := m.tokens.CreateLocalToken(context.Background(), management.CreateLocalTokenRequest{Label: "local client"})
 			if err != nil {
 				m.logError(context.Background(), "tui_local_token_create_failed", err)
 				m.err = err.Error()
@@ -158,7 +159,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(m.tokenRows) == 0 {
 				return m, nil
 			}
-			if err := m.tokens.Disable(context.Background(), m.tokenRows[m.selected].ID); err != nil {
+			if _, err := m.tokens.DisableLocalToken(context.Background(), management.DisableLocalTokenRequest{ID: m.tokenRows[m.selected].ID}); err != nil {
 				m.logError(context.Background(), "tui_local_token_disable_failed", err, slog.Int64("local_id", m.tokenRows[m.selected].ID))
 				m.err = err.Error()
 				return m, nil
@@ -331,7 +332,7 @@ func (m Model) View() string {
 	return b.String()
 }
 
-func Run(cfg config.Config, registry provider.Registry, tokens credentials.LocalTokenManager, upstreams credentials.UpstreamCredentialManager, oauth credentials.OAuthMetadataReader, modelCache ModelCacheReader, observability ObservabilityReader, pruner TelemetryPruner, loggers ...*slog.Logger) error {
+func Run(cfg config.Config, registry provider.Registry, tokens management.LocalTokenClient, upstreams credentials.UpstreamCredentialManager, oauth credentials.OAuthMetadataReader, modelCache ModelCacheReader, observability ObservabilityReader, pruner TelemetryPruner, loggers ...*slog.Logger) error {
 	model := NewModel(cfg, registry, tokens, upstreams, oauth, oauthRefreshController(oauth), oauthLoginController(oauth), modelCache, observability, pruner, nil, loggers...)
 	_ = model.reload()
 	_, err := tea.NewProgram(model).Run()
@@ -348,7 +349,7 @@ func oauthLoginController(oauth credentials.OAuthMetadataReader) credentials.OAu
 	return controller
 }
 
-func Check(cfg config.Config, registry provider.Registry, tokens credentials.LocalTokenManager, upstreams credentials.UpstreamCredentialManager, oauth credentials.OAuthMetadataReader, modelCache ModelCacheReader, observability ObservabilityReader, pruner TelemetryPruner, out io.Writer, loggers ...*slog.Logger) error {
+func Check(cfg config.Config, registry provider.Registry, tokens management.LocalTokenClient, upstreams credentials.UpstreamCredentialManager, oauth credentials.OAuthMetadataReader, modelCache ModelCacheReader, observability ObservabilityReader, pruner TelemetryPruner, out io.Writer, loggers ...*slog.Logger) error {
 	model := newCheckModel(cfg, registry, tokens, upstreams, oauth, oauthRefreshController(oauth), oauthLoginController(oauth), modelCache, observability, pruner, nil, loggers...)
 	_ = model.reload()
 	program := tea.NewProgram(model, tea.WithoutRenderer(), tea.WithInput(nil), tea.WithOutput(io.Discard))
@@ -359,7 +360,7 @@ func Check(cfg config.Config, registry provider.Registry, tokens credentials.Loc
 	return err
 }
 
-func ExerciseTokenLifecycle(ctx context.Context, tokens credentials.LocalTokenManager) error {
+func ExerciseTokenLifecycle(ctx context.Context, tokens management.LocalTokenClient) error {
 	model := NewModel(config.Config{}, provider.Registry{}, tokens, nil, nil, nil, nil, nil, nil, nil, nil)
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
 	m := updated.(Model)
@@ -904,12 +905,12 @@ func (m *Model) reload() error {
 	if m.tokens == nil {
 		m.tokenRows = nil
 	} else {
-		rows, err := m.tokens.List(context.Background())
+		rows, err := m.tokens.ListLocalTokens(context.Background())
 		if err != nil {
 			m.err = err.Error()
 			return err
 		}
-		m.tokenRows = rows
+		m.tokenRows = rows.Tokens
 	}
 	m.providers = m.registry.List()
 	if m.upstreams != nil {

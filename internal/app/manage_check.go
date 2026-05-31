@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"ilonasin/internal/credentials"
+	"ilonasin/internal/management"
 	"ilonasin/internal/provider"
 	"ilonasin/internal/tui"
 )
@@ -22,7 +23,12 @@ func ManageCheck(opts Options) error {
 	if err != nil {
 		return err
 	}
-	if err := exerciseLocalTokenCheck(context.Background()); err != nil {
+	mgmt, err := startManagementServer(context.Background(), rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database, rt.Store)
+	if err != nil {
+		return err
+	}
+	defer mgmt.Close(context.Background())
+	if err := exerciseLocalTokenCheck(context.Background(), rt.HomeDir, rt.ConfigPath); err != nil {
 		return err
 	}
 	if err := exerciseUpstreamCredentialCheck(context.Background(), rt.Registry, rt.Config, opts); err != nil {
@@ -50,7 +56,6 @@ func ManageCheck(opts Options) error {
 		return err
 	}
 	var buf bytes.Buffer
-	tokenService := credentials.Service{Repo: rt.Store}
 	refresher := provider.NewHTTPOAuthRefresher(nil)
 	refresher.Logger = rt.Logger
 	login := provider.NewHTTPOAuthDeviceLogin(nil)
@@ -62,7 +67,8 @@ func ManageCheck(opts Options) error {
 		OAuthLogin:     login,
 		Logger:         rt.Logger,
 	}
-	if err := tui.Check(rt.Config, rt.Registry, tokenService, upstreams, upstreams, rt.Store, rt.Store, rt.Store, &buf, rt.Logger); err != nil {
+	tokenClient := management.NewUnixLocalTokenClient(management.SocketPath(rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database))
+	if err := tui.Check(rt.Config, rt.Registry, tokenClient, upstreams, upstreams, rt.Store, rt.Store, rt.Store, &buf, rt.Logger); err != nil {
 		return err
 	}
 	afterSnapshot, err := selectedHomeSnapshot(context.Background(), rt.Store, rt.ConfigPath)

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"ilonasin/internal/credentials"
+	"ilonasin/internal/management"
 	"ilonasin/internal/provider"
 	"ilonasin/internal/server"
 	"ilonasin/internal/tui"
@@ -20,6 +21,11 @@ func Serve(opts Options) error {
 	}
 	defer rt.cleanup()
 	defer rt.Store.Close()
+	mgmt, err := startManagementServer(context.Background(), rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database, rt.Store)
+	if err != nil {
+		return err
+	}
+	defer mgmt.Close(context.Background())
 	rt.Logger.InfoContext(context.Background(), "serve starting",
 		slog.String("event", "app_command_start"),
 		slog.String("command", "serve"),
@@ -67,5 +73,9 @@ func Manage(opts Options) error {
 		OAuthLogin:     login,
 		Logger:         rt.Logger,
 	}
-	return tui.Run(rt.Config, rt.Registry, credentials.Service{Repo: rt.Store}, upstreams, upstreams, rt.Store, rt.Store, rt.Store, rt.Logger)
+	tokenClient := management.NewUnixLocalTokenClient(management.SocketPath(rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database))
+	if _, err := tokenClient.ListLocalTokens(context.Background()); err != nil {
+		return err
+	}
+	return tui.Run(rt.Config, rt.Registry, tokenClient, upstreams, upstreams, rt.Store, rt.Store, rt.Store, rt.Logger)
 }

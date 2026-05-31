@@ -67,7 +67,7 @@ func LoadOrCreate(path, homeDir string, explicit bool) (Config, string, error) {
 	if path == "" {
 		path = filepath.Join(homeDir, "config.toml")
 	}
-	path = home.ExpandPath(path, homeDir)
+	path = canonicalPath(home.ExpandPath(path, homeDir))
 
 	if _, err := os.Stat(path); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
@@ -92,10 +92,10 @@ func LoadOrCreate(path, homeDir string, explicit bool) (Config, string, error) {
 		return Config{}, "", fmt.Errorf("logging outputs must not be empty")
 	}
 	cfg.applyDefaults(homeDir)
-	cfg.Paths.DataDir = home.ExpandPath(cfg.Paths.DataDir, homeDir)
-	cfg.Paths.Database = home.ExpandPath(cfg.Paths.Database, homeDir)
-	cfg.Paths.LogDir = home.ExpandPath(cfg.Paths.LogDir, homeDir)
-	cfg.Paths.CacheDir = home.ExpandPath(cfg.Paths.CacheDir, homeDir)
+	cfg.Paths.DataDir = canonicalPath(home.ExpandPath(cfg.Paths.DataDir, homeDir))
+	cfg.Paths.Database = canonicalPath(home.ExpandPath(cfg.Paths.Database, homeDir))
+	cfg.Paths.LogDir = canonicalPath(home.ExpandPath(cfg.Paths.LogDir, homeDir))
+	cfg.Paths.CacheDir = canonicalPath(home.ExpandPath(cfg.Paths.CacheDir, homeDir))
 	return cfg, path, nil
 }
 
@@ -145,4 +145,19 @@ func writeDefault(path string, cfg Config) error {
 	}
 	home.SecureFile(path)
 	return nil
+}
+
+func canonicalPath(path string) string {
+	if path == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(path)
+	if err == nil {
+		path = abs
+	}
+	eval, err := filepath.EvalSymlinks(path)
+	if err == nil {
+		path = eval
+	}
+	return filepath.Clean(path)
 }

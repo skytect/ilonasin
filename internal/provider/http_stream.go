@@ -4,11 +4,13 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"ilonasin/internal/openai"
@@ -306,14 +308,14 @@ func (a HTTPChatAdapter) handleStreamEvent(ctx context.Context, data []byte, sin
 		return nil
 	}
 	if openai.IsStreamError(data) {
-		summary.ErrorClass = "upstream_stream_error"
+		summary.ErrorClass = streamErrorClass(data, providerType)
 		summary.CompletionStatus = "upstream_error"
 		if !summary.Started {
-			summary.StatusCode = http.StatusBadGateway
+			summary.StatusCode = streamErrorStatus(summary.ErrorClass)
 			summary.PreStreamError = true
 			return fmt.Errorf("upstream stream error")
 		}
-		if err := sink.WriteEvent(ctx, ChatStreamEvent{Data: normalizedStreamErrorData()}); err != nil {
+		if err := sink.WriteEvent(ctx, ChatStreamEvent{Data: normalizedStreamErrorData(summary.ErrorClass)}); err != nil {
 			summary.ErrorClass = "client_disconnected"
 			summary.CompletionStatus = "client_disconnected"
 			return err
@@ -360,8 +362,94 @@ func (a HTTPChatAdapter) handleStreamEvent(ctx context.Context, data []byte, sin
 	return nil
 }
 
-func normalizedStreamErrorData() []byte {
-	return []byte(`{"error":{"message":"upstream stream failed","type":"api_error","code":"upstream_stream_error"}}`)
+func streamErrorClass(data []byte, providerType string) string {
+	var parsed struct {
+		Error struct {
+			Code    any    `json:"code"`
+			Type    string `json:"type"`
+			Message string `json:"message"`
+			Status  any    `json:"status"`
+		} `json:"error"`
+	}
+	if err := jsonUnmarshal(data, &parsed); err != nil {
+		return "upstream_stream_error"
+	}
+	for _, value := range []any{parsed.Error.Code, parsed.Error.Status} {
+		if stringishStatus(value) == http.StatusTooManyRequests {
+			return "rate_limit_exceeded"
+		}
+		if stringishStatus(value) == http.StatusPaymentRequired {
+			return "insufficient_quota"
+		}
+	}
+	text := strings.ToLower(stringishText(parsed.Error.Code) + " " + parsed.Error.Type + " " + parsed.Error.Message)
+	if strings.Contains(text, "rate_limit") || strings.Contains(text, "rate limit") || strings.Contains(text, "too many requests") {
+		return "rate_limit_exceeded"
+	}
+	if strings.Contains(text, "insufficient_quota") || strings.Contains(text, "insufficient balance") || strings.Contains(text, "payment required") {
+		return "insufficient_quota"
+	}
+	if providerType == "openrouter" && strings.Contains(text, "credits") {
+		return "insufficient_quota"
+	}
+	return "upstream_stream_error"
+}
+
+func streamErrorStatus(errorClass string) int {
+	switch errorClass {
+	case "rate_limit_exceeded":
+		return http.StatusTooManyRequests
+	case "insufficient_quota":
+		return http.StatusPaymentRequired
+	default:
+		return http.StatusBadGateway
+	}
+}
+
+func stringishStatus(value any) int {
+	switch v := value.(type) {
+	case float64:
+		return int(v)
+	case json.Number:
+		n, err := v.Int64()
+		if err == nil {
+			return int(n)
+		}
+	case string:
+		switch v {
+		case "429":
+			return http.StatusTooManyRequests
+		case "402":
+			return http.StatusPaymentRequired
+		}
+	}
+	return 0
+}
+
+func stringishText(value any) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case float64:
+		return fmt.Sprintf("%.0f", v)
+	case json.Number:
+		return v.String()
+	default:
+		return ""
+	}
+}
+
+func normalizedStreamErrorData(errorClass string) []byte {
+	return []byte(`{"error":{"message":"upstream stream failed","type":"api_error","code":"` + normalizedStreamErrorCode(errorClass) + `"}}`)
+}
+
+func normalizedStreamErrorCode(errorClass string) string {
+	switch errorClass {
+	case "rate_limit_exceeded", "insufficient_quota":
+		return errorClass
+	default:
+		return "upstream_stream_error"
+	}
 }
 
 func classifyStreamReadError(ctx context.Context, err error) string {

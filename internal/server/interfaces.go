@@ -12,6 +12,7 @@ type MetadataRecorder interface {
 	RecordStreamMetrics(context.Context, metadata.Stream) error
 	RecordHealthEvent(context.Context, metadata.HealthEvent) error
 	RecordFallbackEvent(context.Context, metadata.FallbackEvent) error
+	RecordQuotaObservation(context.Context, metadata.QuotaObservation) error
 }
 
 type ProviderRegistry interface {

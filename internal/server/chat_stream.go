@@ -183,7 +183,10 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 		}
 		summary.StatusCode = localStatus
 		errorCode := "upstream_stream_error"
-		if summary.ErrorClass == "upstream_auth_failed" || sc.instance.Type == "codex" && summary.ErrorClass != "" {
+		if summary.ErrorClass == "upstream_auth_failed" ||
+			summary.ErrorClass == "rate_limit_exceeded" ||
+			summary.ErrorClass == "insufficient_quota" ||
+			sc.instance.Type == "codex" && summary.ErrorClass != "" {
 			errorCode = summary.ErrorClass
 		}
 		writeError(w, localStatus, "upstream stream failed", "api_error", errorCode)
@@ -236,6 +239,17 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 		OutputTokensPerSecond: summary.OutputTokensPerSecond,
 		CompletionStatus:      completionStatus,
 		ChunkCount:            summary.ChunkCount,
+	})
+	s.recordQuota(recordCtx, metadata.QuotaObservation{
+		RequestMetadataID:  requestID,
+		ObservedAt:         s.now(),
+		ProviderInstanceID: sc.address.ProviderInstanceID,
+		CredentialID:       final.credential.ID,
+		ModelID:            sc.address.ProviderModelID,
+		Source:             "stream",
+		HTTPStatus:         status,
+		ErrorClass:         errorClass,
+		RetryAfter:         summary.RetryAfter,
 	})
 	s.recordFallbacks(recordCtx, requestID, fallbackEvents)
 }

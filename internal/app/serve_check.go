@@ -198,6 +198,23 @@ func ServeCheck(opts Options) error {
 	if status, err := getStatus(base+management.PathSnapshot, ""); err != nil || status != http.StatusNotFound {
 		return fmt.Errorf("public management snapshot route status=%d err=%v", status, err)
 	}
+	for _, path := range []string{
+		management.PathUpstreamCredentials,
+		management.PathUpstreamCredentials + "/disable",
+		management.PathFallbackPolicies,
+		management.PathFallbackPolicies + "/enable",
+		management.PathFallbackPolicies + "/disable",
+		management.PathOAuthDeviceLogin,
+		management.PathOAuthDeviceLogin + "/start",
+		management.PathOAuthDeviceLogin + "/complete",
+		management.PathOAuthCredentials,
+		management.PathOAuthCredentials + "/refresh",
+		management.PathTelemetryPrune,
+	} {
+		if status, err := getStatus(base+path, ""); err != nil || status != http.StatusNotFound {
+			return fmt.Errorf("public management mutation route %s status=%d err=%v", path, status, err)
+		}
+	}
 	if status, err := getStatus(base+"/v1/models", "oauth-access-secret-marker"); err != nil || status != http.StatusUnauthorized {
 		return fmt.Errorf("oauth credential authenticated as local token status=%d err=%v", status, err)
 	}

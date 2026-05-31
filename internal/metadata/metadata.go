@@ -57,6 +57,19 @@ type FallbackEvent struct {
 	AllowedByPolicy    bool
 }
 
+type QuotaObservation struct {
+	RequestMetadataID  int64
+	ObservedAt         time.Time
+	ProviderInstanceID string
+	CredentialID       int64
+	ModelID            string
+	Source             string
+	HTTPStatus         int
+	ErrorClass         string
+	RetryAfter         *time.Time
+	ResetAt            *time.Time
+}
+
 type RequestSummary struct {
 	ID                     int64
 	StartedAt              time.Time
@@ -138,10 +151,25 @@ type FallbackSummary struct {
 	Reason              string
 }
 
+type QuotaSummary struct {
+	ObservedAt         time.Time
+	ProviderInstanceID string
+	ModelID            string
+	CredentialID       int64
+	CredentialLabel    string
+	Source             string
+	HTTPStatus         int
+	ErrorClass         string
+	RetryAfter         *time.Time
+	ResetAt            *time.Time
+	Count              int
+}
+
 type PruneResult struct {
 	Cutoff    time.Time
 	Requests  int
 	Streams   int
 	Fallbacks int
 	Health    int
+	Quotas    int
 }

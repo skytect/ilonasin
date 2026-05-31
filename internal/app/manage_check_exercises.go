@@ -1,10 +1,12 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -21,7 +23,7 @@ import (
 	"ilonasin/internal/tui"
 )
 
-func exerciseUpstreamCredentialCheck(ctx context.Context, registry provider.Registry, cfg config.Config, opts Options) error {
+func exerciseUpstreamCredentialCheck(ctx context.Context, registry provider.Registry, cfg config.Config) error {
 	if _, ok := firstAPIKeyProvider(registry); !ok {
 		return nil
 	}
@@ -35,9 +37,142 @@ func exerciseUpstreamCredentialCheck(ctx context.Context, registry provider.Regi
 		return err
 	}
 	defer store.Close()
-	service := &credentials.UpstreamService{Registry: registry, Repo: store}
-	if err := tui.ExerciseUpstreamCredentialLifecycle(ctx, cfg, registry, service); err != nil {
+	configPath := filepath.Join(checkDBDir, "config.toml")
+	if err := os.WriteFile(configPath, []byte("server_bind = \"127.0.0.1:0\"\n"), 0o600); err != nil {
 		return err
+	}
+	mgmt, err := startManagementServer(ctx, checkDBDir, configPath, filepath.Join(checkDBDir, "ilonasin.sqlite"), registry, store)
+	if err != nil {
+		return err
+	}
+	defer mgmt.Close(ctx)
+	client := management.NewUnixLocalTokenClient(mgmt.socketPath)
+	if err := tui.ExerciseUpstreamCredentialLifecycle(ctx, cfg, registry, client, client); err != nil {
+		return err
+	}
+	if err := exerciseUpstreamCredentialManagementResponseSafety(ctx, client, store, registry); err != nil {
+		return err
+	}
+	return nil
+}
+
+func exerciseUpstreamCredentialManagementResponseSafety(ctx context.Context, client management.HTTPTokenClient, store *sqlite.Store, registry provider.Registry) error {
+	instance, ok := firstAPIKeyProvider(registry)
+	if !ok {
+		return nil
+	}
+	body := []byte(fmt.Sprintf(`{"provider_instance_id":%q,"label":"raw-provider-payload prompt marker","api_key":"sk-management-response-secret"}`, instance.ID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, client.BaseURL+management.PathUpstreamCredentials, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("management upstream response safety status=%d", resp.StatusCode)
+	}
+	for _, forbidden := range []string{"raw-provider-payload", "prompt marker", "sk-management-response-secret"} {
+		if bytes.Contains(respBody, []byte(forbidden)) {
+			return fmt.Errorf("management upstream response leaked forbidden marker")
+		}
+		var count int
+		if err := store.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM provider_credentials WHERE label LIKE ?`, "%"+forbidden+"%").Scan(&count); err != nil {
+			return err
+		}
+		if count != 0 {
+			return fmt.Errorf("management upstream storage leaked forbidden marker")
+		}
+	}
+	longKey := strings.Repeat("b", 140)
+	longBody := []byte(fmt.Sprintf(`{"provider_instance_id":%q,"label":%q,"api_key":%q}`, instance.ID, longKey, longKey))
+	req, err = http.NewRequestWithContext(ctx, http.MethodPost, client.BaseURL+management.PathUpstreamCredentials, bytes.NewReader(longBody))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = client.Client.Do(req)
+	if err != nil {
+		return err
+	}
+	respBody, err = io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	_ = resp.Body.Close()
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("management long label response safety status=%d", resp.StatusCode)
+	}
+	if bytes.Contains(respBody, []byte(longKey)) {
+		return fmt.Errorf("management long label response leaked full key")
+	}
+	var longLabelPrefixCount int
+	if err := store.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM provider_credentials WHERE label LIKE ?`, longKey[:32]+"%").Scan(&longLabelPrefixCount); err != nil {
+		return err
+	}
+	if longLabelPrefixCount != 0 {
+		return fmt.Errorf("management long label storage leaked key prefix")
+	}
+	if _, err := store.DB.ExecContext(ctx, `UPDATE provider_credentials SET label = 'long label safety checked' WHERE label = 'api key'`); err != nil {
+		return err
+	}
+	controlKey := "abcdefghijklmnop"
+	controlLabel := "abcd\nefghijklmnop"
+	controlBody := []byte(fmt.Sprintf(`{"provider_instance_id":%q,"label":%q,"api_key":%q}`, instance.ID, controlLabel, controlKey))
+	req, err = http.NewRequestWithContext(ctx, http.MethodPost, client.BaseURL+management.PathUpstreamCredentials, bytes.NewReader(controlBody))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = client.Client.Do(req)
+	if err != nil {
+		return err
+	}
+	respBody, err = io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	_ = resp.Body.Close()
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("management control label response safety status=%d", resp.StatusCode)
+	}
+	if bytes.Contains(respBody, []byte(controlKey)) {
+		return fmt.Errorf("management control label response leaked full key")
+	}
+	var controlLabelCount int
+	if err := store.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM provider_credentials WHERE label = ?`, controlKey).Scan(&controlLabelCount); err != nil {
+		return err
+	}
+	if controlLabelCount != 0 {
+		return fmt.Errorf("management control label storage leaked full key")
+	}
+	unsafeFallbackBody := []byte(fmt.Sprintf(`{"provider_instance_id":%q,"credential_kind":"api_key","group_label":"raw-provider-payload prompt marker"}`, instance.ID))
+	req, err = http.NewRequestWithContext(ctx, http.MethodPost, client.BaseURL+management.PathFallbackPolicies+"/enable", bytes.NewReader(unsafeFallbackBody))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = client.Client.Do(req)
+	if err != nil {
+		return err
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		return fmt.Errorf("management fallback unsafe group status=%d", resp.StatusCode)
+	}
+	var unsafeGroupCount int
+	if err := store.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM credential_fallback_policies WHERE group_label LIKE '%raw-provider-payload%' OR group_label LIKE '%prompt marker%'`).Scan(&unsafeGroupCount); err != nil {
+		return err
+	}
+	if unsafeGroupCount != 0 {
+		return fmt.Errorf("management fallback storage leaked unsafe group")
 	}
 	return nil
 }
@@ -108,8 +243,49 @@ func exerciseFallbackPolicyCheck(ctx context.Context, registry provider.Registry
 	if err != nil {
 		return err
 	}
-	if err := tui.ExerciseFallbackPolicyLifecycle(ctx, cfg, registry, service, service); err != nil {
+	resolved, err := service.ResolveAPIKeys(ctx, instance.ID)
+	if err != nil {
 		return err
+	}
+	if len(resolved) != 1 {
+		return fmt.Errorf("fallback policy default resolved %d credentials", len(resolved))
+	}
+	mgmt, err := startManagementServer(ctx, checkDBDir, configPath, filepath.Join(checkDBDir, "ilonasin.sqlite"), registry, store)
+	if err != nil {
+		return err
+	}
+	defer mgmt.Close(ctx)
+	client := management.NewUnixLocalTokenClient(mgmt.socketPath)
+	if err := tui.ExerciseFallbackPolicyLifecycle(ctx, cfg, registry, client, client); err != nil {
+		return err
+	}
+	if _, err := client.EnableFallbackPolicy(ctx, management.FallbackPolicyRequest{
+		ProviderInstanceID: instance.ID,
+		CredentialKind:     credentials.CredentialKindAPIKey,
+		GroupLabel:         credentials.DefaultFallbackGroup,
+	}); err != nil {
+		return err
+	}
+	resolved, err = service.ResolveAPIKeys(ctx, instance.ID)
+	if err != nil {
+		return err
+	}
+	if len(resolved) != 2 {
+		return fmt.Errorf("fallback policy enable resolved %d credentials", len(resolved))
+	}
+	if _, err := client.DisableFallbackPolicy(ctx, management.FallbackPolicyRequest{
+		ProviderInstanceID: instance.ID,
+		CredentialKind:     credentials.CredentialKindAPIKey,
+		GroupLabel:         credentials.DefaultFallbackGroup,
+	}); err != nil {
+		return err
+	}
+	resolved, err = service.ResolveAPIKeys(ctx, instance.ID)
+	if err != nil {
+		return err
+	}
+	if len(resolved) != 1 {
+		return fmt.Errorf("fallback policy final resolved %d credentials", len(resolved))
 	}
 	afterProtected, err := fallbackPolicyProtectedSnapshot(ctx, store, configPath)
 	if err != nil {
@@ -170,7 +346,11 @@ func exerciseFallbackPolicyCheck(ctx context.Context, registry provider.Registry
 		}); err != nil {
 			return fmt.Errorf("seed codex oauth fallback policy secondary: %w", err)
 		}
-		if err := tui.ExerciseOAuthFallbackPolicySummary(ctx, cfg, registry, service); err != nil {
+		snapshot, err := management.Service{Registry: registry, Upstreams: service, OAuth: service}.LoadManagementSnapshot(ctx)
+		if err != nil {
+			return err
+		}
+		if err := tui.ExerciseOAuthFallbackPolicySummary(ctx, cfg, registry, &snapshotCheckClient{resp: snapshot}); err != nil {
 			return err
 		}
 		break
@@ -198,7 +378,7 @@ func exerciseLocalTokenCheck(ctx context.Context, homeDir, configPath string) er
 		mgmt.Close(ctx)
 		return err
 	}
-	if err := tui.ExerciseTokenLifecycle(ctx, client); err != nil {
+	if err := tui.ExerciseTokenLifecycle(ctx, client, client); err != nil {
 		mgmt.Close(ctx)
 		return err
 	}
@@ -236,7 +416,11 @@ func exerciseModelCacheCheck(ctx context.Context, registry provider.Registry, cf
 	}}); err != nil {
 		return err
 	}
-	return tui.ExerciseModelCacheSummary(ctx, cfg, registry, store)
+	snapshot, err := management.Service{Registry: registry, ModelCache: store}.LoadManagementSnapshot(ctx)
+	if err != nil {
+		return err
+	}
+	return tui.ExerciseModelCacheSummary(ctx, cfg, registry, &snapshotCheckClient{resp: snapshot})
 }
 
 func exerciseObservabilityCheck(ctx context.Context, registry provider.Registry, cfg config.Config) error {
@@ -371,7 +555,25 @@ func exerciseObservabilityCheck(ctx context.Context, registry provider.Registry,
 	}); err != nil {
 		return fmt.Errorf("seed observability unsafe fallback: %w", err)
 	}
-	return tui.ExerciseObservabilitySummary(ctx, cfg, registry, store)
+	if err := store.RecordQuotaObservation(ctx, metadata.QuotaObservation{
+		RequestMetadataID:  streamRequestID,
+		ObservedAt:         started.Add(6 * time.Minute),
+		ProviderInstanceID: "deepseek",
+		CredentialID:       first.ID,
+		ModelID:            "deepseek-v4-pro",
+		Source:             "stream",
+		HTTPStatus:         http.StatusTooManyRequests,
+		ErrorClass:         "rate_limit_exceeded",
+		RetryAfter:         &retryAfter,
+		ResetAt:            &retryAfter,
+	}); err != nil {
+		return fmt.Errorf("seed observability quota: %w", err)
+	}
+	snapshot, err := management.Service{Registry: registry, Observability: store}.LoadManagementSnapshot(ctx)
+	if err != nil {
+		return err
+	}
+	return tui.ExerciseObservabilitySummary(ctx, cfg, registry, &snapshotCheckClient{resp: snapshot})
 }
 
 func exerciseOAuthCheck(ctx context.Context, registry provider.Registry, cfg config.Config) error {
@@ -434,7 +636,11 @@ func exerciseOAuthCheck(ctx context.Context, registry provider.Registry, cfg con
 	if err := assertOAuthStorageSafety(ctx, store); err != nil {
 		return err
 	}
-	return tui.ExerciseOAuthSummary(ctx, cfg, registry, service)
+	snapshot, err := management.Service{Registry: registry, OAuth: service}.LoadManagementSnapshot(ctx)
+	if err != nil {
+		return err
+	}
+	return tui.ExerciseOAuthSummary(ctx, cfg, registry, &snapshotCheckClient{resp: snapshot})
 }
 
 func exerciseOAuthDeviceLoginCheck(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
@@ -477,7 +683,17 @@ func exerciseOAuthDeviceLoginCheck(ctx context.Context, cfg config.Config, logge
 		DeviceLogins: credentials.NewOAuthDeviceLoginSessions(2, 40*time.Millisecond),
 		Logger:       logger,
 	}
-	if err := tui.ExerciseOAuthDeviceLogin(ctx, loginCfg, registry, service, service); err != nil {
+	mgmt, err := startManagementServerWithService(ctx, checkDBDir, filepath.Join(checkDBDir, "config.toml"), filepath.Join(checkDBDir, "ilonasin.sqlite"), management.Service{
+		Registry:       registry,
+		OAuth:          service,
+		OAuthMutations: service,
+	})
+	if err != nil {
+		return err
+	}
+	defer mgmt.Close(ctx)
+	client := management.NewUnixLocalTokenClient(mgmt.socketPath)
+	if err := tui.ExerciseOAuthDeviceLogin(ctx, loginCfg, registry, client, client); err != nil {
 		return err
 	}
 	if err := fakeAuth.assertSuccessSeen(); err != nil {
@@ -486,7 +702,62 @@ func exerciseOAuthDeviceLoginCheck(ctx context.Context, cfg config.Config, logge
 	if err := assertOAuthDeviceLoginStorage(ctx, store); err != nil {
 		return err
 	}
-	if err := exerciseOAuthDeviceLoginFailures(ctx, loginCfg, store, service, fakeAuth); err != nil {
+	if err := exerciseOAuthDeviceLoginManagementLongPoll(ctx, store, service, client, mgmt.socketPath, fakeAuth); err != nil {
+		return err
+	}
+	if err := exerciseOAuthDeviceLoginFailures(ctx, loginCfg, store, service, client, fakeAuth); err != nil {
+		return err
+	}
+	return nil
+}
+
+func exerciseOAuthDeviceLoginManagementLongPoll(ctx context.Context, store *sqlite.Store, service *credentials.UpstreamService, client management.HTTPTokenClient, socketPath string, fakeAuth *oauthDeviceAuthServer) error {
+	service.DeviceLogins = credentials.NewOAuthDeviceLoginSessions(2, 40*time.Millisecond)
+	fakeAuth.setMode("pending_long_poll")
+	started, err := client.StartOAuthDeviceLogin(ctx, management.StartOAuthDeviceLoginRequest{ProviderInstanceID: "codex"})
+	if err != nil {
+		return err
+	}
+	if started.Challenge.Handle == "" {
+		return fmt.Errorf("oauth management long-poll handle missing")
+	}
+	client.Client = management.HTTPClientWithTimeout(socketPath, time.Nanosecond)
+	client.LongPollClient = management.LongPollHTTPClient(socketPath)
+	if _, err := client.CompleteOAuthDeviceLogin(ctx, management.CompleteOAuthDeviceLoginRequest{Handle: started.Challenge.Handle}); err != nil {
+		return fmt.Errorf("oauth management long-poll complete failed: %w", err)
+	}
+	client.Client = management.HTTPClient(socketPath)
+	if err := assertOAuthHandleNotExposed(ctx, store, client, started.Challenge.Handle); err != nil {
+		return err
+	}
+	if fakeAuth.pollCount() < 2 {
+		return fmt.Errorf("oauth management long-poll did not poll")
+	}
+	fakeAuth.setMode("timeout")
+	started, err = client.StartOAuthDeviceLogin(ctx, management.StartOAuthDeviceLoginRequest{ProviderInstanceID: "codex"})
+	if err != nil {
+		return err
+	}
+	cancelCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := client.CompleteOAuthDeviceLogin(cancelCtx, management.CompleteOAuthDeviceLoginRequest{Handle: started.Challenge.Handle}); !errors.Is(err, context.Canceled) {
+		return fmt.Errorf("oauth management completion cancellation err=%v", err)
+	}
+	return nil
+}
+
+func assertOAuthHandleNotExposed(ctx context.Context, store *sqlite.Store, client management.HTTPTokenClient, handle string) error {
+	if handle == "" {
+		return fmt.Errorf("oauth management handle empty")
+	}
+	snapshot, err := client.LoadManagementSnapshot(ctx)
+	if err != nil {
+		return err
+	}
+	if strings.Contains(fmt.Sprintf("%+v", snapshot), handle) {
+		return fmt.Errorf("oauth management handle leaked into snapshot")
+	}
+	if err := assertMarkerAbsentInOAuthTables(ctx, store, handle); err != nil {
 		return err
 	}
 	return nil
@@ -534,7 +805,7 @@ func assertOAuthDeviceLoginStorage(ctx context.Context, store *sqlite.Store) err
 	return nil
 }
 
-func exerciseOAuthDeviceLoginFailures(ctx context.Context, cfg config.Config, store *sqlite.Store, service *credentials.UpstreamService, fakeAuth *oauthDeviceAuthServer) error {
+func exerciseOAuthDeviceLoginFailures(ctx context.Context, cfg config.Config, store *sqlite.Store, service *credentials.UpstreamService, client management.HTTPTokenClient, fakeAuth *oauthDeviceAuthServer) error {
 	baseline, err := oauthCredentialCount(ctx, store)
 	if err != nil {
 		return err
@@ -611,7 +882,7 @@ func exerciseOAuthDeviceLoginFailures(ctx context.Context, cfg config.Config, st
 		}
 		if mode == "token_http" {
 			fakeAuth.setMode("exchange_http")
-			eventID, err := tui.ExerciseOAuthDeviceLoginFailure(ctx, cfg, service.Registry, service, service, "oauth_login_http_error")
+			eventID, err := tui.ExerciseOAuthDeviceLoginFailure(ctx, cfg, service.Registry, client, client, "oauth_login_http_error")
 			if err != nil {
 				return err
 			}
@@ -919,8 +1190,18 @@ func exerciseOAuthRefreshCheck(ctx context.Context, cfg config.Config) error {
 		return err
 	}
 
+	mgmt, err := startManagementServerWithService(ctx, checkDBDir, filepath.Join(checkDBDir, "config.toml"), filepath.Join(checkDBDir, "ilonasin.sqlite"), management.Service{
+		Registry:       registry,
+		OAuth:          service,
+		OAuthMutations: service,
+	})
+	if err != nil {
+		return err
+	}
+	defer mgmt.Close(ctx)
+	client := management.NewUnixLocalTokenClient(mgmt.socketPath)
 	fakeAuth.setMode("success_replace")
-	if err := tui.ExerciseOAuthRefresh(ctx, cfg, registry, service, service); err != nil {
+	if err := tui.ExerciseOAuthRefresh(ctx, cfg, registry, client, client); err != nil {
 		return err
 	}
 	if fakeAuth.refreshToken() != "oauth-refresh-old-refresh-second" {
@@ -976,8 +1257,63 @@ func exerciseOAuthRefreshCheck(ctx context.Context, cfg config.Config) error {
 		}
 	}
 
+	if err := exerciseOAuthRefreshManagementFailure(ctx, service, client, fakeAuth); err != nil {
+		return err
+	}
 	if err := exerciseOAuthRefreshFailureModes(ctx, store, service, fakeAuth); err != nil {
 		return err
+	}
+	return nil
+}
+
+func exerciseOAuthRefreshManagementFailure(ctx context.Context, service *credentials.UpstreamService, client management.HTTPTokenClient, fakeAuth *oauthRefreshAuthServer) error {
+	created, err := service.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID:  "codex",
+		Label:               "refresh management failure",
+		AccessToken:         "oauth-refresh-management-access",
+		RefreshToken:        "oauth-refresh-management-refresh",
+		AccountID:           "refresh-management-failure",
+		AccountDisplayLabel: "Management Failure",
+	})
+	if err != nil {
+		return err
+	}
+	fakeAuth.setMode("http")
+	body := []byte(fmt.Sprintf(`{"id":%d}`, created.ID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, client.BaseURL+management.PathOAuthCredentials+"/refresh", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode < 400 {
+		return fmt.Errorf("oauth refresh management failure returned status=%d", resp.StatusCode)
+	}
+	if !strings.Contains(string(respBody), "oauth_refresh_failed") {
+		return fmt.Errorf("oauth refresh management failure class missing")
+	}
+	for _, forbidden := range []string{
+		"oauth-refresh-management-access",
+		"oauth-refresh-management-refresh",
+		"refresh-management-failure",
+		"token endpoint body",
+		"raw-provider-payload",
+		"Bearer ",
+		"acct_",
+		"balance",
+		"credit",
+	} {
+		if strings.Contains(string(respBody), forbidden) {
+			return fmt.Errorf("oauth refresh management failure leaked forbidden marker")
+		}
 	}
 	return nil
 }
@@ -1252,9 +1588,35 @@ func exerciseTelemetryPruneCheck(ctx context.Context, registry provider.Registry
 			return fmt.Errorf("seed prune health: %w", err)
 		}
 	}
+	for _, quota := range []metadata.QuotaObservation{
+		{RequestMetadataID: oldRequestID, ObservedAt: recentAt, ProviderInstanceID: "deepseek", CredentialID: first.ID, ModelID: "recent-attached-old", Source: "chat", HTTPStatus: http.StatusTooManyRequests, ErrorClass: "rate_limit_exceeded"},
+		{RequestMetadataID: recentRequestID, ObservedAt: recentAt, ProviderInstanceID: "deepseek", CredentialID: second.ID, ModelID: "recent raw-provider-payload", Source: "stream", HTTPStatus: http.StatusPaymentRequired, ErrorClass: "insufficient_quota"},
+		{RequestMetadataID: exactRequestID, ObservedAt: cutoff, ProviderInstanceID: "deepseek", CredentialID: second.ID, ModelID: "exact-cutoff", Source: "chat", HTTPStatus: http.StatusTooManyRequests, ErrorClass: "rate_limit_exceeded"},
+	} {
+		if err := store.RecordQuotaObservation(ctx, quota); err != nil {
+			return fmt.Errorf("seed prune quota: %w", err)
+		}
+	}
 
-	expected := metadata.PruneResult{Cutoff: cutoff, Requests: 1, Streams: 1, Fallbacks: 3, Health: 1}
-	if err := tui.ExerciseTelemetryPrune(ctx, cfg, registry, store, store, func() time.Time { return now }, expected); err != nil {
+	expected := management.PruneResult{Cutoff: cutoff, Requests: 1, Streams: 1, Fallbacks: 3, Health: 1, Quotas: 1}
+	mgmt, err := startManagementServerWithService(ctx, checkDBDir, configPath, filepath.Join(checkDBDir, "ilonasin.sqlite"), management.Service{
+		Registry:      registry,
+		Observability: store,
+		Pruner:        store,
+	})
+	if err != nil {
+		return err
+	}
+	defer mgmt.Close(ctx)
+	client := management.NewUnixLocalTokenClient(mgmt.socketPath)
+	if err := exerciseTelemetryPruneManagementSafety(ctx, checkDBDir, configPath); err != nil {
+		return err
+	}
+	snapshot, err := management.Service{Registry: registry, Observability: store, Pruner: store}.LoadManagementSnapshot(ctx)
+	if err != nil {
+		return err
+	}
+	if err := tui.ExerciseTelemetryPrune(ctx, cfg, registry, &snapshotCheckClient{resp: snapshot}, client, func() time.Time { return now }, expected); err != nil {
 		return err
 	}
 	afterProtected, err := protectedStateSnapshot(ctx, store, configPath)
@@ -1283,6 +1645,9 @@ func exerciseTelemetryPruneCheck(ctx context.Context, registry provider.Registry
 		{"old health", `SELECT COUNT(*) FROM health_events WHERE occurred_at < ?`, []any{cutoff.Format(time.RFC3339Nano)}, 0},
 		{"recent health", `SELECT COUNT(*) FROM health_events WHERE occurred_at > ?`, []any{cutoff.Format(time.RFC3339Nano)}, 1},
 		{"exact health", `SELECT COUNT(*) FROM health_events WHERE occurred_at = ?`, []any{cutoff.Format(time.RFC3339Nano)}, 1},
+		{"old request quota", `SELECT COUNT(*) FROM quota_events WHERE request_metadata_id = ?`, []any{oldRequestID}, 0},
+		{"recent quota", `SELECT COUNT(*) FROM quota_events WHERE request_metadata_id = ?`, []any{recentRequestID}, 1},
+		{"exact quota", `SELECT COUNT(*) FROM quota_events WHERE request_metadata_id = ?`, []any{exactRequestID}, 1},
 		{"recent marker", `SELECT COUNT(*) FROM request_metadata WHERE requested_model LIKE '%raw-provider-payload%'`, nil, 1},
 	} {
 		var got int
@@ -1294,6 +1659,100 @@ func exerciseTelemetryPruneCheck(ctx context.Context, registry provider.Registry
 		}
 	}
 	return nil
+}
+
+func exerciseTelemetryPruneManagementSafety(ctx context.Context, homeDir, configPath string) error {
+	dbPath := filepath.Join(homeDir, "prune-safety.sqlite")
+	cancelStore, err := sqlite.Open(ctx, dbPath)
+	if err != nil {
+		return err
+	}
+	defer cancelStore.Close()
+	blocking := blockingTelemetryPruner{delay: 20 * time.Millisecond}
+	mgmt, err := startManagementServerWithService(ctx, homeDir, configPath, dbPath, management.Service{Pruner: blocking})
+	if err != nil {
+		return err
+	}
+	client := management.NewUnixLocalTokenClient(mgmt.socketPath)
+	client.Client = management.HTTPClientWithTimeout(mgmt.socketPath, time.Nanosecond)
+	client.LongPollClient = management.LongPollHTTPClient(mgmt.socketPath)
+	if _, err := client.PruneTelemetry(ctx, management.PruneTelemetryRequest{Cutoff: time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC)}); err != nil {
+		mgmt.Close(ctx)
+		return fmt.Errorf("management prune long operation failed: %w", err)
+	}
+	cancelCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := client.PruneTelemetry(cancelCtx, management.PruneTelemetryRequest{Cutoff: time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC)}); !errors.Is(err, context.Canceled) {
+		mgmt.Close(ctx)
+		return fmt.Errorf("management prune cancellation err=%v", err)
+	}
+	mgmt.Close(ctx)
+
+	failPath := filepath.Join(homeDir, "prune-failure.sqlite")
+	failStore, err := sqlite.Open(ctx, failPath)
+	if err != nil {
+		return err
+	}
+	defer failStore.Close()
+	mgmt, err = startManagementServerWithService(ctx, homeDir, configPath, failPath, management.Service{Pruner: failingManagementPruner{}})
+	if err != nil {
+		return err
+	}
+	defer mgmt.Close(ctx)
+	client = management.NewUnixLocalTokenClient(mgmt.socketPath)
+	body := []byte(`{"cutoff":"2026-04-30T12:00:00Z"}`)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, client.BaseURL+management.PathTelemetryPrune, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode < 400 {
+		return fmt.Errorf("management prune failure returned status=%d", resp.StatusCode)
+	}
+	for _, forbidden := range []string{
+		"sk-prune-secret",
+		"raw-provider-payload",
+		"prompt marker",
+		"completion marker",
+		"body marker",
+		"acct_",
+		"req_",
+		"balance",
+		"credit",
+	} {
+		if strings.Contains(string(respBody), forbidden) {
+			return fmt.Errorf("management prune failure leaked forbidden marker")
+		}
+	}
+	return nil
+}
+
+type blockingTelemetryPruner struct {
+	delay time.Duration
+}
+
+func (b blockingTelemetryPruner) PruneTelemetryBefore(ctx context.Context, cutoff time.Time) (metadata.PruneResult, error) {
+	select {
+	case <-ctx.Done():
+		return metadata.PruneResult{}, ctx.Err()
+	case <-time.After(b.delay):
+		return metadata.PruneResult{Cutoff: cutoff.UTC()}, nil
+	}
+}
+
+type failingManagementPruner struct{}
+
+func (failingManagementPruner) PruneTelemetryBefore(context.Context, time.Time) (metadata.PruneResult, error) {
+	return metadata.PruneResult{}, fmt.Errorf("sk-prune-secret raw-provider-payload prompt marker")
 }
 
 func assertOAuthStorageSafety(ctx context.Context, store *sqlite.Store) error {

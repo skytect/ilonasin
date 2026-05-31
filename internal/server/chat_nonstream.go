@@ -142,6 +142,17 @@ func (s *Server) recordNonStreamingChat(r *http.Request, nc nonStreamContext, ex
 		CostMicrounits:            exec.final.result.Usage.CostMicrounits,
 		TotalLatencyMS:            time.Since(nc.start).Milliseconds(),
 	})
+	s.recordQuota(recordCtx, metadata.QuotaObservation{
+		RequestMetadataID:  requestID,
+		ObservedAt:         s.now(),
+		ProviderInstanceID: nc.address.ProviderInstanceID,
+		CredentialID:       exec.final.credential.ID,
+		ModelID:            nc.address.ProviderModelID,
+		Source:             "chat",
+		HTTPStatus:         status,
+		ErrorClass:         errorClass,
+		RetryAfter:         exec.final.result.RetryAfter,
+	})
 	s.recordFallbacks(recordCtx, requestID, exec.fallbackEvents)
 	return requestID
 }

@@ -47,12 +47,15 @@ type LocalTokenClient interface {
 }
 
 type Service struct {
-	Tokens        credentials.LocalTokenManager
-	Registry      provider.Registry
-	Upstreams     UpstreamMetadataReader
-	OAuth         OAuthMetadataReader
-	ModelCache    ModelCacheReader
-	Observability ObservabilityReader
+	Tokens            credentials.LocalTokenManager
+	Registry          provider.Registry
+	Upstreams         UpstreamMetadataReader
+	UpstreamMutations UpstreamMutationManager
+	OAuth             OAuthMetadataReader
+	OAuthMutations    OAuthMutationManager
+	ModelCache        ModelCacheReader
+	Observability     ObservabilityReader
+	Pruner            TelemetryPruner
 }
 
 type UpstreamMetadataReader interface {
@@ -76,6 +79,7 @@ type ObservabilityReader interface {
 	StreamSummary(ctx context.Context) ([]metadata.StreamSummary, error)
 	LatestHealth(ctx context.Context) ([]metadata.HealthSummary, error)
 	RecentFallbacks(ctx context.Context, limit int) ([]metadata.FallbackSummary, error)
+	QuotaByProvider(ctx context.Context) ([]metadata.QuotaSummary, error)
 }
 
 func (s Service) ListLocalTokens(ctx context.Context) (ListLocalTokensResponse, error) {

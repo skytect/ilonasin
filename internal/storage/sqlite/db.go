@@ -1115,6 +1115,29 @@ func (s *Store) RecordFallbackEvent(ctx context.Context, m metadata.FallbackEven
 	return err
 }
 
+func (s *Store) RecordQuotaObservation(ctx context.Context, m metadata.QuotaObservation) error {
+	_, err := s.DB.ExecContext(ctx, `
+		INSERT INTO quota_events(
+			request_metadata_id, observed_at, provider_instance_id, credential_id,
+			model_id, source, http_status, error_class, retry_after, reset_at
+		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, nullableInt64(m.RequestMetadataID), m.ObservedAt.UTC().Format(time.RFC3339Nano),
+		m.ProviderInstanceID, nullableInt64(m.CredentialID), m.ModelID, m.Source,
+		nullableInt(m.HTTPStatus), m.ErrorClass, nullableTime(m.RetryAfter), nullableTime(m.ResetAt))
+	if err == nil && s.Logger != nil {
+		s.Logger.LogAttrs(ctx, slog.LevelInfo, "quota observation recorded",
+			slog.String("event", "quota_recorded"),
+			slog.String("provider_instance", m.ProviderInstanceID),
+			slog.Int64("credential_id", m.CredentialID),
+			slog.Int64("metadata_id", m.RequestMetadataID),
+			slog.String("quota_source", m.Source),
+			slog.Int("status", m.HTTPStatus),
+			slog.String("error_class", m.ErrorClass),
+		)
+	}
+	return err
+}
+
 func (s *Store) PruneTelemetryBefore(ctx context.Context, cutoff time.Time) (metadata.PruneResult, error) {
 	cutoff = cutoff.UTC()
 	tx, err := s.DB.BeginTx(ctx, nil)
@@ -1131,6 +1154,9 @@ func (s *Store) PruneTelemetryBefore(ctx context.Context, cutoff time.Time) (met
 		return metadata.PruneResult{}, err
 	}
 	if err := resetPruneTable(ctx, tx, "ilonasin_prune_health_ids"); err != nil {
+		return metadata.PruneResult{}, err
+	}
+	if err := resetPruneTable(ctx, tx, "ilonasin_prune_quota_ids"); err != nil {
 		return metadata.PruneResult{}, err
 	}
 
@@ -1265,6 +1291,50 @@ func (s *Store) PruneTelemetryBefore(ctx context.Context, cutoff time.Time) (met
 	healthInsert.Close()
 	healthRows.Close()
 
+	quotaRows, err := tx.QueryContext(ctx, `SELECT id, observed_at, COALESCE(request_metadata_id, 0) FROM quota_events`)
+	if err != nil {
+		return metadata.PruneResult{}, err
+	}
+	quotaInsert, err := tx.PrepareContext(ctx, `INSERT INTO ilonasin_prune_quota_ids(id) VALUES(?)`)
+	if err != nil {
+		quotaRows.Close()
+		return metadata.PruneResult{}, err
+	}
+	for quotaRows.Next() {
+		var id, requestID int64
+		var observed string
+		if err := quotaRows.Scan(&id, &observed, &requestID); err != nil {
+			quotaInsert.Close()
+			quotaRows.Close()
+			return metadata.PruneResult{}, err
+		}
+		observedAt, err := time.Parse(time.RFC3339Nano, observed)
+		if err != nil {
+			quotaInsert.Close()
+			quotaRows.Close()
+			return metadata.PruneResult{}, err
+		}
+		_, attachedToPrunedRequest := requestIDs[requestID]
+		if observedAt.UTC().Before(cutoff) || attachedToPrunedRequest {
+			if _, err := quotaInsert.ExecContext(ctx, id); err != nil {
+				quotaInsert.Close()
+				quotaRows.Close()
+				return metadata.PruneResult{}, err
+			}
+			result.Quotas++
+		}
+	}
+	if err := quotaRows.Err(); err != nil {
+		quotaInsert.Close()
+		quotaRows.Close()
+		return metadata.PruneResult{}, err
+	}
+	quotaInsert.Close()
+	quotaRows.Close()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM quota_events WHERE id IN (SELECT id FROM ilonasin_prune_quota_ids)`); err != nil {
+		return metadata.PruneResult{}, err
+	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM fallback_events WHERE id IN (SELECT id FROM ilonasin_prune_fallback_ids)`); err != nil {
 		return metadata.PruneResult{}, err
 	}
@@ -1284,6 +1354,7 @@ func (s *Store) PruneTelemetryBefore(ctx context.Context, cutoff time.Time) (met
 			slog.Int("streams", result.Streams),
 			slog.Int("fallbacks", result.Fallbacks),
 			slog.Int("health", result.Health),
+			slog.Int("quotas", result.Quotas),
 		)
 	}
 	return result, nil
@@ -1509,6 +1580,56 @@ func (s *Store) RecentFallbacks(ctx context.Context, limit int) ([]metadata.Fall
 			return nil, err
 		}
 		row.OccurredAt = occurredAt
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) QuotaByProvider(ctx context.Context) ([]metadata.QuotaSummary, error) {
+	rows, err := s.DB.QueryContext(ctx, `
+		SELECT qe.provider_instance_id, qe.model_id, COALESCE(qe.credential_id, 0),
+			COALESCE(pc.label, ''), qe.source, qe.http_status, qe.error_class,
+			MAX(qe.observed_at), qe.retry_after, qe.reset_at, COUNT(*)
+		FROM quota_events qe
+		LEFT JOIN provider_credentials pc ON pc.id = qe.credential_id
+		GROUP BY qe.provider_instance_id, qe.model_id, COALESCE(qe.credential_id, 0),
+			qe.source, qe.http_status, qe.error_class, qe.retry_after, qe.reset_at
+		ORDER BY MAX(qe.observed_at) DESC, qe.provider_instance_id ASC, qe.model_id ASC
+		LIMIT 20
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []metadata.QuotaSummary
+	for rows.Next() {
+		var row metadata.QuotaSummary
+		var observed string
+		var retryAfter, resetAt sql.NullString
+		if err := rows.Scan(&row.ProviderInstanceID, &row.ModelID, &row.CredentialID,
+			&row.CredentialLabel, &row.Source, &row.HTTPStatus, &row.ErrorClass,
+			&observed, &retryAfter, &resetAt, &row.Count); err != nil {
+			return nil, err
+		}
+		observedAt, err := time.Parse(time.RFC3339Nano, observed)
+		if err != nil {
+			return nil, err
+		}
+		row.ObservedAt = observedAt
+		if retryAfter.Valid && retryAfter.String != "" {
+			parsed, err := time.Parse(time.RFC3339Nano, retryAfter.String)
+			if err != nil {
+				return nil, err
+			}
+			row.RetryAfter = &parsed
+		}
+		if resetAt.Valid && resetAt.String != "" {
+			parsed, err := time.Parse(time.RFC3339Nano, resetAt.String)
+			if err != nil {
+				return nil, err
+			}
+			row.ResetAt = &parsed
+		}
 		out = append(out, row)
 	}
 	return out, rows.Err()

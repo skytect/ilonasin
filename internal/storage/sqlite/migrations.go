@@ -236,6 +236,21 @@ var migrations = []migration{
 		sqlStep(`DROP TABLE credential_fallback_policies`),
 		sqlStep(`ALTER TABLE credential_fallback_policies_new RENAME TO credential_fallback_policies`),
 	}},
+	{version: 5, name: "quota_events", steps: []migrationStep{
+		sqlStep(`CREATE TABLE IF NOT EXISTS quota_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			request_metadata_id INTEGER REFERENCES request_metadata(id) ON DELETE CASCADE,
+			observed_at TEXT NOT NULL,
+			provider_instance_id TEXT NOT NULL,
+			credential_id INTEGER REFERENCES provider_credentials(id) ON DELETE SET NULL,
+			model_id TEXT NOT NULL DEFAULT '',
+			source TEXT NOT NULL,
+			http_status INTEGER NOT NULL DEFAULT 0,
+			error_class TEXT NOT NULL DEFAULT '',
+			retry_after TEXT,
+			reset_at TEXT
+		)`),
+	}},
 }
 
 func sqlSteps(stmts []string) []migrationStep {

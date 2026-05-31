@@ -36,11 +36,11 @@ func RunMigrationSmokeCheck(ctx context.Context) error {
 	defer os.RemoveAll(root)
 
 	cases := []migrationSmokeCase{
-		{name: "fresh", setup: setupFreshMigrationSmoke, wantVersions: []int{1, 2, 3, 4}},
-		{name: "version1", setup: setupHistoricalMigrationSmoke(1), wantVersions: []int{1, 2, 3, 4}, wantSentinels: true},
-		{name: "version2", setup: setupHistoricalMigrationSmoke(2), wantVersions: []int{1, 2, 3, 4}, wantSentinels: true},
-		{name: "version3", setup: setupHistoricalMigrationSmoke(3), wantVersions: []int{1, 2, 3, 4}, wantSentinels: true},
-		{name: "drifted-version1", setup: setupDriftedVersion1MigrationSmoke, wantVersions: []int{1, 2, 3, 4}, wantSentinels: true},
+		{name: "fresh", setup: setupFreshMigrationSmoke, wantVersions: []int{1, 2, 3, 4, 5}},
+		{name: "version1", setup: setupHistoricalMigrationSmoke(1), wantVersions: []int{1, 2, 3, 4, 5}, wantSentinels: true},
+		{name: "version2", setup: setupHistoricalMigrationSmoke(2), wantVersions: []int{1, 2, 3, 4, 5}, wantSentinels: true},
+		{name: "version3", setup: setupHistoricalMigrationSmoke(3), wantVersions: []int{1, 2, 3, 4, 5}, wantSentinels: true},
+		{name: "drifted-version1", setup: setupDriftedVersion1MigrationSmoke, wantVersions: []int{1, 2, 3, 4, 5}, wantSentinels: true},
 	}
 	for _, tc := range cases {
 		path := filepath.Join(root, tc.name+".sqlite")
@@ -236,7 +236,7 @@ func assertMigrationSmokeState(ctx context.Context, store *Store, tc migrationSm
 			return err
 		}
 	}
-	for _, table := range []string{"credential_fallback_policies", "model_cache", "request_metadata", "stream_metrics", "health_events", "fallback_events"} {
+	for _, table := range []string{"credential_fallback_policies", "model_cache", "request_metadata", "stream_metrics", "health_events", "fallback_events", "quota_events"} {
 		if err := assertTableExists(ctx, store.DB, table); err != nil {
 			return err
 		}
@@ -254,6 +254,8 @@ func assertMigrationSmokeState(ctx context.Context, store *Store, tc migrationSm
 		{table: "fallback_events", from: "request_metadata_id", targetTable: "request_metadata", onDelete: "CASCADE"},
 		{table: "fallback_events", from: "from_credential_id", targetTable: "provider_credentials", onDelete: "SET NULL"},
 		{table: "fallback_events", from: "to_credential_id", targetTable: "provider_credentials", onDelete: "SET NULL"},
+		{table: "quota_events", from: "request_metadata_id", targetTable: "request_metadata", onDelete: "CASCADE"},
+		{table: "quota_events", from: "credential_id", targetTable: "provider_credentials", onDelete: "SET NULL"},
 	} {
 		if err := assertForeignKey(ctx, store.DB, check); err != nil {
 			return err
@@ -597,6 +599,7 @@ func assertMigrationSmokeSecrets(ctx context.Context, db *sql.DB) error {
 		{"request_metadata", []string{"requested_provider_instance", "requested_model", "resolved_provider_instance", "resolved_model", "error_class", "fallback_reason"}},
 		{"health_events", []string{"provider_instance_id", "model_id", "event_class", "normalized_error_class", "refresh_failure_class"}},
 		{"fallback_events", []string{"provider_instance_id", "model_id", "reason"}},
+		{"quota_events", []string{"provider_instance_id", "model_id", "source", "error_class"}},
 		{"credential_fallback_policies", []string{"provider_instance_id", "credential_kind", "group_label"}},
 	}
 	for _, table := range tables {

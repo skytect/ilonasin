@@ -109,6 +109,9 @@ func assertProductionUpstreamMutationWiring() error {
 	if err := assertTUIUpstreamArg(filepath.Join(root, "internal/app/manage_check.go"), "Check"); err != nil {
 		return err
 	}
+	if err := assertTUIViewRowTypes(filepath.Join(root, "internal/tui/tui.go")); err != nil {
+		return err
+	}
 	checks := []struct {
 		path      string
 		forbidden string
@@ -150,6 +153,14 @@ func assertProductionUpstreamMutationWiring() error {
 		{path: "internal/tui/tui.go", forbidden: "LatestHealth(context.Background())"},
 		{path: "internal/tui/tui.go", forbidden: "RecentFallbacks(context.Background()"},
 		{path: "internal/tui/tui.go", forbidden: "QuotaByProvider(context.Background())"},
+		{path: "internal/tui/tui.go", forbidden: "credentials.UpstreamCredentialMetadata"},
+		{path: "internal/tui/tui.go", forbidden: "credentials.FallbackPolicyMetadata"},
+		{path: "internal/tui/tui.go", forbidden: "credentials.OAuthCredentialMetadata"},
+		{path: "internal/tui/tui.go", forbidden: "credentials.ProviderAccountMetadata"},
+		{path: "internal/tui/tui.go", forbidden: "upstreamCredentialsFromSnapshot"},
+		{path: "internal/tui/tui.go", forbidden: "fallbackPoliciesFromSnapshot"},
+		{path: "internal/tui/tui.go", forbidden: "oauthCredentialsFromSnapshot"},
+		{path: "internal/tui/tui.go", forbidden: "providerAccountsFromSnapshot"},
 		{path: "internal/app/manage_check_exercises.go", forbidden: "tui.ExerciseModelCacheSummary(ctx, cfg, registry, store)"},
 		{path: "internal/app/manage_check_exercises.go", forbidden: "tui.ExerciseObservabilitySummary(ctx, cfg, registry, store)"},
 		{path: "internal/app/manage_check_exercises.go", forbidden: "tui.ExerciseTelemetryPrune(ctx, cfg, registry, store,"},
@@ -173,6 +184,62 @@ func assertProductionUpstreamMutationWiring() error {
 		}
 	}
 	return nil
+}
+
+func assertTUIViewRowTypes(path string) error {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		return err
+	}
+	want := map[string]string{
+		"credentials":      "UpstreamCredential",
+		"fallbackPolicies": "FallbackPolicy",
+		"oauthRows":        "OAuthCredential",
+		"accountRows":      "ProviderAccount",
+	}
+	seen := map[string]bool{}
+	ast.Inspect(file, func(n ast.Node) bool {
+		decl, ok := n.(*ast.TypeSpec)
+		if !ok || decl.Name.Name != "Model" {
+			return true
+		}
+		st, ok := decl.Type.(*ast.StructType)
+		if !ok {
+			return false
+		}
+		for _, field := range st.Fields.List {
+			for _, name := range field.Names {
+				wantType, ok := want[name.Name]
+				if !ok {
+					continue
+				}
+				if arraySelectorType(field.Type, "management", wantType) {
+					seen[name.Name] = true
+				}
+			}
+		}
+		return false
+	})
+	for field, wantType := range want {
+		if !seen[field] {
+			return fmt.Errorf("tui Model.%s is not []management.%s", field, wantType)
+		}
+	}
+	return nil
+}
+
+func arraySelectorType(expr ast.Expr, pkg, typ string) bool {
+	array, ok := expr.(*ast.ArrayType)
+	if !ok {
+		return false
+	}
+	selector, ok := array.Elt.(*ast.SelectorExpr)
+	if !ok || selector.Sel.Name != typ {
+		return false
+	}
+	ident, ok := selector.X.(*ast.Ident)
+	return ok && ident.Name == pkg
 }
 
 func exerciseManageDaemonUnavailableCheck() error {

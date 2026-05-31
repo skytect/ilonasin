@@ -36,10 +36,10 @@ type Model struct {
 	now              func() time.Time
 	tokenRows        []management.LocalToken
 	providers        []provider.Instance
-	credentials      []credentials.UpstreamCredentialMetadata
-	fallbackPolicies []credentials.FallbackPolicyMetadata
-	oauthRows        []credentials.OAuthCredentialMetadata
-	accountRows      []credentials.ProviderAccountMetadata
+	credentials      []management.UpstreamCredential
+	fallbackPolicies []management.FallbackPolicy
+	oauthRows        []management.OAuthCredential
+	accountRows      []management.ProviderAccount
 	modelRows        []provider.ModelMetadata
 	requestRows      []metadata.RequestSummary
 	usageRows        []metadata.UsageSummary
@@ -973,10 +973,10 @@ func (m *Model) reload() error {
 func (m *Model) applySnapshot(snapshot management.ManagementSnapshotResponse) {
 	m.tokenRows = snapshot.LocalTokens
 	m.providers = providersFromSnapshot(snapshot.Providers)
-	m.credentials = upstreamCredentialsFromSnapshot(snapshot.UpstreamCredentials)
-	m.fallbackPolicies = fallbackPoliciesFromSnapshot(snapshot.FallbackPolicies)
-	m.oauthRows = oauthCredentialsFromSnapshot(snapshot.OAuthCredentials)
-	m.accountRows = providerAccountsFromSnapshot(snapshot.ProviderAccounts)
+	m.credentials = m.visibleUpstreamCredentials(snapshot.UpstreamCredentials)
+	m.fallbackPolicies = m.visibleFallbackPolicies(snapshot.FallbackPolicies)
+	m.oauthRows = append([]management.OAuthCredential(nil), snapshot.OAuthCredentials...)
+	m.accountRows = append([]management.ProviderAccount(nil), snapshot.ProviderAccounts...)
 	m.modelRows = modelMetadataFromSnapshot(snapshot.ModelCache)
 	m.requestRows = requestSummariesFromSnapshot(snapshot.RecentRequests)
 	m.usageRows = usageSummariesFromSnapshot(snapshot.Usage)
@@ -986,8 +986,6 @@ func (m *Model) applySnapshot(snapshot management.ManagementSnapshotResponse) {
 	m.fallbackRows = fallbackSummariesFromSnapshot(snapshot.Fallbacks)
 	m.quotaRows = quotaSummariesFromSnapshot(snapshot.Quotas)
 	m.pruningAvailable = snapshot.PruningAvailable
-	m.credentials = m.visibleUpstreamCredentials(m.credentials)
-	m.fallbackPolicies = m.visibleFallbackPolicies(m.fallbackPolicies)
 	if m.selected >= len(m.tokenRows) {
 		m.selected = len(m.tokenRows) - 1
 	}
@@ -1021,61 +1019,6 @@ func providersFromSnapshot(rows []management.ProviderInstance) []provider.Instan
 	return out
 }
 
-func upstreamCredentialsFromSnapshot(rows []management.UpstreamCredential) []credentials.UpstreamCredentialMetadata {
-	out := make([]credentials.UpstreamCredentialMetadata, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, credentials.UpstreamCredentialMetadata{
-			ID:                 row.ID,
-			ProviderInstanceID: row.ProviderInstanceID,
-			Kind:               row.Kind,
-			Label:              row.Label,
-			SecretPrefix:       row.SecretPrefix,
-			SecretLast4:        row.SecretLast4,
-			FallbackGroup:      row.FallbackGroup,
-			CreatedAt:          row.CreatedAt,
-			DisabledAt:         row.DisabledAt,
-			Disabled:           row.Disabled,
-		})
-	}
-	return out
-}
-
-func fallbackPoliciesFromSnapshot(rows []management.FallbackPolicy) []credentials.FallbackPolicyMetadata {
-	out := make([]credentials.FallbackPolicyMetadata, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, credentials.FallbackPolicyMetadata{
-			ProviderInstanceID: row.ProviderInstanceID,
-			CredentialKind:     row.CredentialKind,
-			GroupLabel:         row.GroupLabel,
-			Enabled:            row.Enabled,
-			CredentialCount:    row.CredentialCount,
-			Explicit:           row.Explicit,
-		})
-	}
-	return out
-}
-
-func oauthCredentialsFromSnapshot(rows []management.OAuthCredential) []credentials.OAuthCredentialMetadata {
-	out := make([]credentials.OAuthCredentialMetadata, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, credentials.OAuthCredentialMetadata{
-			ID:                  row.ID,
-			ProviderInstanceID:  row.ProviderInstanceID,
-			Label:               row.Label,
-			AccountDisplayLabel: row.AccountDisplayLabel,
-			PlanLabel:           row.PlanLabel,
-			Scopes:              row.Scopes,
-			ExpiresAt:           row.ExpiresAt,
-			LastRefreshAt:       row.LastRefreshAt,
-			RefreshFailureClass: row.RefreshFailureClass,
-			CreatedAt:           row.CreatedAt,
-			DisabledAt:          row.DisabledAt,
-			Disabled:            row.Disabled,
-		})
-	}
-	return out
-}
-
 func oauthChallengeFromManagement(row management.OAuthDeviceLoginChallenge) credentials.OAuthDeviceLoginChallenge {
 	return credentials.OAuthDeviceLoginChallenge{
 		ProviderInstanceID: row.ProviderInstanceID,
@@ -1083,21 +1026,6 @@ func oauthChallengeFromManagement(row management.OAuthDeviceLoginChallenge) cred
 		UserCode:           row.UserCode,
 		Handle:             row.Handle,
 	}
-}
-
-func providerAccountsFromSnapshot(rows []management.ProviderAccount) []credentials.ProviderAccountMetadata {
-	out := make([]credentials.ProviderAccountMetadata, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, credentials.ProviderAccountMetadata{
-			ID:                 row.ID,
-			ProviderInstanceID: row.ProviderInstanceID,
-			CredentialID:       row.CredentialID,
-			DisplayLabel:       row.DisplayLabel,
-			PlanLabel:          row.PlanLabel,
-			CreatedAt:          row.CreatedAt,
-		})
-	}
-	return out
 }
 
 func modelMetadataFromSnapshot(rows []management.ModelMetadata) []provider.ModelMetadata {
@@ -1862,7 +1790,7 @@ func (m *Model) disableFirstFallbackPolicy() error {
 	return nil
 }
 
-func (m Model) visibleFallbackPolicies(rows []credentials.FallbackPolicyMetadata) []credentials.FallbackPolicyMetadata {
+func (m Model) visibleFallbackPolicies(rows []management.FallbackPolicy) []management.FallbackPolicy {
 	allowed := map[string]map[string]bool{}
 	for _, instance := range m.visibleProviderRows() {
 		if instance.APIKey && !instance.Placeholder {
@@ -1875,7 +1803,7 @@ func (m Model) visibleFallbackPolicies(rows []credentials.FallbackPolicyMetadata
 			allowed[instance.ID][credentials.CredentialKindOAuth] = true
 		}
 	}
-	out := rows[:0]
+	out := make([]management.FallbackPolicy, 0, len(rows))
 	for _, row := range rows {
 		if allowed[row.ProviderInstanceID][row.CredentialKind] && row.CredentialCount >= 2 {
 			out = append(out, row)
@@ -1884,14 +1812,14 @@ func (m Model) visibleFallbackPolicies(rows []credentials.FallbackPolicyMetadata
 	return out
 }
 
-func (m Model) visibleUpstreamCredentials(rows []credentials.UpstreamCredentialMetadata) []credentials.UpstreamCredentialMetadata {
+func (m Model) visibleUpstreamCredentials(rows []management.UpstreamCredential) []management.UpstreamCredential {
 	allowed := map[string]bool{}
 	for _, instance := range m.visibleProviderRows() {
 		if instance.APIKey && !instance.Placeholder {
 			allowed[instance.ID] = true
 		}
 	}
-	out := rows[:0]
+	out := make([]management.UpstreamCredential, 0, len(rows))
 	for _, row := range rows {
 		if allowed[row.ProviderInstanceID] {
 			out = append(out, row)
@@ -1907,7 +1835,7 @@ func (m Model) visibleProviderRows() []provider.Instance {
 	return m.registry.List()
 }
 
-func fallbackPolicyEnabled(rows []credentials.FallbackPolicyMetadata, providerInstanceID, credentialKind, groupLabel string) bool {
+func fallbackPolicyEnabled(rows []management.FallbackPolicy, providerInstanceID, credentialKind, groupLabel string) bool {
 	for _, row := range rows {
 		if row.ProviderInstanceID == providerInstanceID && row.CredentialKind == credentialKind && row.GroupLabel == groupLabel {
 			return row.Enabled

@@ -116,7 +116,7 @@ func (a HTTPChatAdapter) ValidateChatRequest(instance Instance, req openai.ChatC
 			return err
 		}
 		if instance.Type == "deepseek" {
-			if err := rejectPresentFields(req, "presence_penalty", "frequency_penalty", "parallel_tool_calls", "user"); err != nil {
+			if err := rejectPresentFields(req, "presence_penalty", "frequency_penalty", "parallel_tool_calls", "prediction", "user"); err != nil {
 				return err
 			}
 			if err := rejectPresentFields(req, openRouterOnlyFields...); err != nil {
@@ -128,7 +128,7 @@ func (a HTTPChatAdapter) ValidateChatRequest(instance Instance, req openai.ChatC
 		}
 		return validateProviderOptions(instance.Type, req)
 	case "codex":
-		unsupported := append(commonUnsupported, "tools", "tool_choice", "parallel_tool_calls", "user", "logprobs", "top_logprobs", "provider_options", "max_tokens", "max_completion_tokens", "temperature", "top_p", "presence_penalty", "frequency_penalty", "stop", "response_format")
+		unsupported := append(commonUnsupported, "tools", "tool_choice", "parallel_tool_calls", "prediction", "user", "logprobs", "top_logprobs", "provider_options", "max_tokens", "max_completion_tokens", "temperature", "top_p", "presence_penalty", "frequency_penalty", "stop", "response_format")
 		unsupported = append(unsupported, openRouterOnlyFields...)
 		if err := rejectPresentFields(req, unsupported...); err != nil {
 			return err

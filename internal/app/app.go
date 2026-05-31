@@ -2571,6 +2571,10 @@ func newServeCheckUpstream() *serveCheckUpstream {
 						http.Error(w, err.Error(), http.StatusBadRequest)
 						return
 					}
+					if err := validateServeCheckPrediction(r.URL.Path, body, predictionPrivacyMarker); err != nil {
+						http.Error(w, err.Error(), http.StatusBadRequest)
+						return
+					}
 					if err := validateServeCheckUser(r.URL.Path, body, userPrivacyMarker); err != nil {
 						http.Error(w, err.Error(), http.StatusBadRequest)
 						return
@@ -2644,6 +2648,16 @@ func newServeCheckUpstream() *serveCheckUpstream {
 		if strings.HasPrefix(model, "parallel-tool-calls-") {
 			want := strings.HasSuffix(model, "-true")
 			if err := validateServeCheckParallelToolCalls(r.URL.Path, body, want); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		if strings.HasPrefix(model, "prediction-") {
+			want := predictionPrivacyMarker
+			if model == "prediction-empty" {
+				want = ""
+			}
+			if err := validateServeCheckPrediction(r.URL.Path, body, want); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
@@ -3011,6 +3025,24 @@ func validateServeCheckParallelToolCalls(path string, body map[string]any, want 
 	value, ok := body["parallel_tool_calls"].(bool)
 	if !ok || value != want {
 		return fmt.Errorf("invalid parallel_tool_calls forwarding")
+	}
+	return nil
+}
+
+func validateServeCheckPrediction(path string, body map[string]any, want string) error {
+	if path != "/api/v1/chat/completions" {
+		return fmt.Errorf("prediction reached unsupported provider")
+	}
+	prediction, ok := body["prediction"].(map[string]any)
+	if !ok || len(prediction) != 2 {
+		return fmt.Errorf("invalid prediction forwarding")
+	}
+	if prediction["type"] != "content" {
+		return fmt.Errorf("invalid prediction type forwarding")
+	}
+	content, ok := prediction["content"].(string)
+	if !ok || content != want {
+		return fmt.Errorf("invalid prediction content forwarding")
 	}
 	return nil
 }
@@ -3548,6 +3580,12 @@ func (u *serveCheckUpstream) handleServeCheckStream(w http.ResponseWriter, r *ht
 			return
 		}
 	}
+	if model == "stream-prediction" {
+		if err := validateServeCheckPrediction(r.URL.Path, body, predictionPrivacyMarker); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 	if model == "stream-user" {
 		if err := validateServeCheckUser(r.URL.Path, body, userPrivacyMarker); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -3739,7 +3777,7 @@ func assertUnsupportedChatNoUpstream(base, token string, body []byte, fakeUpstre
 	if (strings.Contains(name, "sampling_penalty") || strings.Contains(name, "advanced_sampling")) && (bytes.Contains(respBody, []byte("invalid request JSON")) || bytes.Contains(respBody, []byte("cannot unmarshal"))) {
 		return fmt.Errorf("unsupported %s returned raw decode wording", name)
 	}
-	for _, marker := range []string{providerOptionPrivacyMarker, responseFormatPrivacyMarker, responseFormatSchemaMarker, logprobTokenMarker, logitBiasDecimalMarker, logitBiasExponentMarker, logitBiasOverflowMarker, userPrivacyMarker, userIDPrivacyMarker, "parallel-tool-calls-private-marker", toolNameMarker, toolDescriptionMarker, toolSchemaNumberMarker, toolCallIDMarker, toolArgumentMarker, toolResultMarker, "1.75", "-1.25", penaltyOverflowMarker, "2.01", "-2.01", "2.0000000000000001", "-2.0000000000000001", "2.000000000000000000000000000000000000000000000000000000000000000000000000000000001", "9223372036854775807", "-9223372036854775808", "9223372036854775808", "-9223372036854775809", "1.0000000000000001", "2.0000000000000001", "100.0000000000000001", "-100.0000000000000001"} {
+	for _, marker := range []string{providerOptionPrivacyMarker, responseFormatPrivacyMarker, responseFormatSchemaMarker, logprobTokenMarker, logitBiasDecimalMarker, logitBiasExponentMarker, logitBiasOverflowMarker, predictionPrivacyMarker, "prediction-private-type", "prediction-private-extra", userPrivacyMarker, userIDPrivacyMarker, "parallel-tool-calls-private-marker", toolNameMarker, toolDescriptionMarker, toolSchemaNumberMarker, toolCallIDMarker, toolArgumentMarker, toolResultMarker, "1.75", "-1.25", penaltyOverflowMarker, "2.01", "-2.01", "2.0000000000000001", "-2.0000000000000001", "2.000000000000000000000000000000000000000000000000000000000000000000000000000000001", "9223372036854775807", "-9223372036854775808", "9223372036854775808", "-9223372036854775809", "1.0000000000000001", "2.0000000000000001", "100.0000000000000001", "-100.0000000000000001"} {
 		if bytes.Contains(respBody, []byte(marker)) {
 			return fmt.Errorf("unsupported %s leaked private marker", name)
 		}
@@ -3803,6 +3841,7 @@ func exerciseCodexChatCheck(ctx context.Context, base, token string, fakeUpstrea
 		{name: "logit_bias", extra: logitBiasExtra()},
 		{name: "parallel_tool_calls_true", extra: `"parallel_tool_calls":true`},
 		{name: "parallel_tool_calls_false", extra: `"parallel_tool_calls":false`},
+		{name: "prediction", extra: predictionExtra(predictionPrivacyMarker)},
 		{name: "user", extra: `"user":"` + userPrivacyMarker + `"`},
 		{name: "tools", extra: functionToolsExtra("")},
 		{name: "tool_choice", extra: `"tool_choice":"none"`},
@@ -4721,6 +4760,7 @@ const logprobTokenMarker = "logprob-token-marker"
 const logitBiasDecimalMarker = "33.333333333333333333"
 const logitBiasExponentMarker = "1e-1"
 const logitBiasOverflowMarker = "1e309"
+const predictionPrivacyMarker = "prediction_private_marker"
 const userPrivacyMarker = "user_private_marker"
 const userIDPrivacyMarker = "userid_private_marker"
 const toolNameMarker = "tool_private_marker"
@@ -4891,6 +4931,39 @@ func parallelToolCallsUnsupportedCases(providerType string) []providerOptionInva
 	return []providerOptionInvalidCase{
 		{name: "true", extra: `"parallel_tool_calls":true`},
 		{name: "false", extra: `"parallel_tool_calls":false`},
+	}
+}
+
+func predictionExtra(content string) string {
+	return `"prediction":{"type":"content","content":"` + content + `"}`
+}
+
+func predictionInvalidCases() []providerOptionInvalidCase {
+	return []providerOptionInvalidCase{
+		{name: "null", extra: `"prediction":null`},
+		{name: "bool", extra: `"prediction":true`},
+		{name: "number", extra: `"prediction":7`},
+		{name: "array", extra: `"prediction":[{"type":"content","content":"` + predictionPrivacyMarker + `"}]`},
+		{name: "missing-type", extra: `"prediction":{"content":"` + predictionPrivacyMarker + `"}`},
+		{name: "missing-content", extra: `"prediction":{"type":"content"}`},
+		{name: "bad-type", extra: `"prediction":{"type":"prediction-private-type","content":"` + predictionPrivacyMarker + `"}`},
+		{name: "type-null", extra: `"prediction":{"type":null,"content":"` + predictionPrivacyMarker + `"}`},
+		{name: "type-object", extra: `"prediction":{"type":{"value":"content"},"content":"` + predictionPrivacyMarker + `"}`},
+		{name: "content-null", extra: `"prediction":{"type":"content","content":null}`},
+		{name: "content-bool", extra: `"prediction":{"type":"content","content":true}`},
+		{name: "content-number", extra: `"prediction":{"type":"content","content":7}`},
+		{name: "content-object", extra: `"prediction":{"type":"content","content":{"value":"` + predictionPrivacyMarker + `"}}`},
+		{name: "content-array", extra: `"prediction":{"type":"content","content":["` + predictionPrivacyMarker + `"]}`},
+		{name: "extra-key", extra: `"prediction":{"type":"content","content":"` + predictionPrivacyMarker + `","extra":"prediction-private-extra"}`},
+	}
+}
+
+func predictionUnsupportedCases(providerType string) []providerOptionInvalidCase {
+	if providerType == "openrouter" {
+		return nil
+	}
+	return []providerOptionInvalidCase{
+		{name: "prediction", extra: predictionExtra(predictionPrivacyMarker)},
 	}
 }
 
@@ -5230,8 +5303,26 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 		if !fakeUpstream.sawExpected(expectedPath, "provider-require-parameters") {
 			return fmt.Errorf("provider require_parameters did not reach upstream provider=%s", instance.ID)
 		}
+		predictionBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/prediction-forwarding", predictionExtra(predictionPrivacyMarker)))
+		status, respBody, err = postJSON(base+"/v1/chat/completions", token, predictionBody)
+		if err != nil || status != http.StatusOK {
+			return fmt.Errorf("prediction forwarding provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if bytes.Contains(respBody, []byte(predictionPrivacyMarker)) {
+			return fmt.Errorf("prediction forwarding response echoed private marker")
+		}
+		if !fakeUpstream.sawExpected(expectedPath, "prediction-forwarding") {
+			return fmt.Errorf("prediction forwarding did not reach upstream provider=%s", instance.ID)
+		}
+		emptyPredictionBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"prediction":{"type":"content","content":""}}`, instance.ID+"/prediction-empty"))
+		if status, _, err := postJSON(base+"/v1/chat/completions", token, emptyPredictionBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("empty prediction forwarding provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if !fakeUpstream.sawExpected(expectedPath, "prediction-empty") {
+			return fmt.Errorf("empty prediction forwarding did not reach upstream provider=%s", instance.ID)
+		}
 		userBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"user":"%s"}`, instance.ID+"/user-forwarding", userPrivacyMarker))
-		status, respBody, err := postJSON(base+"/v1/chat/completions", token, userBody)
+		status, respBody, err = postJSON(base+"/v1/chat/completions", token, userBody)
 		if err != nil || status != http.StatusOK {
 			return fmt.Errorf("user forwarding provider=%s status=%d err=%v", instance.ID, status, err)
 		}
@@ -5249,13 +5340,13 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 		if !fakeUpstream.sawExpected(expectedPath, "user-max") {
 			return fmt.Errorf("max user forwarding did not reach upstream provider=%s", instance.ID)
 		}
-		combinedExtra := `"user":"` + userPrivacyMarker + `",` + openRouterReasoningRequireParametersExtra() + `,` + openRouterJSONSchemaResponseFormatExtra() + `,"logprobs":true,"top_logprobs":20,"logit_bias":{"50256":` + logitBiasDecimalMarker + `},"parallel_tool_calls":true,"top_k":9223372036854775807,"max_completion_tokens":2,` + functionToolsExtra(`"auto"`)
+		combinedExtra := predictionExtra(predictionPrivacyMarker) + `,"user":"` + userPrivacyMarker + `",` + openRouterReasoningRequireParametersExtra() + `,` + openRouterJSONSchemaResponseFormatExtra() + `,"logprobs":true,"top_logprobs":20,"logit_bias":{"50256":` + logitBiasDecimalMarker + `},"parallel_tool_calls":true,"top_k":9223372036854775807,"max_completion_tokens":2,` + functionToolsExtra(`"auto"`)
 		combinedBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-options-combined", combinedExtra))
 		status, respBody, err = postJSON(base+"/v1/chat/completions", token, combinedBody)
 		if err != nil || status != http.StatusOK {
 			return fmt.Errorf("provider options combined provider=%s status=%d err=%v", instance.ID, status, err)
 		}
-		for _, marker := range []string{providerOptionPrivacyMarker, responseFormatPrivacyMarker, responseFormatSchemaMarker, logprobTokenMarker, logitBiasDecimalMarker, userPrivacyMarker, toolDescriptionMarker, toolSchemaNumberMarker} {
+		for _, marker := range []string{providerOptionPrivacyMarker, responseFormatPrivacyMarker, responseFormatSchemaMarker, logprobTokenMarker, logitBiasDecimalMarker, predictionPrivacyMarker, userPrivacyMarker, toolDescriptionMarker, toolSchemaNumberMarker} {
 			if bytes.Contains(respBody, []byte(marker)) {
 				return fmt.Errorf("provider options combined echoed private marker")
 			}
@@ -5518,6 +5609,13 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 			return err
 		}
 	}
+	for _, tc := range predictionInvalidCases() {
+		upstreamModel := "invalid-prediction-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" prediction "+tc.name); err != nil {
+			return err
+		}
+	}
 	for _, tc := range userInvalidCases() {
 		upstreamModel := "invalid-user-" + tc.name
 		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
@@ -5565,6 +5663,13 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 			return err
 		}
 	}
+	for _, tc := range predictionUnsupportedCases(instance.Type) {
+		upstreamModel := "unsupported-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" prediction unsupported "+tc.name); err != nil {
+			return err
+		}
+	}
 	for _, tc := range userUnsupportedCases(instance.Type) {
 		upstreamModel := "unsupported-" + tc.name
 		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
@@ -5580,7 +5685,7 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 			return err
 		}
 	}
-	for _, marker := range []string{"1.75", "-1.25", penaltyOverflowMarker, "9223372036854775807", "-9223372036854775808", advancedSamplingOverflowMarker, logitBiasDecimalMarker, logitBiasExponentMarker, logitBiasOverflowMarker, userPrivacyMarker, userIDPrivacyMarker, "parallel-tool-calls-private-marker", toolNameMarker, toolDescriptionMarker, toolSchemaNumberMarker, toolCallIDMarker, toolArgumentMarker, toolResultMarker} {
+	for _, marker := range []string{"1.75", "-1.25", penaltyOverflowMarker, "9223372036854775807", "-9223372036854775808", advancedSamplingOverflowMarker, logitBiasDecimalMarker, logitBiasExponentMarker, logitBiasOverflowMarker, predictionPrivacyMarker, userPrivacyMarker, userIDPrivacyMarker, "parallel-tool-calls-private-marker", toolNameMarker, toolDescriptionMarker, toolSchemaNumberMarker, toolCallIDMarker, toolArgumentMarker, toolResultMarker} {
 		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
 			return err
 		}
@@ -5745,6 +5850,17 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 		}
 		if !fakeUpstream.sawExpectedStream(expectedPath, "stream-parallel-tool-calls") {
 			return fmt.Errorf("stream parallel_tool_calls did not reach upstream provider=%s", instance.ID)
+		}
+		predictionBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/stream-prediction", predictionExtra(predictionPrivacyMarker)))
+		status, _, _, raw, err = postStream(base+"/v1/chat/completions", token, predictionBody)
+		if err != nil || status != http.StatusOK {
+			return fmt.Errorf("stream prediction provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if bytes.Contains(raw, []byte(predictionPrivacyMarker)) {
+			return fmt.Errorf("stream prediction echoed private marker")
+		}
+		if !fakeUpstream.sawExpectedStream(expectedPath, "stream-prediction") {
+			return fmt.Errorf("stream prediction did not reach upstream provider=%s", instance.ID)
 		}
 		userBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},"user":"%s"}`, instance.ID+"/stream-user", userPrivacyMarker))
 		status, _, _, raw, err = postStream(base+"/v1/chat/completions", token, userBody)
@@ -5920,6 +6036,13 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 			return err
 		}
 	}
+	for _, tc := range predictionInvalidCases() {
+		upstreamModel := "stream-invalid-prediction-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" stream prediction "+tc.name); err != nil {
+			return err
+		}
+	}
 	for _, tc := range userInvalidCases() {
 		upstreamModel := "stream-invalid-user-" + tc.name
 		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/"+upstreamModel, tc.extra))
@@ -5962,6 +6085,13 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 			return err
 		}
 	}
+	for _, tc := range predictionUnsupportedCases(instance.Type) {
+		upstreamModel := "stream-unsupported-" + tc.name
+		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+		if err := assertUnsupportedChatNoUpstream(base, token, body, fakeUpstream, expectedPath, upstreamModel, instance.ID+" stream prediction unsupported "+tc.name); err != nil {
+			return err
+		}
+	}
 	for _, tc := range userUnsupportedCases(instance.Type) {
 		upstreamModel := "stream-unsupported-" + tc.name
 		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/"+upstreamModel, tc.extra))
@@ -5977,7 +6107,7 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 			return err
 		}
 	}
-	for _, marker := range []string{"1.75", "-1.25", penaltyOverflowMarker, logprobTokenMarker, logitBiasDecimalMarker, logitBiasExponentMarker, logitBiasOverflowMarker, userPrivacyMarker, userIDPrivacyMarker, "parallel-tool-calls-private-marker", toolNameMarker, toolDescriptionMarker, toolSchemaNumberMarker, toolCallIDMarker, toolArgumentMarker, toolResultMarker} {
+	for _, marker := range []string{"1.75", "-1.25", penaltyOverflowMarker, logprobTokenMarker, logitBiasDecimalMarker, logitBiasExponentMarker, logitBiasOverflowMarker, predictionPrivacyMarker, userPrivacyMarker, userIDPrivacyMarker, "parallel-tool-calls-private-marker", toolNameMarker, toolDescriptionMarker, toolSchemaNumberMarker, toolCallIDMarker, toolArgumentMarker, toolResultMarker} {
 		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
 			return err
 		}
@@ -6385,6 +6515,7 @@ func exerciseCodexNoEligibleCacheCheck(ctx context.Context, registry provider.Re
 		{name: "codex-logit-bias", extra: logitBiasExtra()},
 		{name: "codex-parallel-tool-calls-true", extra: `"parallel_tool_calls":true`},
 		{name: "codex-parallel-tool-calls-false", extra: `"parallel_tool_calls":false`},
+		{name: "codex-prediction", extra: predictionExtra(predictionPrivacyMarker)},
 	} {
 		upstreamModel := "codex-noeligible-" + tc.name
 		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, "codex/"+upstreamModel, tc.extra))
@@ -6522,6 +6653,13 @@ func exerciseSamplingPenaltyNoEligibleCheck(ctx context.Context, registry provid
 				return err
 			}
 		}
+		for _, tc := range predictionInvalidCases() {
+			upstreamModel := "noeligible-invalid-prediction-" + tc.name
+			body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+			if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, body, fakeUpstream, expectedPath, upstreamModel, "noeligible "+instance.ID+" prediction "+tc.name); err != nil {
+				return err
+			}
+		}
 		for _, tc := range userInvalidCases() {
 			upstreamModel := "noeligible-invalid-user-" + tc.name
 			body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
@@ -6576,6 +6714,13 @@ func exerciseSamplingPenaltyNoEligibleCheck(ctx context.Context, registry provid
 				return err
 			}
 		}
+		for _, tc := range predictionUnsupportedCases(instance.Type) {
+			upstreamModel := "noeligible-unsupported-" + tc.name
+			body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
+			if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, body, fakeUpstream, expectedPath, upstreamModel, "noeligible "+instance.ID+" prediction unsupported "+tc.name); err != nil {
+				return err
+			}
+		}
 		for _, tc := range userUnsupportedCases(instance.Type) {
 			upstreamModel := "noeligible-unsupported-" + tc.name
 			body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/"+upstreamModel, tc.extra))
@@ -6622,7 +6767,7 @@ func exerciseSamplingPenaltyNoEligibleCheck(ctx context.Context, registry provid
 	if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, toolMessageBody, fakeUpstream, "/responses", "codex-noeligible-tools-messages", "codex noeligible tool messages"); err != nil {
 		return err
 	}
-	for _, marker := range []string{"1.75", "-1.25", penaltyOverflowMarker, "9223372036854775807", "-9223372036854775808", advancedSamplingOverflowMarker, logprobTokenMarker, logitBiasDecimalMarker, logitBiasExponentMarker, logitBiasOverflowMarker, userPrivacyMarker, userIDPrivacyMarker, "parallel-tool-calls-private-marker", toolNameMarker, toolDescriptionMarker, toolSchemaNumberMarker, toolCallIDMarker, toolArgumentMarker, toolResultMarker} {
+	for _, marker := range []string{"1.75", "-1.25", penaltyOverflowMarker, "9223372036854775807", "-9223372036854775808", advancedSamplingOverflowMarker, logprobTokenMarker, logitBiasDecimalMarker, logitBiasExponentMarker, logitBiasOverflowMarker, predictionPrivacyMarker, userPrivacyMarker, userIDPrivacyMarker, "parallel-tool-calls-private-marker", toolNameMarker, toolDescriptionMarker, toolSchemaNumberMarker, toolCallIDMarker, toolArgumentMarker, toolResultMarker} {
 		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
 			return err
 		}

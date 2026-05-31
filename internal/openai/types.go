@@ -34,6 +34,7 @@ type ChatCompletionRequest struct {
 	Tools               []map[string]any       `json:"tools,omitempty"`
 	ToolChoice          any                    `json:"tool_choice,omitempty"`
 	ParallelToolCalls   *bool                  `json:"parallel_tool_calls,omitempty"`
+	Prediction          map[string]any         `json:"prediction,omitempty"`
 	User                *string                `json:"user,omitempty"`
 	Logprobs            *bool                  `json:"logprobs,omitempty"`
 	TopLogprobs         *int                   `json:"top_logprobs,omitempty"`
@@ -92,6 +93,9 @@ func DecodeChatCompletion(r io.Reader) (ChatCompletionRequest, error) {
 		return ChatCompletionRequest{}, err
 	}
 	if err := validateRawParallelToolCalls(raw); err != nil {
+		return ChatCompletionRequest{}, err
+	}
+	if err := validateRawPrediction(raw); err != nil {
 		return ChatCompletionRequest{}, err
 	}
 	if err := validateRawUser(raw); err != nil {
@@ -327,6 +331,9 @@ func MarshalUpstreamChatRequest(req ChatCompletionRequest, upstreamModel string)
 	}
 	if req.ParallelToolCalls != nil {
 		out["parallel_tool_calls"] = *req.ParallelToolCalls
+	}
+	if req.HasField("prediction") {
+		out["prediction"] = req.Prediction
 	}
 	if req.User != nil {
 		out["user"] = *req.User
@@ -571,6 +578,7 @@ func validateTopLevelKeys(raw map[string]json.RawMessage) error {
 		"tools":                 true,
 		"tool_choice":           true,
 		"parallel_tool_calls":   true,
+		"prediction":            true,
 		"user":                  true,
 		"logprobs":              true,
 		"top_logprobs":          true,
@@ -586,6 +594,52 @@ func validateTopLevelKeys(raw map[string]json.RawMessage) error {
 		if !allowed[key] {
 			return fmt.Errorf("unknown field %q", key)
 		}
+	}
+	return nil
+}
+
+func validateRawPrediction(raw map[string]json.RawMessage) error {
+	value, ok := raw["prediction"]
+	if !ok {
+		return nil
+	}
+	trimmed := bytes.TrimSpace(value)
+	if len(trimmed) == 0 || isJSONNull(trimmed) || trimmed[0] != '{' {
+		return errors.New("prediction must be an object")
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &obj); err != nil {
+		return errors.New("prediction must be an object")
+	}
+	if len(obj) != 2 {
+		return errors.New("prediction only supports type and content")
+	}
+	rawType, ok := obj["type"]
+	if !ok {
+		return errors.New("prediction.type is required")
+	}
+	rawType = bytes.TrimSpace(rawType)
+	if len(rawType) == 0 || isJSONNull(rawType) || rawType[0] != '"' {
+		return errors.New("prediction.type must be a string")
+	}
+	var typ string
+	if err := json.Unmarshal(rawType, &typ); err != nil {
+		return errors.New("prediction.type must be a string")
+	}
+	if typ != "content" {
+		return errors.New("prediction.type is unsupported")
+	}
+	rawContent, ok := obj["content"]
+	if !ok {
+		return errors.New("prediction.content is required")
+	}
+	rawContent = bytes.TrimSpace(rawContent)
+	if len(rawContent) == 0 || isJSONNull(rawContent) || rawContent[0] != '"' {
+		return errors.New("prediction.content must be a string")
+	}
+	var content string
+	if err := json.Unmarshal(rawContent, &content); err != nil {
+		return errors.New("prediction.content must be a string")
 	}
 	return nil
 }

@@ -50,6 +50,7 @@ type Model struct {
 	streamRows       []metadata.StreamSummary
 	healthRows       []metadata.HealthSummary
 	fallbackRows     []metadata.FallbackSummary
+	quotaRows        []metadata.QuotaSummary
 	pruneResult      *metadata.PruneResult
 	pruningAvailable bool
 	selected         int
@@ -78,6 +79,7 @@ type ObservabilityReader interface {
 	StreamSummary(ctx context.Context) ([]metadata.StreamSummary, error)
 	LatestHealth(ctx context.Context) ([]metadata.HealthSummary, error)
 	RecentFallbacks(ctx context.Context, limit int) ([]metadata.FallbackSummary, error)
+	QuotaByProvider(ctx context.Context) ([]metadata.QuotaSummary, error)
 }
 
 type TelemetryPruner interface {
@@ -597,6 +599,7 @@ func ExerciseObservabilitySummary(ctx context.Context, cfg config.Config, regist
 		"Latency",
 		"Streams",
 		"Health",
+		"Quota",
 		"Fallbacks",
 		"deepseek 2 req prompt 11 completion 7 total 18 reasoning 3 cache_hit 5 cache_write 3 cost_microunits 126",
 		"avg latency 125ms ttft 50ms tps 9.00",
@@ -604,6 +607,7 @@ func ExerciseObservabilitySummary(ctx context.Context, cfg config.Config, regist
 		"deepseek/deepseek-router -> deepseek/deepseek-v4-pro status 200",
 		"deepseek/models upstream_failure",
 		"retry_after 2026-05-30T12:10:00Z",
+		"deepseek/deepseek-v4-pro stream status 429 rate_limit_exceeded",
 		"availability_retry",
 	}
 	for _, text := range required {
@@ -640,7 +644,7 @@ func ExerciseTelemetryPrune(ctx context.Context, cfg config.Config, registry pro
 	got := *m.pruneResult
 	if !got.Cutoff.Equal(expected.Cutoff) || got.Requests != expected.Requests ||
 		got.Streams != expected.Streams || got.Fallbacks != expected.Fallbacks ||
-		got.Health != expected.Health {
+		got.Health != expected.Health || got.Quotas != expected.Quotas {
 		return fmt.Errorf("telemetry prune result mismatch got=%+v want=%+v", got, expected)
 	}
 	view := m.View()
@@ -648,8 +652,8 @@ func ExerciseTelemetryPrune(ctx context.Context, cfg config.Config, registry pro
 		"Telemetry pruning",
 		"Retention keep forever until pruned.",
 		"Manual prune cutoff older than 30 days.",
-		fmt.Sprintf("Last prune before %s: requests %d streams %d fallbacks %d health %d",
-			formatPreciseTime(expected.Cutoff), expected.Requests, expected.Streams, expected.Fallbacks, expected.Health),
+		fmt.Sprintf("Last prune before %s: requests %d streams %d fallbacks %d health %d quotas %d",
+			formatPreciseTime(expected.Cutoff), expected.Requests, expected.Streams, expected.Fallbacks, expected.Health, expected.Quotas),
 	} {
 		if !strings.Contains(view, text) {
 			return fmt.Errorf("telemetry prune summary missing %q", text)
@@ -1044,6 +1048,12 @@ func (m *Model) reloadDirect() error {
 			return err
 		}
 		m.fallbackRows = fallbackRows
+		quotaRows, err := m.observability.QuotaByProvider(context.Background())
+		if err != nil {
+			m.err = err.Error()
+			return err
+		}
+		m.quotaRows = quotaRows
 	}
 	if m.selected >= len(m.tokenRows) {
 		m.selected = len(m.tokenRows) - 1
@@ -1074,6 +1084,7 @@ func (m *Model) applySnapshot(snapshot management.ManagementSnapshotResponse) {
 	m.streamRows = streamSummariesFromSnapshot(snapshot.Streams)
 	m.healthRows = healthSummariesFromSnapshot(snapshot.Health)
 	m.fallbackRows = fallbackSummariesFromSnapshot(snapshot.Fallbacks)
+	m.quotaRows = quotaSummariesFromSnapshot(snapshot.Quotas)
 	m.pruningAvailable = snapshot.PruningAvailable
 	m.credentials = m.visibleUpstreamCredentials(m.credentials)
 	m.fallbackPolicies = m.visibleFallbackPolicies(m.fallbackPolicies)
@@ -1311,6 +1322,26 @@ func fallbackSummariesFromSnapshot(rows []management.FallbackSummary) []metadata
 	return out
 }
 
+func quotaSummariesFromSnapshot(rows []management.QuotaSummary) []metadata.QuotaSummary {
+	out := make([]metadata.QuotaSummary, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, metadata.QuotaSummary{
+			ObservedAt:         row.ObservedAt,
+			ProviderInstanceID: row.ProviderInstanceID,
+			ModelID:            row.ModelID,
+			CredentialID:       row.CredentialID,
+			CredentialLabel:    row.CredentialLabel,
+			Source:             row.Source,
+			HTTPStatus:         row.HTTPStatus,
+			ErrorClass:         row.ErrorClass,
+			RetryAfter:         row.RetryAfter,
+			ResetAt:            row.ResetAt,
+			Count:              row.Count,
+		})
+	}
+	return out
+}
+
 func (m Model) writeOAuth(b *strings.Builder) {
 	if m.oauth == nil && m.snapshot == nil {
 		return
@@ -1432,6 +1463,25 @@ func (m Model) writeObservability(b *strings.Builder) {
 			safeDisplay(row.EventClass), row.HTTPStatus, safeDisplay(row.ErrorClass),
 			credentialDisplay(row.CredentialID, row.CredentialLabel), formatTime(row.OccurredAt), retryAfter)
 	}
+	b.WriteString("\nQuota\n")
+	if len(m.quotaRows) == 0 {
+		b.WriteString("No quota metadata.\n")
+	}
+	for _, row := range m.quotaRows {
+		retryAfter := ""
+		if row.RetryAfter != nil {
+			retryAfter = " retry_after " + formatTime(*row.RetryAfter)
+		}
+		resetAt := ""
+		if row.ResetAt != nil {
+			resetAt = " reset " + formatTime(*row.ResetAt)
+		}
+		fmt.Fprintf(b, "- %s/%s %s status %d %s %s count %d at %s%s%s\n",
+			safeDisplay(row.ProviderInstanceID), healthModelDisplay(row.ModelID),
+			safeDisplay(row.Source), row.HTTPStatus, safeDisplay(row.ErrorClass),
+			credentialDisplay(row.CredentialID, row.CredentialLabel), row.Count,
+			formatTime(row.ObservedAt), retryAfter, resetAt)
+	}
 	b.WriteString("\nFallbacks\n")
 	if len(m.fallbackRows) == 0 {
 		b.WriteString("No fallback metadata.\n")
@@ -1452,9 +1502,9 @@ func (m Model) writePruning(b *strings.Builder) {
 	b.WriteString("Retention keep forever until pruned.\n")
 	b.WriteString("Manual prune cutoff older than 30 days.\n")
 	if m.pruneResult != nil {
-		fmt.Fprintf(b, "Last prune before %s: requests %d streams %d fallbacks %d health %d\n",
+		fmt.Fprintf(b, "Last prune before %s: requests %d streams %d fallbacks %d health %d quotas %d\n",
 			formatPreciseTime(m.pruneResult.Cutoff), m.pruneResult.Requests, m.pruneResult.Streams,
-			m.pruneResult.Fallbacks, m.pruneResult.Health)
+			m.pruneResult.Fallbacks, m.pruneResult.Health, m.pruneResult.Quotas)
 	}
 }
 

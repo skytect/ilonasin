@@ -371,6 +371,20 @@ func exerciseObservabilityCheck(ctx context.Context, registry provider.Registry,
 	}); err != nil {
 		return fmt.Errorf("seed observability unsafe fallback: %w", err)
 	}
+	if err := store.RecordQuotaObservation(ctx, metadata.QuotaObservation{
+		RequestMetadataID:  streamRequestID,
+		ObservedAt:         started.Add(6 * time.Minute),
+		ProviderInstanceID: "deepseek",
+		CredentialID:       first.ID,
+		ModelID:            "deepseek-v4-pro",
+		Source:             "stream",
+		HTTPStatus:         http.StatusTooManyRequests,
+		ErrorClass:         "rate_limit_exceeded",
+		RetryAfter:         &retryAfter,
+		ResetAt:            &retryAfter,
+	}); err != nil {
+		return fmt.Errorf("seed observability quota: %w", err)
+	}
 	return tui.ExerciseObservabilitySummary(ctx, cfg, registry, store)
 }
 
@@ -1252,8 +1266,17 @@ func exerciseTelemetryPruneCheck(ctx context.Context, registry provider.Registry
 			return fmt.Errorf("seed prune health: %w", err)
 		}
 	}
+	for _, quota := range []metadata.QuotaObservation{
+		{RequestMetadataID: oldRequestID, ObservedAt: recentAt, ProviderInstanceID: "deepseek", CredentialID: first.ID, ModelID: "recent-attached-old", Source: "chat", HTTPStatus: http.StatusTooManyRequests, ErrorClass: "rate_limit_exceeded"},
+		{RequestMetadataID: recentRequestID, ObservedAt: recentAt, ProviderInstanceID: "deepseek", CredentialID: second.ID, ModelID: "recent raw-provider-payload", Source: "stream", HTTPStatus: http.StatusPaymentRequired, ErrorClass: "insufficient_quota"},
+		{RequestMetadataID: exactRequestID, ObservedAt: cutoff, ProviderInstanceID: "deepseek", CredentialID: second.ID, ModelID: "exact-cutoff", Source: "chat", HTTPStatus: http.StatusTooManyRequests, ErrorClass: "rate_limit_exceeded"},
+	} {
+		if err := store.RecordQuotaObservation(ctx, quota); err != nil {
+			return fmt.Errorf("seed prune quota: %w", err)
+		}
+	}
 
-	expected := metadata.PruneResult{Cutoff: cutoff, Requests: 1, Streams: 1, Fallbacks: 3, Health: 1}
+	expected := metadata.PruneResult{Cutoff: cutoff, Requests: 1, Streams: 1, Fallbacks: 3, Health: 1, Quotas: 1}
 	if err := tui.ExerciseTelemetryPrune(ctx, cfg, registry, store, store, func() time.Time { return now }, expected); err != nil {
 		return err
 	}

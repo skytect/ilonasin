@@ -170,6 +170,17 @@ func exerciseManagementSnapshotTUIReload(ctx context.Context) error {
 			ErrorClass:         "snapshot_health_ok",
 			OccurredAt:         now,
 		}},
+		Quotas: []management.QuotaSummary{{
+			ObservedAt:         now,
+			ProviderInstanceID: "snapshot-provider",
+			ModelID:            "snapshot-model",
+			CredentialID:       702,
+			CredentialLabel:    "snapshot upstream",
+			Source:             "stream",
+			HTTPStatus:         http.StatusTooManyRequests,
+			ErrorClass:         "rate_limit_exceeded",
+			Count:              2,
+		}},
 		Fallbacks: []management.FallbackSummary{{
 			ID:                  706,
 			RequestMetadataID:   705,
@@ -214,6 +225,8 @@ func exerciseManagementSnapshotTUIReload(ctx context.Context) error {
 		"snapshot_done",
 		"snapshot_health",
 		"snapshot_health_ok",
+		"snapshot-provider/snapshot-model stream status 429 rate_limit_exceeded",
+		"count 2",
 		"snapshot_request_retry",
 		"snapshot_fallback_retry",
 	} {
@@ -439,6 +452,18 @@ func exerciseManagementSnapshotHTTPRoute(ctx context.Context, homeDir, configPat
 	}); err != nil {
 		return err
 	}
+	if err := store.RecordQuotaObservation(ctx, metadata.QuotaObservation{
+		RequestMetadataID:  requestID,
+		ObservedAt:         now,
+		ProviderInstanceID: apiProviderID,
+		CredentialID:       first.ID,
+		ModelID:            "http-snapshot-model",
+		Source:             "stream",
+		HTTPStatus:         http.StatusTooManyRequests,
+		ErrorClass:         "rate_limit_exceeded",
+	}); err != nil {
+		return err
+	}
 	mgmt, err := startManagementServer(ctx, homeDir, configPath, dbPath, registry, store)
 	if err != nil {
 		return err
@@ -501,6 +526,12 @@ func assertHTTPManagementSnapshot(snapshot management.ManagementSnapshotResponse
 	if len(snapshot.Fallbacks) != 1 || snapshot.Fallbacks[0].Reason != "http_snapshot_retry" ||
 		snapshot.Fallbacks[0].ModelID != "http-snapshot-model" {
 		return fmt.Errorf("management HTTP snapshot missing fallback fields")
+	}
+	if len(snapshot.Quotas) != 1 || snapshot.Quotas[0].ProviderInstanceID != apiProviderID ||
+		snapshot.Quotas[0].ModelID != "http-snapshot-model" ||
+		snapshot.Quotas[0].ErrorClass != "rate_limit_exceeded" ||
+		snapshot.Quotas[0].HTTPStatus != http.StatusTooManyRequests {
+		return fmt.Errorf("management HTTP snapshot missing quota fields")
 	}
 	return nil
 }
@@ -585,6 +616,9 @@ func (inertObservability) LatestHealth(context.Context) ([]metadata.HealthSummar
 }
 func (inertObservability) RecentFallbacks(context.Context, int) ([]metadata.FallbackSummary, error) {
 	return nil, fmt.Errorf("direct fallback list should not be used")
+}
+func (inertObservability) QuotaByProvider(context.Context) ([]metadata.QuotaSummary, error) {
+	return nil, fmt.Errorf("direct quota list should not be used")
 }
 
 type inertPruner struct{}
@@ -737,5 +771,19 @@ func (s sanitizeObservability) RecentFallbacks(context.Context, int) ([]metadata
 		ToCredentialID:      803,
 		ToCredentialLabel:   "acct_forbidden",
 		Reason:              "tool result marker",
+	}}, nil
+}
+
+func (s sanitizeObservability) QuotaByProvider(context.Context) ([]metadata.QuotaSummary, error) {
+	return []metadata.QuotaSummary{{
+		ObservedAt:         s.now,
+		ProviderInstanceID: "deepseek",
+		ModelID:            "prompt marker",
+		CredentialID:       802,
+		CredentialLabel:    "Bearer full-token-secret",
+		Source:             "raw-provider-payload",
+		HTTPStatus:         http.StatusTooManyRequests,
+		ErrorClass:         "request_id",
+		Count:              1,
 	}}, nil
 }

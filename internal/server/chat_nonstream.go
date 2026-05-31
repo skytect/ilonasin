@@ -143,6 +143,17 @@ func (s *Server) handleNonStreamingChat(w http.ResponseWriter, r *http.Request, 
 		CostMicrounits:            final.result.Usage.CostMicrounits,
 		TotalLatencyMS:            time.Since(nc.start).Milliseconds(),
 	})
+	s.recordQuota(recordCtx, metadata.QuotaObservation{
+		RequestMetadataID:  requestID,
+		ObservedAt:         s.now(),
+		ProviderInstanceID: nc.address.ProviderInstanceID,
+		CredentialID:       final.credential.ID,
+		ModelID:            nc.address.ProviderModelID,
+		Source:             "chat",
+		HTTPStatus:         status,
+		ErrorClass:         errorClass,
+		RetryAfter:         final.result.RetryAfter,
+	})
 	s.recordFallbacks(recordCtx, requestID, fallbackEvents)
 	if errorClass == "client_disconnected" {
 		return

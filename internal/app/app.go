@@ -2527,6 +2527,21 @@ func (u *serveCheckUpstream) handleServeCheckFallbackChat(w http.ResponseWriter,
 			http.Error(w, "raw fallback 429 body", http.StatusTooManyRequests)
 			return
 		}
+	case "fallback-final-429":
+		if auth == "sk-fallback-first" {
+			http.Error(w, "raw fallback final 503 body", http.StatusServiceUnavailable)
+			return
+		}
+		if auth == "sk-fallback-second" {
+			w.Header().Set("Retry-After", "2")
+			http.Error(w, "raw fallback final 429 body", http.StatusTooManyRequests)
+			return
+		}
+	case "fallback-402":
+		if auth == "sk-fallback-first" {
+			http.Error(w, "raw fallback 402 body", http.StatusPaymentRequired)
+			return
+		}
 	case "fallback-401":
 		if auth == "sk-fallback-first" {
 			w.Header().Set("Retry-After", "raw-provider-payload")
@@ -3028,6 +3043,10 @@ func (u *serveCheckUpstream) handleServeCheckStream(w http.ResponseWriter, r *ht
 	}
 	if model == "stream-fallback-error-before" && auth == "sk-fallback-first" {
 		write(`data: {"error":{"message":"raw stream fallback secret","metadata":{"id":"raw-id"}}}` + "\n\n")
+		return
+	}
+	if model == "stream-fallback-quota-before" && auth == "sk-fallback-first" {
+		write(`data: {"error":{"code":"rate_limit_exceeded","message":"raw stream fallback quota secret","metadata":{"id":"raw-id"}}}` + "\n\n")
 		return
 	}
 	if model == "stream-error" {
@@ -7508,6 +7527,7 @@ func exerciseCredentialFallbackCheck(ctx context.Context, base, token string, in
 		status int
 	}{
 		{"fallback-429", http.StatusTooManyRequests},
+		{"fallback-402", http.StatusPaymentRequired},
 		{"fallback-401", http.StatusUnauthorized},
 		{"fallback-retry-after-negative", http.StatusTooManyRequests},
 		{"fallback-retry-after-past", http.StatusTooManyRequests},
@@ -7517,6 +7537,10 @@ func exerciseCredentialFallbackCheck(ctx context.Context, base, token string, in
 	}
 	for _, tc := range nonRetryCases {
 		body := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"max_tokens":1}`, instance.ID+"/"+tc.model))
+		beforeFallbacks, err := fallbackEventCount(ctx, store, instance.ID, tc.model)
+		if err != nil {
+			return err
+		}
 		status, respBody, err = postJSON(base+"/v1/chat/completions", token, body)
 		if err != nil || status != tc.status || bytes.Contains(respBody, []byte("raw fallback")) {
 			return fmt.Errorf("%s status=%d err=%v body_len=%d", tc.model, status, err, len(respBody))
@@ -7524,8 +7548,46 @@ func exerciseCredentialFallbackCheck(ctx context.Context, base, token string, in
 		if fakeUpstream.sawAuth(tc.model, "sk-fallback-second") {
 			return fmt.Errorf("%s incorrectly attempted fallback credential", tc.model)
 		}
+		afterFallbacks, err := fallbackEventCount(ctx, store, instance.ID, tc.model)
+		if err != nil {
+			return err
+		}
+		if afterFallbacks != beforeFallbacks {
+			return fmt.Errorf("%s recorded fallback event for quota/auth nonretry", tc.model)
+		}
 	}
 	if err := assertRetryAfterHealth(ctx, store, instance.ID, "fallback-429"); err != nil {
+		return err
+	}
+	if err := assertQuotaEvent(ctx, store, instance.ID, "fallback-429", "chat", http.StatusTooManyRequests, "upstream_http_error"); err != nil {
+		return err
+	}
+	if err := assertQuotaEvent(ctx, store, instance.ID, "fallback-402", "chat", http.StatusPaymentRequired, "upstream_http_error"); err != nil {
+		return err
+	}
+	finalQuotaBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"max_tokens":1}`, instance.ID+"/fallback-final-429"))
+	beforeFallbacks, err = fallbackEventCount(ctx, store, instance.ID, "fallback-final-429")
+	if err != nil {
+		return err
+	}
+	status, respBody, err = postJSON(base+"/v1/chat/completions", token, finalQuotaBody)
+	if err != nil || status != http.StatusTooManyRequests || bytes.Contains(respBody, []byte("raw fallback")) {
+		return fmt.Errorf("fallback final quota status=%d err=%v body_len=%d", status, err, len(respBody))
+	}
+	if !fakeUpstream.sawAuth("fallback-final-429", "sk-fallback-first") || !fakeUpstream.sawAuth("fallback-final-429", "sk-fallback-second") {
+		return fmt.Errorf("fallback final quota did not attempt both credentials")
+	}
+	afterFallbacks, err = fallbackEventCount(ctx, store, instance.ID, "fallback-final-429")
+	if err != nil {
+		return err
+	}
+	if afterFallbacks != beforeFallbacks+1 {
+		return fmt.Errorf("fallback final quota events before=%d after=%d", beforeFallbacks, afterFallbacks)
+	}
+	if err := assertFallbackEvent(ctx, store, instance.ID, "fallback-final-429", first.ID, second.ID); err != nil {
+		return err
+	}
+	if err := assertQuotaEvent(ctx, store, instance.ID, "fallback-final-429", "chat", http.StatusTooManyRequests, "upstream_http_error"); err != nil {
 		return err
 	}
 	for _, modelID := range []string{"fallback-401", "fallback-retry-after-negative", "fallback-retry-after-past", "fallback-retry-after-too-far"} {
@@ -7555,6 +7617,9 @@ func exerciseCredentialFallbackCheck(ctx context.Context, base, token string, in
 	if err := assertRetryAfterHealth(ctx, store, instance.ID, "stream-fallback-429"); err != nil {
 		return err
 	}
+	if err := assertQuotaEvent(ctx, store, instance.ID, "stream-fallback-429", "stream", http.StatusTooManyRequests, "upstream_http_error"); err != nil {
+		return err
+	}
 	errorBeforeBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true}}`, instance.ID+"/stream-fallback-error-before"))
 	status, _, _, respBody, err = postStream(base+"/v1/chat/completions", token, errorBeforeBody)
 	if err != nil || status != http.StatusBadGateway || !hasStreamErrorEnvelope(respBody) || bytes.Contains(respBody, []byte("raw stream fallback secret")) {
@@ -7562,6 +7627,28 @@ func exerciseCredentialFallbackCheck(ctx context.Context, base, token string, in
 	}
 	if fakeUpstream.sawAuth("stream-fallback-error-before", "sk-fallback-second") {
 		return fmt.Errorf("stream fallback occurred for pre-start SSE error")
+	}
+	quotaBeforeBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true}}`, instance.ID+"/stream-fallback-quota-before"))
+	beforeFallbacks, err = fallbackEventCount(ctx, store, instance.ID, "stream-fallback-quota-before")
+	if err != nil {
+		return err
+	}
+	status, _, _, respBody, err = postStream(base+"/v1/chat/completions", token, quotaBeforeBody)
+	if err != nil || status != http.StatusTooManyRequests || !hasStreamErrorEnvelopeCode(respBody, "rate_limit_exceeded") || bytes.Contains(respBody, []byte("raw stream fallback quota secret")) {
+		return fmt.Errorf("stream pre-start SSE quota status=%d err=%v body_len=%d", status, err, len(respBody))
+	}
+	if fakeUpstream.sawAuth("stream-fallback-quota-before", "sk-fallback-second") {
+		return fmt.Errorf("stream fallback occurred for pre-start SSE quota error")
+	}
+	afterFallbacks, err = fallbackEventCount(ctx, store, instance.ID, "stream-fallback-quota-before")
+	if err != nil {
+		return err
+	}
+	if afterFallbacks != beforeFallbacks {
+		return fmt.Errorf("stream pre-start SSE quota recorded fallback")
+	}
+	if err := assertQuotaEvent(ctx, store, instance.ID, "stream-fallback-quota-before", "stream", http.StatusTooManyRequests, "rate_limit_exceeded"); err != nil {
+		return err
 	}
 	afterStartBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true}}`, instance.ID+"/stream-fallback-after-start"))
 	status, _, _, respBody, err = postStream(base+"/v1/chat/completions", token, afterStartBody)
@@ -7736,6 +7823,9 @@ func exerciseCodexAccountPoolingCheck(ctx context.Context, cfg config.Config, fa
 		}
 		if afterFallbacks != beforeFallbacks {
 			return fmt.Errorf("codex account pooling recorded fallback for %s", model)
+		}
+		if err := assertQuotaEvent(ctx, store, "codex", model, "chat", http.StatusBadGateway, "rate_limit_exceeded"); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -7940,6 +8030,31 @@ func fallbackEventCount(ctx context.Context, store *sqlite.Store, providerInstan
 			AND model_id = ?
 	`, providerInstanceID, modelID).Scan(&count)
 	return count, err
+}
+
+func quotaEventCount(ctx context.Context, store *sqlite.Store, providerInstanceID, modelID, source string, status int, errorClass string) (int, error) {
+	var count int
+	err := store.DB.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM quota_events
+		WHERE provider_instance_id = ?
+			AND model_id = ?
+			AND source = ?
+			AND http_status = ?
+			AND error_class = ?
+	`, providerInstanceID, modelID, source, status, errorClass).Scan(&count)
+	return count, err
+}
+
+func assertQuotaEvent(ctx context.Context, store *sqlite.Store, providerInstanceID, modelID, source string, status int, errorClass string) error {
+	count, err := quotaEventCount(ctx, store, providerInstanceID, modelID, source, status, errorClass)
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return fmt.Errorf("quota event missing provider=%s model=%s source=%s status=%d error=%s", providerInstanceID, modelID, source, status, errorClass)
+	}
+	return nil
 }
 
 func totalFallbackEventCount(ctx context.Context, store *sqlite.Store) (int, error) {
@@ -8180,6 +8295,7 @@ func assertFallbackMetadataNoLeak(ctx context.Context, store *sqlite.Store) erro
 	queries := []string{
 		`SELECT COALESCE(group_concat(provider_instance_id || ' ' || model_id || ' ' || event_class || ' ' || normalized_error_class || ' ' || COALESCE(retry_after, ''), ' '), '') FROM health_events`,
 		`SELECT COALESCE(group_concat(provider_instance_id || ' ' || model_id || ' ' || reason, ' '), '') FROM fallback_events`,
+		`SELECT COALESCE(group_concat(provider_instance_id || ' ' || model_id || ' ' || source || ' ' || error_class || ' ' || COALESCE(retry_after, '') || ' ' || COALESCE(reset_at, ''), ' '), '') FROM quota_events`,
 		`SELECT COALESCE(group_concat(requested_provider_instance || ' ' || requested_model || ' ' || error_class, ' '), '') FROM request_metadata`,
 	}
 	for _, query := range queries {

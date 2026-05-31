@@ -693,7 +693,7 @@ func (a HTTPChatAdapter) streamCodexChat(ctx context.Context, req ChatRequest, s
 			summary.ErrorClass = classifyCodexReadError(streamCtx, err)
 		}
 		if summary.Started && summary.ErrorClass != "client_disconnected" && !summary.NormalizedErrorSent && !summary.Done {
-			if writeErr := sink.WriteEvent(ctx, ChatStreamEvent{Data: normalizedStreamErrorData()}); writeErr != nil {
+			if writeErr := sink.WriteEvent(ctx, ChatStreamEvent{Data: normalizedStreamErrorData(summary.ErrorClass)}); writeErr != nil {
 				summary.ErrorClass = "client_disconnected"
 				summary.CompletionStatus = "client_disconnected"
 				return summary, writeErr

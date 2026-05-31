@@ -33,6 +33,7 @@ type ManagementSnapshotResponse struct {
 	Streams             []StreamSummary      `json:"streams"`
 	Health              []HealthSummary      `json:"health"`
 	Fallbacks           []FallbackSummary    `json:"fallbacks"`
+	Quotas              []QuotaSummary       `json:"quotas"`
 	PruningAvailable    bool                 `json:"pruning_available"`
 }
 
@@ -184,6 +185,20 @@ type FallbackSummary struct {
 	Reason              string    `json:"reason"`
 }
 
+type QuotaSummary struct {
+	ObservedAt         time.Time  `json:"observed_at"`
+	ProviderInstanceID string     `json:"provider_instance_id"`
+	ModelID            string     `json:"model_id"`
+	CredentialID       int64      `json:"credential_id"`
+	CredentialLabel    string     `json:"credential_label"`
+	Source             string     `json:"source"`
+	HTTPStatus         int        `json:"http_status"`
+	ErrorClass         string     `json:"error_class"`
+	RetryAfter         *time.Time `json:"retry_after,omitempty"`
+	ResetAt            *time.Time `json:"reset_at,omitempty"`
+	Count              int        `json:"count"`
+}
+
 func (s Service) LoadManagementSnapshot(ctx context.Context) (ManagementSnapshotResponse, error) {
 	var out ManagementSnapshotResponse
 	for _, row := range s.Registry.List() {
@@ -318,6 +333,13 @@ func sanitizeSnapshot(out *ManagementSnapshotResponse) {
 		out.Fallbacks[i].ToCredentialLabel = safeSnapshotString(out.Fallbacks[i].ToCredentialLabel)
 		out.Fallbacks[i].Reason = safeSnapshotString(out.Fallbacks[i].Reason)
 	}
+	for i := range out.Quotas {
+		out.Quotas[i].ProviderInstanceID = safeMachineString(out.Quotas[i].ProviderInstanceID)
+		out.Quotas[i].ModelID = safeSnapshotString(out.Quotas[i].ModelID)
+		out.Quotas[i].CredentialLabel = safeSnapshotString(out.Quotas[i].CredentialLabel)
+		out.Quotas[i].Source = safeSnapshotString(out.Quotas[i].Source)
+		out.Quotas[i].ErrorClass = safeSnapshotString(out.Quotas[i].ErrorClass)
+	}
 }
 
 func safeSnapshotString(value string) string {
@@ -417,6 +439,11 @@ func loadObservabilitySnapshot(ctx context.Context, reader ObservabilityReader, 
 		return err
 	}
 	out.Fallbacks = fallbackSummariesFromMetadata(fallbacks)
+	quotas, err := reader.QuotaByProvider(ctx)
+	if err != nil {
+		return err
+	}
+	out.Quotas = quotaSummariesFromMetadata(quotas)
 	return nil
 }
 
@@ -730,6 +757,26 @@ func fallbackSummariesFromMetadata(rows []metadata.FallbackSummary) []FallbackSu
 			ToCredentialID:      row.ToCredentialID,
 			ToCredentialLabel:   row.ToCredentialLabel,
 			Reason:              row.Reason,
+		})
+	}
+	return out
+}
+
+func quotaSummariesFromMetadata(rows []metadata.QuotaSummary) []QuotaSummary {
+	out := make([]QuotaSummary, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, QuotaSummary{
+			ObservedAt:         row.ObservedAt,
+			ProviderInstanceID: row.ProviderInstanceID,
+			ModelID:            row.ModelID,
+			CredentialID:       row.CredentialID,
+			CredentialLabel:    row.CredentialLabel,
+			Source:             row.Source,
+			HTTPStatus:         row.HTTPStatus,
+			ErrorClass:         row.ErrorClass,
+			RetryAfter:         row.RetryAfter,
+			ResetAt:            row.ResetAt,
+			Count:              row.Count,
 		})
 	}
 	return out

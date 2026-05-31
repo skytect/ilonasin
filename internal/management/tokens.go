@@ -76,6 +76,7 @@ type ObservabilityReader interface {
 	StreamSummary(ctx context.Context) ([]metadata.StreamSummary, error)
 	LatestHealth(ctx context.Context) ([]metadata.HealthSummary, error)
 	RecentFallbacks(ctx context.Context, limit int) ([]metadata.FallbackSummary, error)
+	QuotaByProvider(ctx context.Context) ([]metadata.QuotaSummary, error)
 }
 
 func (s Service) ListLocalTokens(ctx context.Context) (ListLocalTokensResponse, error) {

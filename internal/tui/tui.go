@@ -201,6 +201,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if err := m.refreshSelectedOAuthCredential(); err != nil {
 				m.logError(context.Background(), "tui_oauth_refresh_failed", err)
 				m.err = "OAuth refresh failed"
+				_ = m.reload()
 				return m, nil
 			}
 			_ = m.reload()
@@ -1033,6 +1034,10 @@ func (m Model) writeOAuth(b *strings.Builder) {
 		if refresh == "" {
 			refresh = "none"
 		}
+		refreshDescription := safeRefreshFailureDescriptionDisplay(row.RefreshFailureDescription)
+		if refreshDescription != "" {
+			refresh = refresh + " " + refreshDescription
+		}
 		fmt.Fprintf(b, "%s %d %s oauth account %s plan %s expires %s refresh %s %s\n",
 			cursor, row.ID, safeDisplay(row.ProviderInstanceID), safeDisplay(row.AccountDisplayLabel),
 			safeDisplay(row.PlanLabel), expires, refresh, state)
@@ -1414,11 +1419,35 @@ func safeDisplay(value string) string {
 	return value
 }
 
+func safeRefreshFailureDescriptionDisplay(value string) string {
+	value = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, strings.TrimSpace(value))
+	value = strings.Join(strings.Fields(value), " ")
+	if value == "" {
+		return ""
+	}
+	const maxDisplayRunes = 160
+	runes := []rune(value)
+	if len(runes) > maxDisplayRunes {
+		return string(runes[:maxDisplayRunes]) + "..."
+	}
+	return value
+}
+
 func safeRefreshFailureClass(value string) string {
 	switch value {
 	case "refresh_token_expired", "refresh_token_invalidated", "refresh_token_reused",
+		"refresh_invalid_grant", "refresh_invalid_client", "refresh_invalid_request",
+		"refresh_unauthorized_client", "refresh_access_denied",
+		"refresh_unsupported_grant_type", "refresh_invalid_scope",
+		"refresh_server_error", "refresh_temporarily_unavailable",
 		"refresh_unauthorized", "refresh_network_error", "refresh_timeout",
-		"refresh_unavailable", "refresh_invalid_response":
+		"refresh_http_error", "refresh_body_too_large", "refresh_unavailable",
+		"refresh_invalid_response":
 		return value
 	default:
 		return safeDisplay(value)

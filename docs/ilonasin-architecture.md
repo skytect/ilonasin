@@ -138,6 +138,7 @@ SQLite stores:
 - ilonasin local API tokens,
 - upstream API keys,
 - OAuth access and refresh tokens,
+- OAuth refresh failure descriptions from token endpoint error responses,
 - OAuth account metadata,
 - credential health,
 - provider credential records,
@@ -312,6 +313,10 @@ Do not store:
 - full provider request IDs,
 - full account IDs.
 
+OAuth refresh failure descriptions from token endpoint error objects may be
+stored and rendered for account visibility. Do not persist the full token
+endpoint response body.
+
 Metadata-only telemetry is allowed and expected.
 
 Full upstream account IDs may be derived transiently from credential secrets
@@ -366,6 +371,7 @@ Health metadata may include:
 - retry-after timestamp,
 - token expiry timestamp,
 - refresh failure state,
+- refresh failure description,
 - credential disabled state,
 - provider/model capability observations.
 
@@ -470,7 +476,9 @@ Exact schema is deferred, but the architecture should cover these concepts:
 - `client_tokens`: local ilonasin API tokens for OpenAI-compatible clients.
 - `provider_credentials`: API-key, OAuth, command, or other credentials bound to
   configured provider instance IDs.
-- `oauth_tokens`: access/refresh token material and expiry data.
+- `oauth_tokens`: access/refresh token material, expiry data, refresh failure
+  classes, and refresh failure descriptions from token endpoint error
+  responses.
 - `provider_accounts`: account identity metadata from upstream providers.
 - `model_cache`: model lists and capability metadata per provider instance.
 - `request_metadata`: metadata-only request ledger.
@@ -480,7 +488,8 @@ Exact schema is deferred, but the architecture should cover these concepts:
 - `migrations`: schema migration state.
 
 Do not create tables for raw prompts, completions, request bodies, response
-bodies, or raw provider payloads.
+bodies, or raw provider payloads. OAuth refresh failure descriptions are allowed
+as extracted error metadata, not as raw token endpoint responses.
 
 ## Deferred Research
 

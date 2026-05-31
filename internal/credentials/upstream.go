@@ -80,7 +80,7 @@ type UpstreamCredentialRepository interface {
 	InsertOAuthCredential(ctx context.Context, meta NewOAuthCredential, accessToken, refreshToken string) (OAuthCredentialMetadata, error)
 	ListOAuthCredentials(ctx context.Context) ([]OAuthCredentialMetadata, error)
 	ListProviderAccounts(ctx context.Context) ([]ProviderAccountMetadata, error)
-	MarkOAuthRefreshFailure(ctx context.Context, credentialID int64, failureClass string, now time.Time) error
+	MarkOAuthRefreshFailure(ctx context.Context, credentialID int64, failureClass, failureDescription string, now time.Time) error
 }
 
 type OAuthCredentialManager interface {
@@ -193,18 +193,19 @@ type NewOAuthCredential struct {
 }
 
 type OAuthCredentialMetadata struct {
-	ID                  int64
-	ProviderInstanceID  string
-	Label               string
-	AccountDisplayLabel string
-	PlanLabel           string
-	Scopes              string
-	ExpiresAt           *time.Time
-	LastRefreshAt       *time.Time
-	RefreshFailureClass string
-	CreatedAt           time.Time
-	DisabledAt          *time.Time
-	Disabled            bool
+	ID                        int64
+	ProviderInstanceID        string
+	Label                     string
+	AccountDisplayLabel       string
+	PlanLabel                 string
+	Scopes                    string
+	ExpiresAt                 *time.Time
+	LastRefreshAt             *time.Time
+	RefreshFailureClass       string
+	RefreshFailureDescription string
+	CreatedAt                 time.Time
+	DisabledAt                *time.Time
+	Disabled                  bool
 }
 
 type ProviderAccountMetadata struct {
@@ -377,7 +378,7 @@ func (s *UpstreamService) Disable(ctx context.Context, id int64) error {
 }
 
 func (s *UpstreamService) MarkOAuthRefreshFailure(ctx context.Context, credentialID int64, failureClass string) error {
-	return s.Repo.MarkOAuthRefreshFailure(ctx, credentialID, normalizeRefreshFailureClass(failureClass), s.now())
+	return s.Repo.MarkOAuthRefreshFailure(ctx, credentialID, normalizeRefreshFailureClass(failureClass), "", s.now())
 }
 
 func (s *UpstreamService) EnableFallbackGroup(ctx context.Context, providerInstanceID, credentialKind, groupLabel string) error {
@@ -638,16 +639,16 @@ func (s *UpstreamService) refreshOAuthCredential(ctx context.Context, credential
 		Now:          now,
 	})
 	if err != nil {
-		return s.recordOAuthRefreshFailure(ctx, credentialID, refreshFailureClass(err, "refresh_unavailable"))
+		return s.recordOAuthRefreshFailure(ctx, credentialID, refreshFailureClass(err, "refresh_unavailable"), refreshFailureDescription(err))
 	}
 	accessToken := strings.TrimSpace(result.AccessToken)
 	if err := validateOAuthSecret(accessToken); err != nil {
-		return s.recordOAuthRefreshFailure(ctx, credentialID, "refresh_invalid_response")
+		return s.recordOAuthRefreshFailure(ctx, credentialID, "refresh_invalid_response", "")
 	}
 	newRefreshToken := strings.TrimSpace(result.RefreshToken)
 	if newRefreshToken != "" {
 		if err := validateOAuthSecret(newRefreshToken); err != nil {
-			return s.recordOAuthRefreshFailure(ctx, credentialID, "refresh_invalid_response")
+			return s.recordOAuthRefreshFailure(ctx, credentialID, "refresh_invalid_response", "")
 		}
 	}
 	if err := s.Repo.UpdateOAuthTokens(ctx, credentialID, OAuthTokenUpdate{
@@ -697,8 +698,8 @@ func (c *OAuthRefreshCalls) do(ctx context.Context, key string, fn func() error)
 	return call.err
 }
 
-func (s *UpstreamService) recordOAuthRefreshFailure(ctx context.Context, credentialID int64, failureClass string) error {
-	if err := s.Repo.MarkOAuthRefreshFailure(ctx, credentialID, normalizeRefreshFailureClass(failureClass), s.now()); err != nil {
+func (s *UpstreamService) recordOAuthRefreshFailure(ctx context.Context, credentialID int64, failureClass, failureDescription string) error {
+	if err := s.Repo.MarkOAuthRefreshFailure(ctx, credentialID, normalizeRefreshFailureClass(failureClass), safeRefreshFailureDescription(failureDescription), s.now()); err != nil {
 		return err
 	}
 	return fmt.Errorf("%w: %s", ErrOAuthRefreshFailed, normalizeRefreshFailureClass(failureClass))
@@ -895,6 +896,40 @@ func refreshFailureClass(err error, fallback string) string {
 	return normalizeRefreshFailureClass(fallback)
 }
 
+func refreshFailureDescription(err error) string {
+	type described interface {
+		RefreshFailureDescription() string
+	}
+	var d described
+	if errors.As(err, &d) {
+		return d.RefreshFailureDescription()
+	}
+	return ""
+}
+
+func safeRefreshFailureDescription(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	value = strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || r == '\t' {
+			return ' '
+		}
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, value)
+	value = strings.Join(strings.Fields(value), " ")
+	const maxRunes = 1024
+	runes := []rune(value)
+	if len(runes) > maxRunes {
+		return string(runes[:maxRunes])
+	}
+	return value
+}
+
 func LooksLikeLocalToken(value string) bool {
 	return len(value) > 4 && value[:4] == "iln_"
 }
@@ -1012,6 +1047,10 @@ func containsForbiddenOAuthMetadataMarker(value string) bool {
 func normalizeRefreshFailureClass(value string) string {
 	switch value {
 	case "refresh_token_expired", "refresh_token_invalidated", "refresh_token_reused",
+		"refresh_invalid_grant", "refresh_invalid_client", "refresh_invalid_request",
+		"refresh_unauthorized_client", "refresh_access_denied",
+		"refresh_unsupported_grant_type", "refresh_invalid_scope",
+		"refresh_server_error", "refresh_temporarily_unavailable",
 		"refresh_unauthorized", "refresh_network_error", "refresh_timeout",
 		"refresh_http_error", "refresh_body_too_large", "refresh_unavailable",
 		"refresh_invalid_response":

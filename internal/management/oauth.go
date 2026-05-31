@@ -103,18 +103,19 @@ func oauthChallengeFromCredentials(row credentials.OAuthDeviceLoginChallenge) OA
 
 func oauthCredentialFromCredentials(row credentials.OAuthCredentialMetadata) OAuthCredential {
 	return OAuthCredential{
-		ID:                  row.ID,
-		ProviderInstanceID:  safeSnapshotString(row.ProviderInstanceID),
-		Label:               safeSnapshotString(row.Label),
-		AccountDisplayLabel: safeSnapshotString(row.AccountDisplayLabel),
-		PlanLabel:           safeSnapshotString(row.PlanLabel),
-		Scopes:              safeSnapshotString(row.Scopes),
-		ExpiresAt:           row.ExpiresAt,
-		LastRefreshAt:       row.LastRefreshAt,
-		RefreshFailureClass: safeSnapshotString(row.RefreshFailureClass),
-		CreatedAt:           row.CreatedAt,
-		DisabledAt:          row.DisabledAt,
-		Disabled:            row.Disabled,
+		ID:                        row.ID,
+		ProviderInstanceID:        safeSnapshotString(row.ProviderInstanceID),
+		Label:                     safeSnapshotString(row.Label),
+		AccountDisplayLabel:       safeSnapshotString(row.AccountDisplayLabel),
+		PlanLabel:                 safeSnapshotString(row.PlanLabel),
+		Scopes:                    safeSnapshotString(row.Scopes),
+		ExpiresAt:                 row.ExpiresAt,
+		LastRefreshAt:             row.LastRefreshAt,
+		RefreshFailureClass:       safeSnapshotString(row.RefreshFailureClass),
+		RefreshFailureDescription: safeRefreshFailureDescription(row.RefreshFailureDescription),
+		CreatedAt:                 row.CreatedAt,
+		DisabledAt:                row.DisabledAt,
+		Disabled:                  row.Disabled,
 	}
 }
 

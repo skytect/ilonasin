@@ -73,18 +73,19 @@ type FallbackPolicy struct {
 }
 
 type OAuthCredential struct {
-	ID                  int64      `json:"id"`
-	ProviderInstanceID  string     `json:"provider_instance_id"`
-	Label               string     `json:"label"`
-	AccountDisplayLabel string     `json:"account_display_label"`
-	PlanLabel           string     `json:"plan_label"`
-	Scopes              string     `json:"scopes"`
-	ExpiresAt           *time.Time `json:"expires_at,omitempty"`
-	LastRefreshAt       *time.Time `json:"last_refresh_at,omitempty"`
-	RefreshFailureClass string     `json:"refresh_failure_class"`
-	CreatedAt           time.Time  `json:"created_at"`
-	DisabledAt          *time.Time `json:"disabled_at,omitempty"`
-	Disabled            bool       `json:"disabled"`
+	ID                        int64      `json:"id"`
+	ProviderInstanceID        string     `json:"provider_instance_id"`
+	Label                     string     `json:"label"`
+	AccountDisplayLabel       string     `json:"account_display_label"`
+	PlanLabel                 string     `json:"plan_label"`
+	Scopes                    string     `json:"scopes"`
+	ExpiresAt                 *time.Time `json:"expires_at,omitempty"`
+	LastRefreshAt             *time.Time `json:"last_refresh_at,omitempty"`
+	RefreshFailureClass       string     `json:"refresh_failure_class"`
+	RefreshFailureDescription string     `json:"refresh_failure_description"`
+	CreatedAt                 time.Time  `json:"created_at"`
+	DisabledAt                *time.Time `json:"disabled_at,omitempty"`
+	Disabled                  bool       `json:"disabled"`
 }
 
 type ProviderAccount struct {
@@ -286,6 +287,7 @@ func sanitizeSnapshot(out *ManagementSnapshotResponse) {
 		out.OAuthCredentials[i].PlanLabel = safeSnapshotString(out.OAuthCredentials[i].PlanLabel)
 		out.OAuthCredentials[i].Scopes = safeSnapshotString(out.OAuthCredentials[i].Scopes)
 		out.OAuthCredentials[i].RefreshFailureClass = safeSnapshotString(out.OAuthCredentials[i].RefreshFailureClass)
+		out.OAuthCredentials[i].RefreshFailureDescription = safeRefreshFailureDescription(out.OAuthCredentials[i].RefreshFailureDescription)
 	}
 	for i := range out.ProviderAccounts {
 		out.ProviderAccounts[i].ProviderInstanceID = safeMachineString(out.ProviderAccounts[i].ProviderInstanceID)
@@ -359,6 +361,25 @@ func safeSnapshotString(value string) string {
 	runes := []rune(value)
 	if len(runes) > maxRunes {
 		return string(runes[:maxRunes]) + "..."
+	}
+	return value
+}
+
+func safeRefreshFailureDescription(value string) string {
+	value = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, strings.TrimSpace(value))
+	value = strings.Join(strings.Fields(value), " ")
+	if value == "" {
+		return ""
+	}
+	const maxRunes = 1024
+	runes := []rune(value)
+	if len(runes) > maxRunes {
+		return string(runes[:maxRunes])
 	}
 	return value
 }
@@ -581,18 +602,19 @@ func oauthCredentialsFromCredentials(rows []credentials.OAuthCredentialMetadata)
 	out := make([]OAuthCredential, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, OAuthCredential{
-			ID:                  row.ID,
-			ProviderInstanceID:  row.ProviderInstanceID,
-			Label:               row.Label,
-			AccountDisplayLabel: row.AccountDisplayLabel,
-			PlanLabel:           row.PlanLabel,
-			Scopes:              row.Scopes,
-			ExpiresAt:           row.ExpiresAt,
-			LastRefreshAt:       row.LastRefreshAt,
-			RefreshFailureClass: row.RefreshFailureClass,
-			CreatedAt:           row.CreatedAt,
-			DisabledAt:          row.DisabledAt,
-			Disabled:            row.Disabled,
+			ID:                        row.ID,
+			ProviderInstanceID:        row.ProviderInstanceID,
+			Label:                     row.Label,
+			AccountDisplayLabel:       row.AccountDisplayLabel,
+			PlanLabel:                 row.PlanLabel,
+			Scopes:                    row.Scopes,
+			ExpiresAt:                 row.ExpiresAt,
+			LastRefreshAt:             row.LastRefreshAt,
+			RefreshFailureClass:       row.RefreshFailureClass,
+			RefreshFailureDescription: row.RefreshFailureDescription,
+			CreatedAt:                 row.CreatedAt,
+			DisabledAt:                row.DisabledAt,
+			Disabled:                  row.Disabled,
 		})
 	}
 	return out

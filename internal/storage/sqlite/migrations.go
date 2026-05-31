@@ -110,6 +110,7 @@ var migration001 = []string{
 		scopes TEXT NOT NULL DEFAULT '',
 		last_refresh_at TEXT,
 		refresh_failure_class TEXT,
+		refresh_failure_description TEXT NOT NULL DEFAULT '',
 		UNIQUE(credential_id)
 	)`,
 	`CREATE TABLE IF NOT EXISTS provider_accounts (
@@ -250,6 +251,9 @@ var migrations = []migration{
 			retry_after TEXT,
 			reset_at TEXT
 		)`),
+	}},
+	{version: 6, name: "oauth_refresh_failure_description", steps: []migrationStep{
+		addColumnIfMissing("oauth_tokens", "refresh_failure_description", `refresh_failure_description TEXT NOT NULL DEFAULT ''`),
 	}},
 }
 

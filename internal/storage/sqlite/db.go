@@ -351,7 +351,8 @@ func (s *Store) ListOAuthCredentials(ctx context.Context) ([]credentials.OAuthCr
 		SELECT pc.id, pc.provider_instance_id, pc.label,
 			COALESCE(pa.display_label, ''), COALESCE(pa.plan_label, ''),
 			ot.scopes, ot.expires_at, ot.last_refresh_at,
-			COALESCE(ot.refresh_failure_class, ''), pc.created_at, pc.disabled_at
+			COALESCE(ot.refresh_failure_class, ''), COALESCE(ot.refresh_failure_description, ''),
+			pc.created_at, pc.disabled_at
 		FROM provider_credentials pc
 		JOIN oauth_tokens ot ON ot.credential_id = pc.id
 		LEFT JOIN provider_accounts pa ON pa.credential_id = pc.id
@@ -369,7 +370,7 @@ func (s *Store) ListOAuthCredentials(ctx context.Context) ([]credentials.OAuthCr
 		var expires, lastRefresh, disabled sql.NullString
 		if err := rows.Scan(&row.ID, &row.ProviderInstanceID, &row.Label,
 			&row.AccountDisplayLabel, &row.PlanLabel, &row.Scopes, &expires,
-			&lastRefresh, &row.RefreshFailureClass, &created, &disabled); err != nil {
+			&lastRefresh, &row.RefreshFailureClass, &row.RefreshFailureDescription, &created, &disabled); err != nil {
 			return nil, err
 		}
 		createdAt, err := parseSQLiteTime(created)
@@ -432,12 +433,12 @@ func (s *Store) ListProviderAccounts(ctx context.Context) ([]credentials.Provide
 	return out, rows.Err()
 }
 
-func (s *Store) MarkOAuthRefreshFailure(ctx context.Context, credentialID int64, failureClass string, now time.Time) error {
+func (s *Store) MarkOAuthRefreshFailure(ctx context.Context, credentialID int64, failureClass, failureDescription string, now time.Time) error {
 	res, err := s.DB.ExecContext(ctx, `
 		UPDATE oauth_tokens
-		SET refresh_failure_class = ?, last_refresh_at = ?
+		SET refresh_failure_class = ?, refresh_failure_description = ?, last_refresh_at = ?
 		WHERE credential_id = ?
-	`, failureClass, now.UTC().Format(time.RFC3339Nano), credentialID)
+	`, failureClass, failureDescription, now.UTC().Format(time.RFC3339Nano), credentialID)
 	if err != nil {
 		return err
 	}
@@ -865,7 +866,7 @@ func (s *Store) UpdateOAuthTokens(ctx context.Context, credentialID int64, updat
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE oauth_tokens
-		SET expires_at = ?, last_refresh_at = ?, refresh_failure_class = ''
+		SET expires_at = ?, last_refresh_at = ?, refresh_failure_class = '', refresh_failure_description = ''
 		WHERE credential_id = ?
 	`, nullableTime(update.ExpiresAt), ts, credentialID); err != nil {
 		return err

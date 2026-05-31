@@ -1351,26 +1351,39 @@ func exerciseOAuthRefreshManagementFailure(ctx context.Context, service *credent
 
 func exerciseOAuthRefreshFailureModes(ctx context.Context, store *sqlite.Store, service *credentials.UpstreamService, fakeAuth *oauthRefreshAuthServer) error {
 	for _, tc := range []struct {
-		mode string
-		want string
+		mode     string
+		want     string
+		wantDesc string
 	}{
-		{"expired", "refresh_token_expired"},
-		{"reused", "refresh_token_reused"},
-		{"invalidated", "refresh_token_invalidated"},
-		{"unknown401", "refresh_unauthorized"},
-		{"http", "refresh_http_error"},
-		{"malformed", "refresh_invalid_response"},
-		{"trailing", "refresh_invalid_response"},
-		{"unsafe", "refresh_invalid_response"},
-		{"too_large", "refresh_body_too_large"},
-		{"timeout", "refresh_timeout"},
+		{"expired", "refresh_token_expired", ""},
+		{"reused", "refresh_token_reused", ""},
+		{"invalidated", "refresh_token_invalidated", ""},
+		{"invalid_grant", "refresh_invalid_grant", ""},
+		{"invalid_grant_expired", "refresh_token_expired", "refresh token expired"},
+		{"nested_revoked", "refresh_token_invalidated", "refresh token revoked"},
+		{"invalid_client", "refresh_invalid_client", ""},
+		{"invalid_request", "refresh_invalid_request", ""},
+		{"unauthorized_client", "refresh_unauthorized_client", ""},
+		{"access_denied", "refresh_access_denied", ""},
+		{"unsupported_grant_type", "refresh_unsupported_grant_type", ""},
+		{"invalid_scope", "refresh_invalid_scope", ""},
+		{"server_error", "refresh_server_error", ""},
+		{"temporarily_unavailable", "refresh_temporarily_unavailable", ""},
+		{"unknown401", "refresh_unauthorized", ""},
+		{"http", "refresh_http_error", ""},
+		{"malformed", "refresh_invalid_response", ""},
+		{"trailing", "refresh_invalid_response", ""},
+		{"unsafe", "refresh_invalid_response", ""},
+		{"too_large", "refresh_body_too_large", ""},
+		{"timeout", "refresh_timeout", ""},
 	} {
+		tokenMode := strings.ReplaceAll(tc.mode, "_", "-")
 		created, err := service.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
 			ProviderInstanceID:  "codex",
 			Label:               "refresh failure " + tc.mode,
-			AccessToken:         "oauth-refresh-failure-access-" + tc.mode,
-			RefreshToken:        "oauth-refresh-failure-refresh-" + tc.mode,
-			AccountID:           "refresh-failure-" + tc.mode,
+			AccessToken:         "oauth-refresh-failure-access-" + tokenMode,
+			RefreshToken:        "oauth-refresh-failure-refresh-" + tokenMode,
+			AccountID:           "refresh-failure-" + tokenMode,
 			AccountDisplayLabel: "Failure " + tc.mode,
 		})
 		if err != nil {
@@ -1380,16 +1393,19 @@ func exerciseOAuthRefreshFailureModes(ctx context.Context, store *sqlite.Store, 
 		if err := service.RefreshOAuthCredential(ctx, created.ID); !errors.Is(err, credentials.ErrOAuthRefreshFailed) {
 			return fmt.Errorf("refresh failure %s err=%v", tc.mode, err)
 		}
-		var got string
+		var got, gotDesc string
 		if err := store.DB.QueryRowContext(ctx, `
-			SELECT COALESCE(refresh_failure_class, '')
+			SELECT COALESCE(refresh_failure_class, ''), COALESCE(refresh_failure_description, '')
 			FROM oauth_tokens
 			WHERE credential_id = ?
-		`, created.ID).Scan(&got); err != nil {
+		`, created.ID).Scan(&got, &gotDesc); err != nil {
 			return err
 		}
 		if got != tc.want {
 			return fmt.Errorf("refresh failure %s class=%s want=%s", tc.mode, got, tc.want)
+		}
+		if gotDesc != tc.wantDesc {
+			return fmt.Errorf("refresh failure %s description=%q want=%q", tc.mode, gotDesc, tc.wantDesc)
 		}
 	}
 	return nil
@@ -1418,16 +1434,16 @@ func assertOAuthRefreshSuccess(ctx context.Context, store *sqlite.Store, firstID
 			return fmt.Errorf("oauth refresh %s count=%d want=%d", check.name, got, check.want)
 		}
 	}
-	var lastRefresh, failure string
+	var lastRefresh, failure, description string
 	var expires sql.NullString
 	if err := store.DB.QueryRowContext(ctx, `
-		SELECT COALESCE(last_refresh_at, ''), COALESCE(refresh_failure_class, ''), expires_at
+		SELECT COALESCE(last_refresh_at, ''), COALESCE(refresh_failure_class, ''), COALESCE(refresh_failure_description, ''), expires_at
 		FROM oauth_tokens
 		WHERE credential_id = ?
-	`, secondID).Scan(&lastRefresh, &failure, &expires); err != nil {
+	`, secondID).Scan(&lastRefresh, &failure, &description, &expires); err != nil {
 		return err
 	}
-	if lastRefresh == "" || failure != "" || !expires.Valid {
+	if lastRefresh == "" || failure != "" || description != "" || !expires.Valid {
 		return fmt.Errorf("oauth refresh metadata missing")
 	}
 	for _, marker := range []string{
@@ -1866,7 +1882,7 @@ func oauthMarkerQueries(includeSecrets bool) []string {
 	queries := []string{
 		`SELECT COUNT(*) FROM client_tokens WHERE label || token_hash || token_prefix || token_last4 || COALESCE(disabled_at, '') LIKE ?`,
 		`SELECT COUNT(*) FROM provider_credentials WHERE provider_instance_id || kind || label || secret_prefix || secret_last4 || fallback_group LIKE ?`,
-		`SELECT COUNT(*) FROM oauth_tokens WHERE scopes || COALESCE(expires_at, '') || COALESCE(last_refresh_at, '') || COALESCE(refresh_failure_class, '') LIKE ?`,
+		`SELECT COUNT(*) FROM oauth_tokens WHERE scopes || COALESCE(expires_at, '') || COALESCE(last_refresh_at, '') || COALESCE(refresh_failure_class, '') || COALESCE(refresh_failure_description, '') LIKE ?`,
 		`SELECT COUNT(*) FROM provider_accounts WHERE provider_instance_id || account_hash || display_label || plan_label LIKE ?`,
 		`SELECT COUNT(*) FROM credential_fallback_policies WHERE provider_instance_id || credential_kind || group_label LIKE ?`,
 		`SELECT COUNT(*) FROM request_metadata WHERE started_at || requested_provider_instance || requested_model || resolved_provider_instance || resolved_model || error_class || fallback_reason LIKE ?`,

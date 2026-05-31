@@ -35,12 +35,13 @@ func RunMigrationSmokeCheck(ctx context.Context) error {
 	}
 	defer os.RemoveAll(root)
 
+	currentVersions := currentMigrationVersions()
 	cases := []migrationSmokeCase{
-		{name: "fresh", setup: setupFreshMigrationSmoke, wantVersions: []int{1, 2, 3, 4, 5}},
-		{name: "version1", setup: setupHistoricalMigrationSmoke(1), wantVersions: []int{1, 2, 3, 4, 5}, wantSentinels: true},
-		{name: "version2", setup: setupHistoricalMigrationSmoke(2), wantVersions: []int{1, 2, 3, 4, 5}, wantSentinels: true},
-		{name: "version3", setup: setupHistoricalMigrationSmoke(3), wantVersions: []int{1, 2, 3, 4, 5}, wantSentinels: true},
-		{name: "drifted-version1", setup: setupDriftedVersion1MigrationSmoke, wantVersions: []int{1, 2, 3, 4, 5}, wantSentinels: true},
+		{name: "fresh", setup: setupFreshMigrationSmoke, wantVersions: currentVersions},
+		{name: "version1", setup: setupHistoricalMigrationSmoke(1), wantVersions: currentVersions, wantSentinels: true},
+		{name: "version2", setup: setupHistoricalMigrationSmoke(2), wantVersions: currentVersions, wantSentinels: true},
+		{name: "version3", setup: setupHistoricalMigrationSmoke(3), wantVersions: currentVersions, wantSentinels: true},
+		{name: "drifted-version1", setup: setupDriftedVersion1MigrationSmoke, wantVersions: currentVersions, wantSentinels: true},
 	}
 	for _, tc := range cases {
 		path := filepath.Join(root, tc.name+".sqlite")
@@ -76,6 +77,14 @@ func RunMigrationSmokeCheck(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func currentMigrationVersions() []int {
+	out := make([]int, 0, len(migrations))
+	for _, migration := range migrations {
+		out = append(out, migration.version)
+	}
+	return out
 }
 
 func setupFreshMigrationSmoke(context.Context, string) (map[int]migrationRow, error) {
@@ -223,6 +232,7 @@ func assertMigrationSmokeState(ctx context.Context, store *Store, tc migrationSm
 		{table: "credential_fallback_policies", column: "credential_kind", notNull: true, defaultValue: "'api_key'"},
 		{table: "oauth_tokens", column: "last_refresh_at"},
 		{table: "oauth_tokens", column: "refresh_failure_class"},
+		{table: "oauth_tokens", column: "refresh_failure_description", notNull: true, defaultValue: "''"},
 		{table: "request_metadata", column: "retry_count", notNull: true, defaultValue: "0"},
 		{table: "request_metadata", column: "fallback_count", notNull: true, defaultValue: "0"},
 		{table: "request_metadata", column: "fallback_reason", notNull: true, defaultValue: "''"},
@@ -433,7 +443,7 @@ func exerciseMigratedStore(ctx context.Context, store *Store, suffix string) err
 	}); err != nil {
 		return err
 	}
-	if err := store.MarkOAuthRefreshFailure(ctx, oauth.ID, "invalid_grant", now); err != nil {
+	if err := store.MarkOAuthRefreshFailure(ctx, oauth.ID, "invalid_grant", "refresh failed", now); err != nil {
 		return err
 	}
 
@@ -593,7 +603,7 @@ func assertMigrationSmokeSecrets(ctx context.Context, db *sql.DB) error {
 	}{
 		{"client_tokens", []string{"label", "token_hash", "token_prefix", "token_last4"}},
 		{"provider_credentials", []string{"provider_instance_id", "kind", "label", "secret_prefix", "secret_last4", "fallback_group"}},
-		{"oauth_tokens", []string{"scopes", "refresh_failure_class"}},
+		{"oauth_tokens", []string{"scopes", "refresh_failure_class", "refresh_failure_description"}},
 		{"provider_accounts", []string{"provider_instance_id", "account_hash", "display_label", "plan_label"}},
 		{"model_cache", []string{"provider_instance_id", "model_id", "display_name", "capability_flags"}},
 		{"request_metadata", []string{"requested_provider_instance", "requested_model", "resolved_provider_instance", "resolved_model", "error_class", "fallback_reason"}},

@@ -118,7 +118,7 @@ func (l HTTPOAuthDeviceLogin) RequestOAuthDeviceCode(ctx context.Context, req OA
 		Interval     json.RawMessage `json:"interval"`
 	}
 	if err := decodeStrictJSON(respBody, &raw); err != nil {
-		return OAuthDeviceCodeChallenge{}, OAuthDeviceLoginError{Class: "oauth_login_invalid_response"}
+		return OAuthDeviceCodeChallenge{}, l.oauthDeviceInvalidResponse(ctx, "oauth_device_code", req.ProviderInstanceID, req.ProviderType, len(respBody))
 	}
 	userCode := strings.TrimSpace(raw.UserCode)
 	if userCode == "" {
@@ -126,11 +126,11 @@ func (l HTTPOAuthDeviceLogin) RequestOAuthDeviceCode(ctx context.Context, req OA
 	}
 	interval, err := parseDeviceInterval(raw.Interval)
 	if err != nil {
-		return OAuthDeviceCodeChallenge{}, OAuthDeviceLoginError{Class: "oauth_login_invalid_response"}
+		return OAuthDeviceCodeChallenge{}, l.oauthDeviceInvalidResponse(ctx, "oauth_device_code", req.ProviderInstanceID, req.ProviderType, len(respBody))
 	}
 	deviceAuthID := strings.TrimSpace(raw.DeviceAuthID)
 	if deviceAuthID == "" || userCode == "" {
-		return OAuthDeviceCodeChallenge{}, OAuthDeviceLoginError{Class: "oauth_login_invalid_response"}
+		return OAuthDeviceCodeChallenge{}, l.oauthDeviceInvalidResponse(ctx, "oauth_device_code", req.ProviderInstanceID, req.ProviderType, len(respBody))
 	}
 	verificationURL, err := authEndpoint(req.AuthIssuer, "/codex/device")
 	if err != nil {
@@ -386,10 +386,10 @@ func (l HTTPOAuthDeviceLogin) exchangeAuthorizationCode(ctx context.Context, req
 		ExpiresIn    int    `json:"expires_in"`
 	}
 	if err := decodeStrictJSON(respBody, &raw); err != nil {
-		return OAuthDeviceLoginResult{}, OAuthDeviceLoginError{Class: "oauth_login_invalid_response"}
+		return OAuthDeviceLoginResult{}, l.oauthDeviceInvalidResponse(ctx, "oauth_token", req.ProviderInstanceID, req.ProviderType, len(respBody))
 	}
 	if strings.TrimSpace(raw.IDToken) == "" || strings.TrimSpace(raw.AccessToken) == "" || strings.TrimSpace(raw.RefreshToken) == "" {
-		return OAuthDeviceLoginResult{}, OAuthDeviceLoginError{Class: "oauth_login_invalid_response"}
+		return OAuthDeviceLoginResult{}, l.oauthDeviceInvalidResponse(ctx, "oauth_token", req.ProviderInstanceID, req.ProviderType, len(respBody))
 	}
 	var expiresAt *time.Time
 	if raw.ExpiresIn > 0 {
@@ -428,16 +428,23 @@ func (l HTTPOAuthDeviceLogin) doJSON(ctx context.Context, req *http.Request, end
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, l.maxBodyBytes()))
-		eventID := logProviderHTTP(ctx, l.Logger, slog.LevelError, "provider_http",
+		respBody, readErr := readOAuthDeviceDiagnosticBody(resp.Body, l.maxBodyBytes())
+		attrs := []slog.Attr{
 			slog.String("endpoint", endpoint),
 			slog.String("method", req.Method),
 			slog.String("provider_instance", providerInstanceID),
 			slog.String("provider_type", providerType),
 			slog.Int("status", resp.StatusCode),
+			slog.String("content_type", safeOAuthLogValue(resp.Header.Get("Content-Type"))),
 			slog.Int64("duration_ms", durationMS(start)),
+			slog.Int("response_bytes", len(respBody)),
 			slog.String("error_class", "oauth_login_http_error"),
-		)
+		}
+		attrs = append(attrs, oauthDeviceHTTPErrorAttrs(respBody)...)
+		if readErr != nil {
+			attrs = append(attrs, slog.String("response_error_class", oauthDeviceDiagnosticReadClass(readErr)))
+		}
+		eventID := logProviderHTTP(ctx, l.Logger, slog.LevelError, "provider_http", attrs...)
 		return nil, OAuthDeviceLoginError{Class: "oauth_login_http_error", EventID: eventID}
 	}
 	body, err := readOAuthDeviceResponse(resp, l.maxBodyBytes())
@@ -474,6 +481,19 @@ func (l HTTPOAuthDeviceLogin) doJSON(ctx context.Context, req *http.Request, end
 	return body, nil
 }
 
+func (l HTTPOAuthDeviceLogin) oauthDeviceInvalidResponse(ctx context.Context, endpoint, providerInstanceID, providerType string, responseBytes int) OAuthDeviceLoginError {
+	eventID := logProviderHTTP(ctx, l.Logger, slog.LevelError, "provider_http",
+		slog.String("endpoint", endpoint),
+		slog.String("method", http.MethodPost),
+		slog.String("provider_instance", providerInstanceID),
+		slog.String("provider_type", providerType),
+		slog.Int("status", http.StatusOK),
+		slog.Int("response_bytes", responseBytes),
+		slog.String("error_class", "oauth_login_invalid_response"),
+	)
+	return OAuthDeviceLoginError{Class: "oauth_login_invalid_response", EventID: eventID}
+}
+
 func readOAuthDeviceResponse(resp *http.Response, maxBytes int64) ([]byte, error) {
 	if !isJSONContentType(resp.Header.Get("Content-Type")) {
 		return nil, OAuthDeviceLoginError{Class: "oauth_login_invalid_response"}
@@ -499,6 +519,107 @@ func discardOAuthDeviceResponse(body io.Reader, maxBytes int64) error {
 		return OAuthDeviceLoginError{Class: "oauth_login_body_too_large"}
 	}
 	return nil
+}
+
+func readOAuthDeviceDiagnosticBody(body io.Reader, maxBytes int64) ([]byte, error) {
+	limited := io.LimitReader(body, maxBytes+1)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return data[:maxBytes], OAuthDeviceLoginError{Class: "oauth_login_body_too_large"}
+	}
+	return data, nil
+}
+
+func oauthDeviceDiagnosticReadClass(err error) string {
+	var loginErr OAuthDeviceLoginError
+	if errors.As(err, &loginErr) && loginErr.Class != "" {
+		return loginErr.Class
+	}
+	return "oauth_login_network_error"
+}
+
+func oauthDeviceHTTPErrorAttrs(body []byte) []slog.Attr {
+	body = bytes.TrimSpace(body)
+	if len(body) == 0 {
+		return nil
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil
+	}
+	var attrs []slog.Attr
+	if value := safeOAuthMapString(raw, "error"); value != "" {
+		attrs = append(attrs, slog.String("upstream_error", value))
+	}
+	if value := safeOAuthMapString(raw, "error_code", "code", "type"); value != "" {
+		attrs = append(attrs, slog.String("upstream_error_kind", value))
+	}
+	if value := safeOAuthMapString(raw, "error_description", "message", "detail"); value != "" {
+		attrs = append(attrs, slog.String("upstream_error_summary", value))
+	}
+	if nested, ok := raw["error"].(map[string]any); ok {
+		if value := safeOAuthMapString(nested, "code", "type"); value != "" {
+			attrs = append(attrs, slog.String("upstream_error_kind", value))
+		}
+		if value := safeOAuthMapString(nested, "message", "detail"); value != "" {
+			attrs = append(attrs, slog.String("upstream_error_summary", value))
+		}
+	}
+	return attrs
+}
+
+func safeOAuthMapString(raw map[string]any, keys ...string) string {
+	for _, key := range keys {
+		value, ok := raw[key]
+		if !ok {
+			continue
+		}
+		if text := safeOAuthLogString(value); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func safeOAuthLogString(value any) string {
+	text, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return safeOAuthLogValue(text)
+}
+
+func safeOAuthLogValue(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if len(value) > 160 {
+		value = value[:160]
+	}
+	for _, r := range value {
+		if r < 0x20 || r > 0x7e {
+			return ""
+		}
+	}
+	lower := strings.ToLower(value)
+	for _, marker := range []string{
+		"bearer ",
+		"authorization:",
+		"access_token",
+		"refresh_token",
+		"id_token",
+		"eyj",
+		"sk-",
+	} {
+		if strings.Contains(lower, marker) {
+			return ""
+		}
+	}
+	return value
 }
 
 func authEndpoint(issuer, path string) (string, error) {

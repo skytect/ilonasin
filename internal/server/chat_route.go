@@ -10,7 +10,7 @@ import (
 	"ilonasin/internal/openai"
 )
 
-const maxRequestBodyBytes = 1 << 20
+const maxRequestBodyBytes = 64 << 20
 
 func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, token credentials.VerifiedLocalToken) {
 	start := time.Now()

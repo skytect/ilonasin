@@ -355,6 +355,10 @@ func validateOpenRouterOptions(raw any) error {
 			if err := validateOpenRouterModelList(value); err != nil {
 				return err
 			}
+		case "cache_control":
+			if err := validateOpenRouterCacheControl(value); err != nil {
+				return err
+			}
 		case "provider":
 			if err := validateOpenRouterProvider(value); err != nil {
 				return err
@@ -440,6 +444,39 @@ func isOpenRouterModelSlug(value string) bool {
 		}
 	}
 	return true
+}
+
+func validateOpenRouterCacheControl(raw any) error {
+	cacheControl, ok := raw.(map[string]any)
+	if !ok || cacheControl == nil {
+		return errors.New("provider_options.openrouter.cache_control must be an object")
+	}
+	if len(cacheControl) == 0 {
+		return errors.New("provider_options.openrouter.cache_control must not be empty")
+	}
+	typ, ok := cacheControl["type"].(string)
+	if !ok {
+		return errors.New("provider_options.openrouter.cache_control.type must be a string")
+	}
+	if typ != "ephemeral" {
+		return errors.New("provider_options.openrouter.cache_control.type is unsupported")
+	}
+	for key, value := range cacheControl {
+		switch key {
+		case "type":
+		case "ttl":
+			ttl, ok := value.(string)
+			if !ok {
+				return errors.New("provider_options.openrouter.cache_control.ttl must be a string")
+			}
+			if ttl != "5m" && ttl != "1h" {
+				return errors.New("provider_options.openrouter.cache_control.ttl is unsupported")
+			}
+		default:
+			return errors.New("provider_options.openrouter.cache_control contains an unsupported field")
+		}
+	}
+	return nil
 }
 
 func validateOpenRouterProvider(raw any) error {
@@ -784,6 +821,9 @@ func marshalChatCompletionsRequest(providerType string, req openai.ChatCompletio
 			}
 			if models, ok := opts["models"]; ok {
 				out["models"] = models
+			}
+			if cacheControl, ok := opts["cache_control"]; ok {
+				out["cache_control"] = cacheControl
 			}
 			if provider, ok := opts["provider"]; ok {
 				out["provider"] = provider

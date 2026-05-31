@@ -2682,6 +2682,26 @@ func newServeCheckUpstream() *serveCheckUpstream {
 					http.Error(w, err.Error(), http.StatusBadRequest)
 					return
 				}
+			case "provider-cache-control":
+				if err := validateServeCheckOpenRouterCacheControl(r.URL.Path, body); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+			case "provider-cache-control-ttl-5m":
+				if err := validateServeCheckOpenRouterCacheControlTTL(r.URL.Path, body, "5m"); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+			case "provider-cache-control-ttl-1h":
+				if err := validateServeCheckOpenRouterCacheControlTTL(r.URL.Path, body, "1h"); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+			case "provider-cache-control-combined":
+				if err := validateServeCheckOpenRouterCacheControlCombined(r.URL.Path, body); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
 			case "provider-privacy":
 				if err := validateServeCheckOpenRouterPrivacyProvider(r.URL.Path, body); err != nil {
 					http.Error(w, err.Error(), http.StatusBadRequest)
@@ -2990,6 +3010,11 @@ func validateServeCheckProviderOptions(path string, body map[string]any) error {
 				return fmt.Errorf("invalid OpenRouter models translation")
 			}
 		}
+		if cacheControl, ok := body["cache_control"].(map[string]any); ok {
+			if err := validateServeCheckOpenRouterCacheControlFields(cacheControl); err != nil {
+				return err
+			}
+		}
 		if provider, ok := body["provider"].(map[string]any); ok {
 			if err := validateServeCheckOpenRouterProviderFields(path, map[string]any{"provider": provider}); err != nil {
 				return err
@@ -2997,7 +3022,8 @@ func validateServeCheckProviderOptions(path string, body map[string]any) error {
 		}
 		if _, hasReasoning := body["reasoning"]; !hasReasoning {
 			_, hasModels := body["models"]
-			if _, hasProvider := body["provider"]; !hasProvider && !hasModels {
+			_, hasCacheControl := body["cache_control"]
+			if _, hasProvider := body["provider"]; !hasProvider && !hasModels && !hasCacheControl {
 				return fmt.Errorf("missing OpenRouter provider option translation")
 			}
 		}
@@ -3239,6 +3265,71 @@ func validateServeCheckOpenRouterModelsExact(path string, body map[string]any, e
 	for i, expectedModel := range expected {
 		if got[i] != expectedModel {
 			return fmt.Errorf("missing OpenRouter models translation")
+		}
+	}
+	return nil
+}
+
+func validateServeCheckOpenRouterCacheControl(path string, body map[string]any) error {
+	return validateServeCheckOpenRouterCacheControlExact(path, body, map[string]string{"type": "ephemeral"})
+}
+
+func validateServeCheckOpenRouterCacheControlTTL(path string, body map[string]any, ttl string) error {
+	return validateServeCheckOpenRouterCacheControlExact(path, body, map[string]string{"type": "ephemeral", "ttl": ttl})
+}
+
+func validateServeCheckOpenRouterCacheControlCombined(path string, body map[string]any) error {
+	if err := validateServeCheckOpenRouterCacheControlTTL(path, body, "1h"); err != nil {
+		return err
+	}
+	if err := validateServeCheckOpenRouterModelsTilde(path, body); err != nil {
+		return err
+	}
+	reasoning, ok := body["reasoning"].(map[string]any)
+	if !ok || reasoning["effort"] != "high" || reasoning["exclude"] != true {
+		return fmt.Errorf("missing OpenRouter reasoning translation")
+	}
+	return validateServeCheckOpenRouterProviderExact(path, body, map[string]any{"require_parameters": true})
+}
+
+func validateServeCheckOpenRouterCacheControlExact(path string, body map[string]any, expected map[string]string) error {
+	if path != "/api/v1/chat/completions" {
+		return fmt.Errorf("OpenRouter cache_control reached unsupported provider")
+	}
+	cacheControl, ok := body["cache_control"].(map[string]any)
+	if !ok || !stringMapEqual(cacheControl, expected) {
+		return fmt.Errorf("missing OpenRouter cache_control translation")
+	}
+	return nil
+}
+
+func stringMapEqual(got map[string]any, expected map[string]string) bool {
+	if len(got) != len(expected) {
+		return false
+	}
+	for key, want := range expected {
+		if got[key] != want {
+			return false
+		}
+	}
+	return true
+}
+
+func validateServeCheckOpenRouterCacheControlFields(cacheControl map[string]any) error {
+	typ, ok := cacheControl["type"].(string)
+	if !ok || typ != "ephemeral" {
+		return fmt.Errorf("invalid OpenRouter cache_control translation")
+	}
+	for key, value := range cacheControl {
+		switch key {
+		case "type":
+		case "ttl":
+			ttl, ok := value.(string)
+			if !ok || (ttl != "5m" && ttl != "1h") {
+				return fmt.Errorf("invalid OpenRouter cache_control translation")
+			}
+		default:
+			return fmt.Errorf("invalid OpenRouter cache_control translation")
 		}
 	}
 	return nil
@@ -4314,6 +4405,26 @@ func (u *serveCheckUpstream) handleServeCheckStream(w http.ResponseWriter, r *ht
 			}
 		case "stream-provider-models-resolved":
 			if err := validateServeCheckOpenRouterModelsTilde(r.URL.Path, body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		case "stream-provider-cache-control":
+			if err := validateServeCheckOpenRouterCacheControl(r.URL.Path, body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		case "stream-provider-cache-control-ttl-5m":
+			if err := validateServeCheckOpenRouterCacheControlTTL(r.URL.Path, body, "5m"); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		case "stream-provider-cache-control-ttl-1h":
+			if err := validateServeCheckOpenRouterCacheControlTTL(r.URL.Path, body, "1h"); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		case "stream-provider-cache-control-combined":
+			if err := validateServeCheckOpenRouterCacheControlCombined(r.URL.Path, body); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
@@ -6051,6 +6162,18 @@ func openRouterModelsCombinedExtra() string {
 	return `"provider_options":{"openrouter":{"reasoning":{"effort":"high","exclude":true},"models":["~anthropic/claude-sonnet-latest","gryphe/mythomax-l2-13b"],"provider":{"require_parameters":true}}}`
 }
 
+func openRouterCacheControlExtra() string {
+	return `"provider_options":{"openrouter":{"cache_control":{"type":"ephemeral"}}}`
+}
+
+func openRouterCacheControlTTLExtra(ttl string) string {
+	return `"provider_options":{"openrouter":{"cache_control":{"type":"ephemeral","ttl":"` + ttl + `"}}}`
+}
+
+func openRouterCacheControlCombinedExtra() string {
+	return `"provider_options":{"openrouter":{"reasoning":{"effort":"high","exclude":true},"models":["~anthropic/claude-sonnet-latest","gryphe/mythomax-l2-13b"],"provider":{"require_parameters":true},"cache_control":{"type":"ephemeral","ttl":"1h"}}}`
+}
+
 func openRouterPrivacyProviderExtra() string {
 	return `"provider_options":{"openrouter":{"provider":{"require_parameters":true,"data_collection":"deny","zdr":true}}}`
 }
@@ -6079,6 +6202,15 @@ func providerOptionInvalidCases(providerType string) []providerOptionInvalidCase
 			{name: "models-too-many", extra: `"provider_options":{"openrouter":{"models":["m00","m01","m02","m03","m04","m05","m06","m07","m08","m09","m10","m11","m12","m13","m14","m15","m16","m17","m18","m19","m20","m21","m22","m23","m24","m25","m26","m27","m28","m29","m30","m31","m32"]}}`},
 			{name: "models-too-long", extra: `"provider_options":{"openrouter":{"models":["` + strings.Repeat("m", 257) + `"]}}`},
 			{name: "models-bad-char", extra: `"provider_options":{"openrouter":{"models":["private/` + providerOptionPrivacyMarker + ` bad"]}}`},
+			{name: "cache-control-null", extra: `"provider_options":{"openrouter":{"cache_control":null}}`},
+			{name: "cache-control-string", extra: `"provider_options":{"openrouter":{"cache_control":"ephemeral"}}`},
+			{name: "cache-control-empty", extra: `"provider_options":{"openrouter":{"cache_control":{}}}`},
+			{name: "cache-control-missing-type", extra: `"provider_options":{"openrouter":{"cache_control":{"ttl":"5m"}}}`},
+			{name: "cache-control-type-bool", extra: `"provider_options":{"openrouter":{"cache_control":{"type":true}}}`},
+			{name: "cache-control-type-unsupported", extra: `"provider_options":{"openrouter":{"cache_control":{"type":"` + providerOptionPrivacyMarker + `"}}}`},
+			{name: "cache-control-ttl-bool", extra: `"provider_options":{"openrouter":{"cache_control":{"type":"ephemeral","ttl":true}}}`},
+			{name: "cache-control-ttl-unsupported", extra: `"provider_options":{"openrouter":{"cache_control":{"type":"ephemeral","ttl":"` + providerOptionPrivacyMarker + `"}}}`},
+			{name: "cache-control-extra", extra: `"provider_options":{"openrouter":{"cache_control":{"type":"ephemeral","` + providerOptionPrivacyMarker + `":true}}}`},
 			{name: "bad-provider", extra: `"provider_options":{"openrouter":{"provider":true}}`},
 			{name: "empty-provider", extra: `"provider_options":{"openrouter":{"provider":{}}}`},
 			{name: "bad-require-parameters", extra: `"provider_options":{"openrouter":{"provider":{"require_parameters":"true"}}}`},
@@ -6173,6 +6305,7 @@ func providerOptionInvalidCases(providerType string) []providerOptionInvalidCase
 			{name: "user-id", extra: `"provider_options":{"openrouter":{"user_id":"` + userIDPrivacyMarker + `"}}`},
 			{name: "top-level-provider", extra: `"provider":{"require_parameters":true}`},
 			{name: "top-level-models", extra: `"models":["private/model-fallback-marker:free"]`},
+			{name: "top-level-cache-control", extra: `"cache_control":{"type":"ephemeral","ttl":"` + providerOptionPrivacyMarker + `"}`},
 			{name: "top-level-user-id", extra: `"user_id":"` + userIDPrivacyMarker + `"`},
 		}
 	}
@@ -6187,6 +6320,7 @@ func providerOptionInvalidCases(providerType string) []providerOptionInvalidCase
 		{name: "openrouter-provider-performance", extra: openRouterProviderPerformanceDirectExtra()},
 		{name: "openrouter-provider-distillable-text", extra: openRouterProviderDistillableTextExtra(true)},
 		{name: "openrouter-models", extra: openRouterModelsExtra()},
+		{name: "openrouter-cache-control", extra: openRouterCacheControlExtra()},
 		{name: "extra-namespace", extra: `"provider_options":{"deepseek":{"thinking":{"type":"disabled"}},"openrouter":{"reasoning":{"effort":"high"}}}`},
 		{name: "unknown-key", extra: `"provider_options":{"deepseek":{"provider-option-private-marker":true}}`},
 		{name: "bad-thinking", extra: `"provider_options":{"deepseek":{"thinking":true}}`},
@@ -6203,6 +6337,7 @@ func providerOptionInvalidCases(providerType string) []providerOptionInvalidCase
 		{name: "user-id-at", extra: deepSeekUserIDExtra("user@id")},
 		{name: "top-level-provider", extra: `"provider":{"require_parameters":true}`},
 		{name: "top-level-models", extra: `"models":["private/model-fallback-marker:free"]`},
+		{name: "top-level-cache-control", extra: `"cache_control":{"type":"ephemeral","ttl":"` + providerOptionPrivacyMarker + `"}`},
 		{name: "top-level-user-id", extra: `"user_id":"` + userIDPrivacyMarker + `"`},
 	}
 }
@@ -6688,6 +6823,34 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 			return err
 		} else if count != 0 {
 			return fmt.Errorf("provider models created local fallback events")
+		}
+		cacheControlBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-cache-control", openRouterCacheControlExtra()))
+		if status, _, err := postJSON(base+"/v1/chat/completions", token, cacheControlBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("provider cache_control provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if !fakeUpstream.sawExpected(expectedPath, "provider-cache-control") {
+			return fmt.Errorf("provider cache_control did not reach upstream provider=%s", instance.ID)
+		}
+		cacheControl5mBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-cache-control-ttl-5m", openRouterCacheControlTTLExtra("5m")))
+		if status, _, err := postJSON(base+"/v1/chat/completions", token, cacheControl5mBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("provider cache_control 5m provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if !fakeUpstream.sawExpected(expectedPath, "provider-cache-control-ttl-5m") {
+			return fmt.Errorf("provider cache_control 5m did not reach upstream provider=%s", instance.ID)
+		}
+		cacheControl1hBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-cache-control-ttl-1h", openRouterCacheControlTTLExtra("1h")))
+		if status, _, err := postJSON(base+"/v1/chat/completions", token, cacheControl1hBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("provider cache_control 1h provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if !fakeUpstream.sawExpected(expectedPath, "provider-cache-control-ttl-1h") {
+			return fmt.Errorf("provider cache_control 1h did not reach upstream provider=%s", instance.ID)
+		}
+		cacheControlCombinedBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-cache-control-combined", openRouterCacheControlCombinedExtra()))
+		if status, _, err := postJSON(base+"/v1/chat/completions", token, cacheControlCombinedBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("provider cache_control combined provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if !fakeUpstream.sawExpected(expectedPath, "provider-cache-control-combined") {
+			return fmt.Errorf("provider cache_control combined did not reach upstream provider=%s", instance.ID)
 		}
 		privacyBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-privacy", openRouterPrivacyProviderExtra()))
 		if status, _, err := postJSON(base+"/v1/chat/completions", token, privacyBody); err != nil || status != http.StatusOK {
@@ -7534,6 +7697,34 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 			return err
 		} else if count != 0 {
 			return fmt.Errorf("stream provider models created local fallback events")
+		}
+		cacheControlBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/stream-provider-cache-control", openRouterCacheControlExtra()))
+		if status, _, _, _, err := postStream(base+"/v1/chat/completions", token, cacheControlBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("stream provider cache_control provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if !fakeUpstream.sawExpectedStream(expectedPath, "stream-provider-cache-control") {
+			return fmt.Errorf("stream provider cache_control did not reach upstream provider=%s", instance.ID)
+		}
+		cacheControl5mBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/stream-provider-cache-control-ttl-5m", openRouterCacheControlTTLExtra("5m")))
+		if status, _, _, _, err := postStream(base+"/v1/chat/completions", token, cacheControl5mBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("stream provider cache_control 5m provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if !fakeUpstream.sawExpectedStream(expectedPath, "stream-provider-cache-control-ttl-5m") {
+			return fmt.Errorf("stream provider cache_control 5m did not reach upstream provider=%s", instance.ID)
+		}
+		cacheControl1hBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/stream-provider-cache-control-ttl-1h", openRouterCacheControlTTLExtra("1h")))
+		if status, _, _, _, err := postStream(base+"/v1/chat/completions", token, cacheControl1hBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("stream provider cache_control 1h provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if !fakeUpstream.sawExpectedStream(expectedPath, "stream-provider-cache-control-ttl-1h") {
+			return fmt.Errorf("stream provider cache_control 1h did not reach upstream provider=%s", instance.ID)
+		}
+		cacheControlCombinedBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/stream-provider-cache-control-combined", openRouterCacheControlCombinedExtra()))
+		if status, _, _, _, err := postStream(base+"/v1/chat/completions", token, cacheControlCombinedBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("stream provider cache_control combined provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if !fakeUpstream.sawExpectedStream(expectedPath, "stream-provider-cache-control-combined") {
+			return fmt.Errorf("stream provider cache_control combined did not reach upstream provider=%s", instance.ID)
 		}
 		privacyBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/stream-provider-privacy", openRouterPrivacyProviderExtra()))
 		if status, _, _, _, err := postStream(base+"/v1/chat/completions", token, privacyBody); err != nil || status != http.StatusOK {
@@ -8412,6 +8603,14 @@ func exerciseCodexNoEligibleCacheCheck(ctx context.Context, registry provider.Re
 	}
 	invalidModelsBody := []byte(`{"model":"codex/codex-noeligible-invalid-openrouter-models","messages":[{"role":"user","content":"check"}],"provider_options":{"openrouter":{"models":null}}}`)
 	if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, invalidModelsBody, fakeUpstream, "/responses", "codex-noeligible-invalid-openrouter-models", "codex noeligible invalid openrouter models"); err != nil {
+		return err
+	}
+	unsupportedCacheControlBody := []byte(`{"model":"codex/codex-noeligible-openrouter-cache-control","messages":[{"role":"user","content":"check"}],` + openRouterCacheControlExtra() + `}`)
+	if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, unsupportedCacheControlBody, fakeUpstream, "/responses", "codex-noeligible-openrouter-cache-control", "codex noeligible openrouter cache_control"); err != nil {
+		return err
+	}
+	invalidCacheControlBody := []byte(`{"model":"codex/codex-noeligible-invalid-openrouter-cache-control","messages":[{"role":"user","content":"check"}],"provider_options":{"openrouter":{"cache_control":null}}}`)
+	if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, invalidCacheControlBody, fakeUpstream, "/responses", "codex-noeligible-invalid-openrouter-cache-control", "codex noeligible invalid openrouter cache_control"); err != nil {
 		return err
 	}
 	unsupportedUserIDOptionsBody := []byte(`{"model":"codex/codex-noeligible-deepseek-user-id","messages":[{"role":"user","content":"check"}],` + deepSeekUserIDExtra(userIDPrivacyMarker) + `}`)

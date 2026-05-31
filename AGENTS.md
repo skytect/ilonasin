@@ -51,8 +51,10 @@
   - `go test ./...` as a compile/package check only; do not add permanent tests.
   - `go vet ./...`
   - `go build -o "$tmpbin/ilonasin" ./cmd/ilonasin`
-  - `ILONASIN_HOME="$tmp" "$tmpbin/ilonasin" serve --check`
-  - `ILONASIN_HOME="$tmp" "$tmpbin/ilonasin" manage --check`
+  - start `ILONASIN_HOME="$tmp" "$tmpbin/ilonasin" serve` in the background,
+    wait for the HTTP API or management socket, then terminate it.
+  - run `ILONASIN_HOME="$tmp" "$tmpbin/ilonasin" manage` against that daemon
+    with a short timeout or PTY when a TUI smoke is useful.
 
 ## Task Tips
 

@@ -27,11 +27,11 @@ type coreRuntime struct {
 	cleanup    func()
 }
 
-func bootstrapClient(ctx context.Context, opts Options, checkSafeHome bool) (*coreRuntime, error) {
-	return bootstrapCore(ctx, opts, checkSafeHome)
+func bootstrapClient(ctx context.Context, opts Options) (*coreRuntime, error) {
+	return bootstrapCore(ctx, opts)
 }
 
-func bootstrapCore(ctx context.Context, opts Options, checkSafeHome bool) (*coreRuntime, error) {
+func bootstrapCore(ctx context.Context, opts Options) (*coreRuntime, error) {
 	if opts.Stdout == nil {
 		opts.Stdout = io.Discard
 	}
@@ -40,14 +40,6 @@ func bootstrapCore(ctx context.Context, opts Options, checkSafeHome bool) (*core
 	}
 	envHome := os.Getenv(home.EnvName)
 	cleanup := func() {}
-	if checkSafeHome && envHome == "" {
-		tmp, err := os.MkdirTemp("", "ilonasin-check-*")
-		if err != nil {
-			return nil, err
-		}
-		envHome = tmp
-		cleanup = func() { _ = os.RemoveAll(tmp) }
-	}
 	homeDir, err := home.Resolve(envHome)
 	if err != nil {
 		cleanup()

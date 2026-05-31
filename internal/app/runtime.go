@@ -13,8 +13,8 @@ type runtime struct {
 	Store *sqlite.Store
 }
 
-func bootstrap(ctx context.Context, opts Options, checkSafeHome bool) (*runtime, error) {
-	core, err := bootstrapCore(ctx, opts, checkSafeHome)
+func bootstrap(ctx context.Context, opts Options) (*runtime, error) {
+	core, err := bootstrapCore(ctx, opts)
 	if err != nil {
 		return nil, err
 	}

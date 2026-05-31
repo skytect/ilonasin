@@ -15,7 +15,7 @@ import (
 )
 
 func Serve(opts Options) error {
-	rt, err := bootstrap(context.Background(), opts, false)
+	rt, err := bootstrap(context.Background(), opts)
 	if err != nil {
 		return err
 	}
@@ -52,7 +52,7 @@ func Serve(opts Options) error {
 }
 
 func Manage(opts Options) error {
-	rt, err := bootstrapClient(context.Background(), opts, false)
+	rt, err := bootstrapClient(context.Background(), opts)
 	if err != nil {
 		return err
 	}

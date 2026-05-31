@@ -52,12 +52,11 @@ func Serve(opts Options) error {
 }
 
 func Manage(opts Options) error {
-	rt, err := bootstrap(context.Background(), opts, false)
+	rt, err := bootstrapClient(context.Background(), opts, false)
 	if err != nil {
 		return err
 	}
 	defer rt.cleanup()
-	defer rt.Store.Close()
 	rt.Logger.InfoContext(context.Background(), "manage starting",
 		slog.String("event", "app_command_start"),
 		slog.String("command", "manage"),

@@ -7,11 +7,13 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
 	"os"
 	"path/filepath"
 	goruntime "runtime"
 	"strings"
 
+	"ilonasin/internal/home"
 	"ilonasin/internal/management"
 	"ilonasin/internal/tui"
 )
@@ -46,6 +48,9 @@ func ManageCheck(opts Options) error {
 		return err
 	}
 	if err := assertProductionUpstreamMutationWiring(); err != nil {
+		return err
+	}
+	if err := exerciseManageDaemonUnavailableCheck(); err != nil {
 		return err
 	}
 	if err := exerciseUpstreamCredentialCheck(context.Background(), rt.Registry, rt.Config); err != nil {
@@ -95,6 +100,9 @@ func assertProductionUpstreamMutationWiring() error {
 	if err != nil {
 		return err
 	}
+	if err := assertProductionManageClientBootstrap(root); err != nil {
+		return err
+	}
 	if err := assertTUIUpstreamArg(filepath.Join(root, "internal/app/commands.go"), "Run"); err != nil {
 		return err
 	}
@@ -125,6 +133,118 @@ func assertProductionUpstreamMutationWiring() error {
 		}
 	}
 	return nil
+}
+
+func exerciseManageDaemonUnavailableCheck() error {
+	tmp, err := os.MkdirTemp("", "ilonasin-manage-daemon-unavailable-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
+	previous, hadPrevious := os.LookupEnv(home.EnvName)
+	if err := os.Setenv(home.EnvName, tmp); err != nil {
+		return err
+	}
+	defer func() {
+		if hadPrevious {
+			_ = os.Setenv(home.EnvName, previous)
+		} else {
+			_ = os.Unsetenv(home.EnvName)
+		}
+	}()
+	err = Manage(Options{Stdout: io.Discard, Stderr: io.Discard})
+	if err == nil {
+		return fmt.Errorf("manage without daemon succeeded")
+	}
+	if !strings.Contains(err.Error(), "management daemon unavailable") {
+		return fmt.Errorf("manage without daemon failed with unexpected error: %s", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(tmp, "ilonasin.sqlite")); !os.IsNotExist(statErr) {
+		if statErr != nil {
+			return statErr
+		}
+		return fmt.Errorf("manage without daemon created sqlite database")
+	}
+	return nil
+}
+
+func assertProductionManageClientBootstrap(root string) error {
+	commandsPath := filepath.Join(root, "internal/app/commands.go")
+	manageBody, err := functionBodySource(commandsPath, "Manage")
+	if err != nil {
+		return err
+	}
+	compactManage := compactSource(manageBody)
+	forbidden := []string{
+		"bootstrap(",
+		"sqlite.Open",
+		".Store",
+		"credentials.Service",
+		"credentials.UpstreamService",
+	}
+	for _, value := range forbidden {
+		if strings.Contains(manageBody, value) {
+			return fmt.Errorf("production Manage retained storage dependency %q", value)
+		}
+	}
+	if !strings.Contains(manageBody, "bootstrapClient(") {
+		return fmt.Errorf("production Manage does not use client bootstrap")
+	}
+	if !strings.Contains(manageBody, "defer rt.cleanup()") {
+		return fmt.Errorf("production Manage does not cleanup client runtime")
+	}
+	if !strings.Contains(compactManage, "management.SocketPath(rt.HomeDir,rt.ConfigPath,rt.Config.Paths.Database)") {
+		return fmt.Errorf("production Manage does not use resolved client runtime paths for management socket")
+	}
+
+	corePath := filepath.Join(root, "internal/app/runtime_core.go")
+	coreBody, err := os.ReadFile(corePath)
+	if err != nil {
+		return err
+	}
+	core := string(coreBody)
+	for _, value := range []string{
+		"internal/storage/sqlite",
+		"sqlite.Open",
+		"Store",
+		"bootstrap(",
+		"credentials.Service",
+		"credentials.UpstreamService",
+	} {
+		if strings.Contains(core, value) {
+			return fmt.Errorf("client runtime retained storage dependency %q", value)
+		}
+	}
+	return nil
+}
+
+func functionBodySource(path, name string) (string, error) {
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, src, 0)
+	if err != nil {
+		return "", err
+	}
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != name || fn.Body == nil {
+			continue
+		}
+		start := fset.Position(fn.Body.Pos()).Offset
+		end := fset.Position(fn.Body.End()).Offset
+		return string(src[start:end]), nil
+	}
+	return "", fmt.Errorf("function %s missing in %s", name, path)
+}
+
+func compactSource(value string) string {
+	value = strings.ReplaceAll(value, " ", "")
+	value = strings.ReplaceAll(value, "\n", "")
+	value = strings.ReplaceAll(value, "\t", "")
+	return value
 }
 
 func sourceRoot() (string, error) {

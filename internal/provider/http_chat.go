@@ -351,6 +351,10 @@ func validateOpenRouterOptions(raw any) error {
 			if err := validateOpenRouterReasoning(value); err != nil {
 				return err
 			}
+		case "models":
+			if err := validateOpenRouterModelList(value); err != nil {
+				return err
+			}
 		case "provider":
 			if err := validateOpenRouterProvider(value); err != nil {
 				return err
@@ -400,6 +404,42 @@ func validateOpenRouterReasoning(raw any) error {
 		return errors.New("provider_options.openrouter.reasoning.effort and max_tokens are mutually exclusive")
 	}
 	return nil
+}
+
+func validateOpenRouterModelList(raw any) error {
+	values, ok := raw.([]any)
+	if !ok || len(values) == 0 || len(values) > 32 {
+		return errors.New("provider_options.openrouter.models must be a non-empty array of up to 32 model slugs")
+	}
+	seen := map[string]bool{}
+	for _, rawValue := range values {
+		value, ok := rawValue.(string)
+		if !ok || !isOpenRouterModelSlug(value) {
+			return errors.New("provider_options.openrouter.models must contain only model slug strings")
+		}
+		if seen[value] {
+			return errors.New("provider_options.openrouter.models must not contain duplicate model slugs")
+		}
+		seen[value] = true
+	}
+	return nil
+}
+
+func isOpenRouterModelSlug(value string) bool {
+	if value == "" || len(value) > 256 {
+		return false
+	}
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '_' || r == '-' || r == '.' || r == '/' || r == ':' || r == '~':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func validateOpenRouterProvider(raw any) error {
@@ -741,6 +781,9 @@ func marshalChatCompletionsRequest(providerType string, req openai.ChatCompletio
 			opts := req.ReasoningOptions["openrouter"].(map[string]any)
 			if reasoning, ok := opts["reasoning"]; ok {
 				out["reasoning"] = reasoning
+			}
+			if models, ok := opts["models"]; ok {
+				out["models"] = models
 			}
 			if provider, ok := opts["provider"]; ok {
 				out["provider"] = provider

@@ -2657,6 +2657,31 @@ func newServeCheckUpstream() *serveCheckUpstream {
 					http.Error(w, err.Error(), http.StatusBadRequest)
 					return
 				}
+			case "provider-models":
+				if err := validateServeCheckOpenRouterModels(r.URL.Path, body); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+			case "provider-models-tilde":
+				if err := validateServeCheckOpenRouterModelsTilde(r.URL.Path, body); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+			case "provider-models-marker":
+				if err := validateServeCheckOpenRouterModelsMarker(r.URL.Path, body); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+			case "provider-models-combined":
+				if err := validateServeCheckOpenRouterModelsCombined(r.URL.Path, body); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+			case "provider-models-resolved":
+				if err := validateServeCheckOpenRouterModelsTilde(r.URL.Path, body); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
 			case "provider-privacy":
 				if err := validateServeCheckOpenRouterPrivacyProvider(r.URL.Path, body); err != nil {
 					http.Error(w, err.Error(), http.StatusBadRequest)
@@ -2888,6 +2913,9 @@ func newServeCheckUpstream() *serveCheckUpstream {
 				responseModel = "deepseek/deepseek-v4-flash:free"
 			}
 		}
+		if model == "provider-models-resolved" {
+			responseModel = "anthropic/claude-sonnet-latest"
+		}
 		if model == "unsafe-resolved-model" {
 			responseModel = "requestid-unsafe-marker"
 		}
@@ -2957,13 +2985,19 @@ func validateServeCheckProviderOptions(path string, body map[string]any) error {
 				return fmt.Errorf("missing OpenRouter reasoning translation")
 			}
 		}
+		if models, ok := body["models"].([]any); ok {
+			if !isStringList(models) {
+				return fmt.Errorf("invalid OpenRouter models translation")
+			}
+		}
 		if provider, ok := body["provider"].(map[string]any); ok {
 			if err := validateServeCheckOpenRouterProviderFields(path, map[string]any{"provider": provider}); err != nil {
 				return err
 			}
 		}
 		if _, hasReasoning := body["reasoning"]; !hasReasoning {
-			if _, hasProvider := body["provider"]; !hasProvider {
+			_, hasModels := body["models"]
+			if _, hasProvider := body["provider"]; !hasProvider && !hasModels {
 				return fmt.Errorf("missing OpenRouter provider option translation")
 			}
 		}
@@ -3169,6 +3203,45 @@ func validateServeCheckOpenRouterProviderDistillableTextCombined(path string, bo
 		"preferred_min_throughput": map[string]string{"p50": "100", "p90": "50"},
 		"enforce_distillable_text": true,
 	})
+}
+
+func validateServeCheckOpenRouterModels(path string, body map[string]any) error {
+	return validateServeCheckOpenRouterModelsExact(path, body, []string{"openai/gpt-4o", "gryphe/mythomax-l2-13b"})
+}
+
+func validateServeCheckOpenRouterModelsTilde(path string, body map[string]any) error {
+	return validateServeCheckOpenRouterModelsExact(path, body, []string{"~anthropic/claude-sonnet-latest", "gryphe/mythomax-l2-13b"})
+}
+
+func validateServeCheckOpenRouterModelsMarker(path string, body map[string]any) error {
+	return validateServeCheckOpenRouterModelsExact(path, body, []string{"private/model-fallback-marker:free", "gryphe/mythomax-l2-13b"})
+}
+
+func validateServeCheckOpenRouterModelsCombined(path string, body map[string]any) error {
+	if err := validateServeCheckOpenRouterModelsExact(path, body, []string{"~anthropic/claude-sonnet-latest", "gryphe/mythomax-l2-13b"}); err != nil {
+		return err
+	}
+	reasoning, ok := body["reasoning"].(map[string]any)
+	if !ok || reasoning["effort"] != "high" || reasoning["exclude"] != true {
+		return fmt.Errorf("missing OpenRouter reasoning translation")
+	}
+	return validateServeCheckOpenRouterProviderExact(path, body, map[string]any{"require_parameters": true})
+}
+
+func validateServeCheckOpenRouterModelsExact(path string, body map[string]any, expected []string) error {
+	if path != "/api/v1/chat/completions" {
+		return fmt.Errorf("OpenRouter models reached unsupported provider")
+	}
+	got, ok := body["models"].([]any)
+	if !ok || len(got) != len(expected) {
+		return fmt.Errorf("missing OpenRouter models translation")
+	}
+	for i, expectedModel := range expected {
+		if got[i] != expectedModel {
+			return fmt.Errorf("missing OpenRouter models translation")
+		}
+	}
+	return nil
 }
 
 func validateServeCheckOpenRouterProviderFields(path string, body map[string]any) error {
@@ -4219,6 +4292,31 @@ func (u *serveCheckUpstream) handleServeCheckStream(w http.ResponseWriter, r *ht
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
+		case "stream-provider-models":
+			if err := validateServeCheckOpenRouterModels(r.URL.Path, body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		case "stream-provider-models-tilde":
+			if err := validateServeCheckOpenRouterModelsTilde(r.URL.Path, body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		case "stream-provider-models-marker":
+			if err := validateServeCheckOpenRouterModelsMarker(r.URL.Path, body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		case "stream-provider-models-combined":
+			if err := validateServeCheckOpenRouterModelsCombined(r.URL.Path, body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		case "stream-provider-models-resolved":
+			if err := validateServeCheckOpenRouterModelsTilde(r.URL.Path, body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
 		case "stream-provider-privacy":
 			if err := validateServeCheckOpenRouterPrivacyProvider(r.URL.Path, body); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
@@ -4419,6 +4517,9 @@ func (u *serveCheckUpstream) handleServeCheckStream(w http.ResponseWriter, r *ht
 			responseModel = "deepseek/deepseek-v4-flash:free"
 		}
 	}
+	if model == "stream-provider-models-resolved" {
+		responseModel = "anthropic/claude-sonnet-latest"
+	}
 	if model == "stream-unsafe-resolved-model" {
 		responseModel = "requestid-unsafe-marker"
 	}
@@ -4527,7 +4628,7 @@ func assertUnsupportedChatNoUpstream(base, token string, body []byte, fakeUpstre
 	if (strings.Contains(name, "sampling_penalty") || strings.Contains(name, "advanced_sampling")) && (bytes.Contains(respBody, []byte("invalid request JSON")) || bytes.Contains(respBody, []byte("cannot unmarshal"))) {
 		return fmt.Errorf("unsupported %s returned raw decode wording", name)
 	}
-	for _, marker := range []string{providerOptionPrivacyMarker, responseFormatPrivacyMarker, responseFormatSchemaMarker, logprobTokenMarker, logitBiasDecimalMarker, logitBiasExponentMarker, logitBiasOverflowMarker, costDetailsMarker, predictionPrivacyMarker, "prediction-private-type", "prediction-private-extra", userPrivacyMarker, serviceTierPrivacyMarker, sessionIDPrivacyMarker, metadataPrivacyMarker, userIDPrivacyMarker, "parallel-tool-calls-private-marker", toolNameMarker, toolDescriptionMarker, toolSchemaNumberMarker, toolCallIDMarker, toolArgumentMarker, toolResultMarker, "1.75", "-1.25", penaltyOverflowMarker, "2.01", "-2.01", "2.0000000000000001", "-2.0000000000000001", "2.000000000000000000000000000000000000000000000000000000000000000000000000000000001", "9223372036854775807", "-9223372036854775808", "9223372036854775808", "-9223372036854775809", "1.0000000000000001", "2.0000000000000001", "100.0000000000000001", "-100.0000000000000001"} {
+	for _, marker := range []string{providerOptionPrivacyMarker, responseFormatPrivacyMarker, responseFormatSchemaMarker, logprobTokenMarker, logitBiasDecimalMarker, logitBiasExponentMarker, logitBiasOverflowMarker, costDetailsMarker, predictionPrivacyMarker, "prediction-private-type", "prediction-private-extra", userPrivacyMarker, serviceTierPrivacyMarker, sessionIDPrivacyMarker, metadataPrivacyMarker, userIDPrivacyMarker, "parallel-tool-calls-private-marker", "private/model-fallback-marker:free", toolNameMarker, toolDescriptionMarker, toolSchemaNumberMarker, toolCallIDMarker, toolArgumentMarker, toolResultMarker, "1.75", "-1.25", penaltyOverflowMarker, "2.01", "-2.01", "2.0000000000000001", "-2.0000000000000001", "2.000000000000000000000000000000000000000000000000000000000000000000000000000000001", "9223372036854775807", "-9223372036854775808", "9223372036854775808", "-9223372036854775809", "1.0000000000000001", "2.0000000000000001", "100.0000000000000001", "-100.0000000000000001"} {
 		if bytes.Contains(respBody, []byte(marker)) {
 			return fmt.Errorf("unsupported %s leaked private marker", name)
 		}
@@ -5934,6 +6035,22 @@ func openRouterProviderDistillableTextCombinedExtra() string {
 	return `"provider_options":{"openrouter":{"provider":{"only":["deepinfra"],"ignore":["openai"],"allow_fallbacks":false,"quantizations":["fp16"],"max_price":{"prompt":0.00000123},"preferred_max_latency":5,"preferred_min_throughput":{"p50":100,"p90":50},"enforce_distillable_text":true}}}`
 }
 
+func openRouterModelsExtra() string {
+	return `"provider_options":{"openrouter":{"models":["openai/gpt-4o","gryphe/mythomax-l2-13b"]}}`
+}
+
+func openRouterModelsTildeExtra() string {
+	return `"provider_options":{"openrouter":{"models":["~anthropic/claude-sonnet-latest","gryphe/mythomax-l2-13b"]}}`
+}
+
+func openRouterModelsMarkerExtra() string {
+	return `"provider_options":{"openrouter":{"models":["private/model-fallback-marker:free","gryphe/mythomax-l2-13b"]}}`
+}
+
+func openRouterModelsCombinedExtra() string {
+	return `"provider_options":{"openrouter":{"reasoning":{"effort":"high","exclude":true},"models":["~anthropic/claude-sonnet-latest","gryphe/mythomax-l2-13b"],"provider":{"require_parameters":true}}}`
+}
+
 func openRouterPrivacyProviderExtra() string {
 	return `"provider_options":{"openrouter":{"provider":{"require_parameters":true,"data_collection":"deny","zdr":true}}}`
 }
@@ -5953,6 +6070,15 @@ func providerOptionInvalidCases(providerType string) []providerOptionInvalidCase
 			{name: "bad-effort", extra: `"provider_options":{"openrouter":{"reasoning":{"effort":"provider-option-private-marker"}}}`},
 			{name: "bad-max-tokens", extra: `"provider_options":{"openrouter":{"reasoning":{"max_tokens":0}}}`},
 			{name: "conflicting-reasoning", extra: `"provider_options":{"openrouter":{"reasoning":{"effort":"high","max_tokens":12}}}`},
+			{name: "models-null", extra: `"provider_options":{"openrouter":{"models":null}}`},
+			{name: "models-string", extra: `"provider_options":{"openrouter":{"models":"openai/gpt-4o"}}`},
+			{name: "models-empty", extra: `"provider_options":{"openrouter":{"models":[]}}`},
+			{name: "models-non-string", extra: `"provider_options":{"openrouter":{"models":[7]}}`},
+			{name: "models-empty-string", extra: `"provider_options":{"openrouter":{"models":[""]}}`},
+			{name: "models-duplicate", extra: `"provider_options":{"openrouter":{"models":["openai/gpt-4o","openai/gpt-4o"]}}`},
+			{name: "models-too-many", extra: `"provider_options":{"openrouter":{"models":["m00","m01","m02","m03","m04","m05","m06","m07","m08","m09","m10","m11","m12","m13","m14","m15","m16","m17","m18","m19","m20","m21","m22","m23","m24","m25","m26","m27","m28","m29","m30","m31","m32"]}}`},
+			{name: "models-too-long", extra: `"provider_options":{"openrouter":{"models":["` + strings.Repeat("m", 257) + `"]}}`},
+			{name: "models-bad-char", extra: `"provider_options":{"openrouter":{"models":["private/` + providerOptionPrivacyMarker + ` bad"]}}`},
 			{name: "bad-provider", extra: `"provider_options":{"openrouter":{"provider":true}}`},
 			{name: "empty-provider", extra: `"provider_options":{"openrouter":{"provider":{}}}`},
 			{name: "bad-require-parameters", extra: `"provider_options":{"openrouter":{"provider":{"require_parameters":"true"}}}`},
@@ -6046,6 +6172,7 @@ func providerOptionInvalidCases(providerType string) []providerOptionInvalidCase
 			{name: "provider-extra", extra: `"provider_options":{"openrouter":{"provider":{"require_parameters":true,"` + providerOptionPrivacyMarker + `":true}}}`},
 			{name: "user-id", extra: `"provider_options":{"openrouter":{"user_id":"` + userIDPrivacyMarker + `"}}`},
 			{name: "top-level-provider", extra: `"provider":{"require_parameters":true}`},
+			{name: "top-level-models", extra: `"models":["private/model-fallback-marker:free"]`},
 			{name: "top-level-user-id", extra: `"user_id":"` + userIDPrivacyMarker + `"`},
 		}
 	}
@@ -6059,6 +6186,7 @@ func providerOptionInvalidCases(providerType string) []providerOptionInvalidCase
 		{name: "openrouter-provider-sort", extra: openRouterProviderSortStringExtra()},
 		{name: "openrouter-provider-performance", extra: openRouterProviderPerformanceDirectExtra()},
 		{name: "openrouter-provider-distillable-text", extra: openRouterProviderDistillableTextExtra(true)},
+		{name: "openrouter-models", extra: openRouterModelsExtra()},
 		{name: "extra-namespace", extra: `"provider_options":{"deepseek":{"thinking":{"type":"disabled"}},"openrouter":{"reasoning":{"effort":"high"}}}`},
 		{name: "unknown-key", extra: `"provider_options":{"deepseek":{"provider-option-private-marker":true}}`},
 		{name: "bad-thinking", extra: `"provider_options":{"deepseek":{"thinking":true}}`},
@@ -6074,6 +6202,7 @@ func providerOptionInvalidCases(providerType string) []providerOptionInvalidCase
 		{name: "user-id-slash", extra: deepSeekUserIDExtra("user/id")},
 		{name: "user-id-at", extra: deepSeekUserIDExtra("user@id")},
 		{name: "top-level-provider", extra: `"provider":{"require_parameters":true}`},
+		{name: "top-level-models", extra: `"models":["private/model-fallback-marker:free"]`},
 		{name: "top-level-user-id", extra: `"user_id":"` + userIDPrivacyMarker + `"`},
 	}
 }
@@ -6512,6 +6641,53 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 		}
 		if !fakeUpstream.sawExpected(expectedPath, "provider-distillable-text-combined") {
 			return fmt.Errorf("provider distillable_text combined did not reach upstream provider=%s", instance.ID)
+		}
+		modelsBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-models", openRouterModelsExtra()))
+		if status, _, err := postJSON(base+"/v1/chat/completions", token, modelsBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("provider models provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if !fakeUpstream.sawExpected(expectedPath, "provider-models") {
+			return fmt.Errorf("provider models did not reach upstream provider=%s", instance.ID)
+		}
+		modelsTildeBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-models-tilde", openRouterModelsTildeExtra()))
+		if status, _, err := postJSON(base+"/v1/chat/completions", token, modelsTildeBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("provider models tilde provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if !fakeUpstream.sawExpected(expectedPath, "provider-models-tilde") {
+			return fmt.Errorf("provider models tilde did not reach upstream provider=%s", instance.ID)
+		}
+		modelsMarkerBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-models-marker", openRouterModelsMarkerExtra()))
+		status, respBody, err = postJSON(base+"/v1/chat/completions", token, modelsMarkerBody)
+		if err != nil || status != http.StatusOK {
+			return fmt.Errorf("provider models marker provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if bytes.Contains(respBody, []byte("private/model-fallback-marker:free")) {
+			return fmt.Errorf("provider models marker echoed private marker")
+		}
+		if !fakeUpstream.sawExpected(expectedPath, "provider-models-marker") {
+			return fmt.Errorf("provider models marker did not reach upstream provider=%s", instance.ID)
+		}
+		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, "private/model-fallback-marker:free"); err != nil {
+			return err
+		}
+		modelsCombinedBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-models-combined", openRouterModelsCombinedExtra()))
+		if status, _, err := postJSON(base+"/v1/chat/completions", token, modelsCombinedBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("provider models combined provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if !fakeUpstream.sawExpected(expectedPath, "provider-models-combined") {
+			return fmt.Errorf("provider models combined did not reach upstream provider=%s", instance.ID)
+		}
+		modelsResolvedBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-models-resolved", openRouterModelsTildeExtra()))
+		if status, _, err := postJSON(base+"/v1/chat/completions", token, modelsResolvedBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("provider models resolved provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if err := assertResolvedModelMetadata(ctx, store, instance.ID, "provider-models-resolved", "anthropic/claude-sonnet-latest"); err != nil {
+			return err
+		}
+		if count, err := fallbackEventCount(ctx, store, instance.ID, "provider-models-resolved"); err != nil {
+			return err
+		} else if count != 0 {
+			return fmt.Errorf("provider models created local fallback events")
 		}
 		privacyBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-privacy", openRouterPrivacyProviderExtra()))
 		if status, _, err := postJSON(base+"/v1/chat/completions", token, privacyBody); err != nil || status != http.StatusOK {
@@ -7311,6 +7487,53 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 		}
 		if !fakeUpstream.sawExpectedStream(expectedPath, "stream-provider-distillable-text-false") {
 			return fmt.Errorf("stream provider distillable_text false did not reach upstream provider=%s", instance.ID)
+		}
+		modelsBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/stream-provider-models", openRouterModelsExtra()))
+		if status, _, _, _, err := postStream(base+"/v1/chat/completions", token, modelsBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("stream provider models provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if !fakeUpstream.sawExpectedStream(expectedPath, "stream-provider-models") {
+			return fmt.Errorf("stream provider models did not reach upstream provider=%s", instance.ID)
+		}
+		modelsTildeBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/stream-provider-models-tilde", openRouterModelsTildeExtra()))
+		if status, _, _, _, err := postStream(base+"/v1/chat/completions", token, modelsTildeBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("stream provider models tilde provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if !fakeUpstream.sawExpectedStream(expectedPath, "stream-provider-models-tilde") {
+			return fmt.Errorf("stream provider models tilde did not reach upstream provider=%s", instance.ID)
+		}
+		modelsMarkerBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/stream-provider-models-marker", openRouterModelsMarkerExtra()))
+		status, _, _, respBody, err = postStream(base+"/v1/chat/completions", token, modelsMarkerBody)
+		if err != nil || status != http.StatusOK {
+			return fmt.Errorf("stream provider models marker provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if bytes.Contains(respBody, []byte("private/model-fallback-marker:free")) {
+			return fmt.Errorf("stream provider models marker echoed private marker")
+		}
+		if !fakeUpstream.sawExpectedStream(expectedPath, "stream-provider-models-marker") {
+			return fmt.Errorf("stream provider models marker did not reach upstream provider=%s", instance.ID)
+		}
+		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, "private/model-fallback-marker:free"); err != nil {
+			return err
+		}
+		modelsCombinedBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/stream-provider-models-combined", openRouterModelsCombinedExtra()))
+		if status, _, _, _, err := postStream(base+"/v1/chat/completions", token, modelsCombinedBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("stream provider models combined provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if !fakeUpstream.sawExpectedStream(expectedPath, "stream-provider-models-combined") {
+			return fmt.Errorf("stream provider models combined did not reach upstream provider=%s", instance.ID)
+		}
+		modelsResolvedBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/stream-provider-models-resolved", openRouterModelsTildeExtra()))
+		if status, _, _, _, err := postStream(base+"/v1/chat/completions", token, modelsResolvedBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("stream provider models resolved provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if err := assertResolvedModelMetadata(ctx, store, instance.ID, "stream-provider-models-resolved", "anthropic/claude-sonnet-latest"); err != nil {
+			return err
+		}
+		if count, err := fallbackEventCount(ctx, store, instance.ID, "stream-provider-models-resolved"); err != nil {
+			return err
+		} else if count != 0 {
+			return fmt.Errorf("stream provider models created local fallback events")
 		}
 		privacyBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/stream-provider-privacy", openRouterPrivacyProviderExtra()))
 		if status, _, _, _, err := postStream(base+"/v1/chat/completions", token, privacyBody); err != nil || status != http.StatusOK {
@@ -8181,6 +8404,14 @@ func exerciseCodexNoEligibleCacheCheck(ctx context.Context, registry provider.Re
 	}
 	invalidProviderDistillableTextBody := []byte(`{"model":"codex/codex-noeligible-invalid-provider-distillable-text","messages":[{"role":"user","content":"check"}],"provider_options":{"openrouter":{"provider":{"enforce_distillable_text":null}}}}`)
 	if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, invalidProviderDistillableTextBody, fakeUpstream, "/responses", "codex-noeligible-invalid-provider-distillable-text", "codex noeligible invalid openrouter provider distillable_text"); err != nil {
+		return err
+	}
+	unsupportedModelsBody := []byte(`{"model":"codex/codex-noeligible-openrouter-models","messages":[{"role":"user","content":"check"}],` + openRouterModelsExtra() + `}`)
+	if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, unsupportedModelsBody, fakeUpstream, "/responses", "codex-noeligible-openrouter-models", "codex noeligible openrouter models"); err != nil {
+		return err
+	}
+	invalidModelsBody := []byte(`{"model":"codex/codex-noeligible-invalid-openrouter-models","messages":[{"role":"user","content":"check"}],"provider_options":{"openrouter":{"models":null}}}`)
+	if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, invalidModelsBody, fakeUpstream, "/responses", "codex-noeligible-invalid-openrouter-models", "codex noeligible invalid openrouter models"); err != nil {
 		return err
 	}
 	unsupportedUserIDOptionsBody := []byte(`{"model":"codex/codex-noeligible-deepseek-user-id","messages":[{"role":"user","content":"check"}],` + deepSeekUserIDExtra(userIDPrivacyMarker) + `}`)

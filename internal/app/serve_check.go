@@ -261,6 +261,9 @@ func ServeCheck(opts Options) error {
 			return fmt.Errorf("chat adapter check %s: %w", instance.ID, err)
 		}
 	}
+	if err := exerciseLocalResponsesProviderToolCheck(context.Background(), rt.Config, base, created2.Token, fakeUpstream, checkStore); err != nil {
+		return fmt.Errorf("local responses provider tools check: %w", err)
+	}
 	if len(instances) > 0 {
 		if err := exerciseModelDiscoveryCheck(context.Background(), base, created2.Token, instances, fakeUpstream, checkStore, upstreamService); err != nil {
 			return fmt.Errorf("model discovery check: %w", err)

@@ -1190,6 +1190,12 @@ func newServeCheckUpstream() *serveCheckUpstream {
 				return
 			}
 		}
+		if strings.HasPrefix(model, "responses-tools-") {
+			if err := validateServeCheckResponsesProviderTools(r.URL.Path, model, body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
 		if strings.HasPrefix(model, "parallel-tool-calls-") {
 			want := strings.HasSuffix(model, "-true")
 			if err := validateServeCheckParallelToolCalls(r.URL.Path, body, want); err != nil {

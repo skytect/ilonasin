@@ -20,8 +20,10 @@ tool-family list, not Chat Completions.
 The current blockers are narrower:
 
 - `codex exec` workspace edit exited 0 but left the target file unchanged.
-- `codex exec` routed to DeepSeek/OpenRouter through ilonasin failed with
-  `tools[5].type is unsupported`.
+- `codex exec` routed to DeepSeek now passes a text smoke through ilonasin.
+- `codex exec` routed to OpenRouter no longer fails with the local unsupported
+  tool-type blocker, but the tested OpenRouter model still failed at the
+  provider-response layer.
 - Direct Responses calls using real credentials passed for Codex, DeepSeek, and
   OpenRouter.
 
@@ -53,7 +55,8 @@ The current blockers are narrower:
 | Reasoning effort | custom local provider | Pass for `minimal`, `low`, `medium`, `high`, `xhigh` | None in latest smoke | Keep covered |
 | Fast or priority tier | custom local provider | Pass for `flex` and `priority` | None in latest smoke | Keep covered |
 | Workspace edit | custom local provider | Fails behaviorally | File unchanged after exit 0 | Fix Codex tool-loop/edit behavior |
-| Codex CLI through DeepSeek/OpenRouter | custom local provider | Fails before inference | Unsupported tool type | Support or filter Codex tool families for non-Codex providers |
+| Codex CLI through DeepSeek | custom local provider | Pass | None in Plan 098 smoke | Keep covered |
+| Codex CLI through OpenRouter | custom local provider | Partial | Old local tool-type blocker absent; latest safe metadata showed upstream/provider response failure for the tested model. | Investigate OpenRouter model/tool response behavior |
 | Model discovery | `GET /v1/models` | Partial | Primary Codex credential 401 can hide secondary credentials | Make primary credential health explicit |
 
 ## Endpoint Evidence
@@ -72,19 +75,28 @@ Latest direct probes:
 - direct local Responses calls passed for Codex, DeepSeek, and OpenRouter,
 - local model cache exposes Codex capability flags including `responses`,
   `tools`, `vision`, `reasoning`, and `service_tier`.
+- Plan 098 local fake-upstream smokes pass mixed Codex-style Responses tools
+  through DeepSeek/OpenRouter by forwarding only representable flat Chat
+  function tools.
+- Plan 098 live `codex exec` text smoke passed through DeepSeek. The OpenRouter
+  smoke no longer hit the local `tools[n].type is unsupported` or
+  `parallel_tool_calls` blocker, but exited nonzero with safe metadata showing
+  an upstream/provider response failure for the tested model.
 
 ## Interpretation
 
 Plans `092` through `095` added the local Responses entrypoint, tool transcript
-handling, image decoding, and Codex capability metadata. The remaining
-compatibility problem is now agent behavior, especially edit/tool loops and
-non-Codex provider handling for Codex tool families.
+handling, image decoding, and Codex capability metadata. Plan 098 removed the
+local blocker for non-Codex Codex CLI tool definitions by filtering
+non-chat-representable Responses tools and DeepSeek-unsupported
+`parallel_tool_calls`. The remaining compatibility problem is now agent
+behavior and provider-specific model/tool response behavior, especially
+workspace edit/tool loops.
 
 ## Next Plan Direction
 
 - Fix workspace edit/tool-loop behavior under real `codex exec`.
-- Support or explicitly filter Codex's unsupported tool families when routing
-  Codex CLI to DeepSeek and OpenRouter.
+- Investigate OpenRouter model/tool response behavior under real `codex exec`.
 - Keep the live privacy/log scan in every switch-gate smoke.
 - Treat quota and usage pooling as a separate policy plan from current
   availability fallback pooling.

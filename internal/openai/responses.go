@@ -432,9 +432,6 @@ func responsesToolsToChatTools(tools []json.RawMessage, providerType string) ([]
 			return nil, nil, fmt.Errorf("tools[%d].type is required", i)
 		}
 		if typ != "function" {
-			if providerType != "codex" {
-				return nil, nil, fmt.Errorf("tools[%d].type is unsupported", i)
-			}
 			continue
 		}
 		for key := range tool {
@@ -451,6 +448,18 @@ func responsesToolsToChatTools(tools []json.RawMessage, providerType string) ([]
 				return nil, nil, fmt.Errorf("tools[%d].defer_loading must be a boolean", i)
 			}
 			deferLoadingValue = value
+		}
+		if providerType != "codex" && deferLoadingValue {
+			continue
+		}
+		if strict, ok := tool["strict"]; ok {
+			value, ok := strict.(bool)
+			if !ok {
+				return nil, nil, fmt.Errorf("tools[%d].strict must be a boolean", i)
+			}
+			if providerType != "codex" && value {
+				continue
+			}
 		}
 		name, _ := tool["name"].(string)
 		if name == "" {
@@ -485,12 +494,11 @@ func responsesToolsToChatTools(tools []json.RawMessage, providerType string) ([]
 			if value {
 				return nil, nil, fmt.Errorf("tools[%d].strict is unsupported", i)
 			}
-			function["strict"] = value
+			if providerType == "codex" {
+				function["strict"] = value
+			}
 		}
 		if deferLoadingValue {
-			if providerType != "codex" {
-				return nil, nil, fmt.Errorf("tools[%d].defer_loading is unsupported", i)
-			}
 			continue
 		}
 		out = append(out, map[string]any{
@@ -560,7 +568,7 @@ func (r ResponsesRequest) ToChatCompletionRequest(providerType string) (ChatComp
 	if providerType == "codex" && len(codexTools) > 0 {
 		req.CodexResponsesTools = codexTools
 	}
-	if r.ParallelToolCalls != nil && providerType != "codex" {
+	if r.ParallelToolCalls != nil && providerType == "openrouter" {
 		req.ParallelToolCalls = r.ParallelToolCalls
 		req.PresentFields["parallel_tool_calls"] = true
 	}

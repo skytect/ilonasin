@@ -766,23 +766,29 @@ func parseChatGPTIDTokenClaims(jwt string) (chatGPTIDTokenClaims, error) {
 	if err != nil {
 		return chatGPTIDTokenClaims{}, ErrInvalidOAuthInput
 	}
+	// Mirrors OpenAI Codex rust-v0.135.0:
+	// codex-rs/login/src/token_data.rs parse_chatgpt_jwt_claims.
 	var claims struct {
-		Email       string `json:"email"`
-		ProfileMail string `json:"https://api.openai.com/profile.email"`
-		AccountID   string `json:"https://api.openai.com/auth.chatgpt_account_id"`
-		Plan        any    `json:"https://api.openai.com/auth.chatgpt_plan_type"`
+		Email   string `json:"email"`
+		Profile struct {
+			Email string `json:"email"`
+		} `json:"https://api.openai.com/profile"`
+		Auth struct {
+			AccountID string `json:"chatgpt_account_id"`
+			Plan      any    `json:"chatgpt_plan_type"`
+		} `json:"https://api.openai.com/auth"`
 	}
 	if err := json.Unmarshal(payload, &claims); err != nil {
 		return chatGPTIDTokenClaims{}, ErrInvalidOAuthInput
 	}
 	email := strings.TrimSpace(claims.Email)
 	if email == "" {
-		email = strings.TrimSpace(claims.ProfileMail)
+		email = strings.TrimSpace(claims.Profile.Email)
 	}
 	return chatGPTIDTokenClaims{
-		AccountID: strings.TrimSpace(claims.AccountID),
+		AccountID: strings.TrimSpace(claims.Auth.AccountID),
 		Email:     email,
-		PlanLabel: planLabelString(claims.Plan),
+		PlanLabel: planLabelString(claims.Auth.Plan),
 	}, nil
 }
 

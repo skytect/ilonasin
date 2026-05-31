@@ -342,11 +342,10 @@ func (f *oauthDeviceAuthServer) pollCount() int {
 func fakeIDToken(accountID, email, plan string) string {
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none"}`))
 	payload := map[string]any{
-		"email":                                email,
-		"https://api.openai.com/profile.email": email,
-		"https://api.openai.com/auth.chatgpt_account_id":   accountID,
-		"https://api.openai.com/auth.chatgpt_plan_type":    plan,
-		"https://api.openai.com/auth.chatgpt_account_note": "id-token-marker token_endpoint_body",
+		"email": email,
+		"https://api.openai.com/profile": map[string]any{
+			"email": email,
+		},
 		"https://api.openai.com/auth": map[string]any{
 			"chatgpt_account_id":   accountID,
 			"chatgpt_plan_type":    plan,

@@ -94,7 +94,7 @@ func (l HTTPOAuthDeviceLogin) RequestOAuthDeviceCode(ctx context.Context, req OA
 	if req.ProviderType != "codex" {
 		return OAuthDeviceCodeChallenge{}, OAuthDeviceLoginError{Class: "oauth_login_unavailable"}
 	}
-	endpoint, err := authEndpoint(req.AuthIssuer, "/api/accounts/deviceauth/usercode")
+	endpoint, err := codexAuthEndpoint(req.AuthIssuer, "/api/accounts/deviceauth/usercode")
 	if err != nil {
 		return OAuthDeviceCodeChallenge{}, OAuthDeviceLoginError{Class: "oauth_login_unavailable"}
 	}
@@ -132,7 +132,7 @@ func (l HTTPOAuthDeviceLogin) RequestOAuthDeviceCode(ctx context.Context, req OA
 	if deviceAuthID == "" || userCode == "" {
 		return OAuthDeviceCodeChallenge{}, l.oauthDeviceInvalidResponse(ctx, "oauth_device_code", req.ProviderInstanceID, req.ProviderType, len(respBody))
 	}
-	verificationURL, err := authEndpoint(req.AuthIssuer, "/codex/device")
+	verificationURL, err := codexAuthEndpoint(req.AuthIssuer, "/codex/device")
 	if err != nil {
 		return OAuthDeviceCodeChallenge{}, OAuthDeviceLoginError{Class: "oauth_login_unavailable"}
 	}
@@ -162,7 +162,7 @@ type authorizationCodeResult struct {
 }
 
 func (l HTTPOAuthDeviceLogin) pollAuthorizationCode(ctx context.Context, req OAuthDeviceLoginRequest) (authorizationCodeResult, error) {
-	endpoint, err := authEndpoint(req.AuthIssuer, "/api/accounts/deviceauth/token")
+	endpoint, err := codexAuthEndpoint(req.AuthIssuer, "/api/accounts/deviceauth/token")
 	if err != nil {
 		return authorizationCodeResult{}, OAuthDeviceLoginError{Class: "oauth_login_unavailable"}
 	}
@@ -356,21 +356,16 @@ func (l HTTPOAuthDeviceLogin) pollAuthorizationCode(ctx context.Context, req OAu
 }
 
 func (l HTTPOAuthDeviceLogin) exchangeAuthorizationCode(ctx context.Context, req OAuthDeviceLoginRequest, code authorizationCodeResult) (OAuthDeviceLoginResult, error) {
-	endpoint, err := authEndpoint(req.AuthIssuer, "/oauth/token")
+	endpoint, err := codexAuthEndpoint(req.AuthIssuer, "/oauth/token")
 	if err != nil {
 		return OAuthDeviceLoginResult{}, OAuthDeviceLoginError{Class: "oauth_login_unavailable"}
 	}
-	redirectURI, err := authEndpoint(req.AuthIssuer, "/deviceauth/callback")
+	redirectURI, err := codexAuthEndpoint(req.AuthIssuer, "/deviceauth/callback")
 	if err != nil {
 		return OAuthDeviceLoginResult{}, OAuthDeviceLoginError{Class: "oauth_login_unavailable"}
 	}
-	form := url.Values{}
-	form.Set("grant_type", "authorization_code")
-	form.Set("code", code.AuthorizationCode)
-	form.Set("redirect_uri", redirectURI)
-	form.Set("client_id", CodexOAuthClientID)
-	form.Set("code_verifier", code.CodeVerifier)
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
+	form := codexOAuthTokenExchangeBody(code.AuthorizationCode, redirectURI, code.CodeVerifier)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form))
 	if err != nil {
 		return OAuthDeviceLoginResult{}, OAuthDeviceLoginError{Class: "oauth_login_invalid_request"}
 	}
@@ -622,7 +617,10 @@ func safeOAuthLogValue(value string) string {
 	return value
 }
 
-func authEndpoint(issuer, path string) (string, error) {
+// Mirrors OpenAI Codex rust-v0.135.0:
+// codex-rs/login/src/device_code_auth.rs builds base_url with issuer.trim_end_matches('/')
+// and appends fixed device-auth paths.
+func codexAuthEndpoint(issuer, path string) (string, error) {
 	u, err := url.Parse(issuer)
 	if err != nil {
 		return "", err
@@ -630,10 +628,16 @@ func authEndpoint(issuer, path string) (string, error) {
 	if u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return "", fmt.Errorf("invalid auth issuer")
 	}
-	u.Path = path
-	u.RawQuery = ""
-	u.Fragment = ""
-	return u.String(), nil
+	return strings.TrimRight(issuer, "/") + path, nil
+}
+
+// Mirrors OpenAI Codex rust-v0.135.0:
+// codex-rs/login/src/server.rs exchange_code_for_tokens formats this body in this order.
+func codexOAuthTokenExchangeBody(code, redirectURI, codeVerifier string) string {
+	return "grant_type=authorization_code&code=" + url.QueryEscape(code) +
+		"&redirect_uri=" + url.QueryEscape(redirectURI) +
+		"&client_id=" + url.QueryEscape(CodexOAuthClientID) +
+		"&code_verifier=" + url.QueryEscape(codeVerifier)
 }
 
 func decodeStrictJSON(body []byte, out any) error {

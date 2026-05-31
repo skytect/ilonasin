@@ -199,6 +199,12 @@ func (s *Server) handleNonStreamingChat(w http.ResponseWriter, r *http.Request, 
 	exec := s.executeNonStreamingChat(r, nc)
 	final := exec.final
 	status, errorClass := nonStreamStatusAndError(final)
+	if final.err == nil && status >= 200 && status < 300 && len(final.result.ResponsesOutputItems) > 0 {
+		status = http.StatusBadGateway
+		errorClass = "upstream_invalid_response"
+		exec.final.result.StatusCode = status
+		exec.final.result.ErrorClass = errorClass
+	}
 	s.recordNonStreamingChat(r, nc, exec, status, errorClass)
 	if errorClass == "client_disconnected" {
 		return

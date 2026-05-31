@@ -2,25 +2,27 @@
 
 Date: 2026-06-01
 
-Audited worktree commit: `e5a4f96`
+Audited worktree: Plan 099 worktree
 
 Current implementation note: plans 092 through 095 changed the local Responses
 surface and Codex model metadata. Plan 096 reran real-credential switch-gate
 smokes against the current worktree binary. Plan 098 added provider-aware
-Responses tool filtering for non-Codex providers. Codex text, images, reasoning
-efforts, service tiers, developer instructions, direct function-call follow-up,
-direct Responses calls to all three configured provider types, and a real
-DeepSeek `codex exec` text smoke now pass. Normal workspace editing through
-`codex exec` still does not modify the target file. The tested OpenRouter
-`codex exec` route no longer fails on the local unsupported Codex tool type,
-but still failed at the provider-response layer.
+Responses tool filtering for non-Codex providers. Plan 099 added the Codex
+custom-tool relay needed by the tested `apply_patch` workspace-edit path. Codex
+text, images, reasoning efforts, service tiers, developer instructions, direct
+function-call follow-up, direct Responses calls to all three configured
+provider types, a real DeepSeek `codex exec` text smoke, and a real Codex
+workspace edit smoke now pass. The tested OpenRouter `codex exec` route no
+longer fails on the local unsupported Codex tool type, but still failed at the
+provider-response layer.
 
 Codex CLI version: `codex-cli 0.135.0`
 
 ## Summary
 
-`ilonasin serve` is not ready as the default backend for normal Codex coding
-agent use.
+`ilonasin serve` is closer to being usable as a Codex backend, but broad
+switching is still blocked by OpenRouter Codex CLI compatibility and unproven
+broader Codex tool-family parity.
 
 Text-only `codex exec` traffic reaches local Responses routes through both root
 and `/v1` provider base URLs with the real credentials configured in
@@ -31,13 +33,15 @@ service tiers exited 0 against the real Codex provider instance.
 Direct local Responses calls using real credentials also passed for Codex,
 DeepSeek, and OpenRouter. Plan 098 confirms the local Responses route now
 filters non-chat-representable Codex tool definitions for non-Codex providers.
-That is not the same as full Codex CLI agent compatibility for non-Codex
-providers: OpenRouter still needs provider/model behavior investigation, and
-workspace edits remain unproven.
+Plan 099 confirms the tested Codex `apply_patch` workspace edit path now works
+through local Responses custom-tool relay. That is not the same as full Codex
+CLI agent compatibility for non-Codex providers: OpenRouter still needs
+provider/model behavior investigation, and hosted, deferred, namespaced, MCP,
+shell, and tool-search families remain unproven.
 
-Do not switch normal Codex use to `ilonasin` yet. The remaining blocker is
-normal coding-agent behavior: `codex exec` exited 0 for a workspace edit task
-but left the target file unchanged.
+Do not switch normal Codex use to `ilonasin` yet unless the use is limited to
+the covered Codex provider paths. The remaining blockers are OpenRouter Codex
+CLI behavior and broader tool-family parity.
 
 ## Safety
 
@@ -64,6 +68,11 @@ IDs, and request IDs were not kept in this report. Probe captures were reduced
 to allowlisted structural fields and then removed. The plan 096 scan found zero
 sentinel hits in checked metadata tables, zero sentinel hits in server logs,
 zero forbidden log key hits, and zero secret-shaped log hits.
+
+The Plan 099 live workspace-edit smoke used the same privacy posture. It
+created and then disabled a fresh local client token, used temp logs/cache and
+temp Codex/workspace directories, and found zero smoke-marker hits in checked
+server logs and metadata fields.
 
 Because the live smoke intentionally used the real SQLite database in place, it
 left durable metadata-only audit rows behind: disabled local client token rows,
@@ -98,15 +107,15 @@ compatible coding-agent backend.
 | Model discovery | `GET /models`, `GET /v1/models` | Partial | With credential 1 temporarily disabled, live discovery returned Codex rows with `chat,parallel_tool_calls,reasoning,responses,service_tier,stream,tools,vision`. With credential 1 enabled, Codex discovery gets 401 from the primary credential. | Model metadata is now shaped correctly, but primary credential health can hide valid secondary accounts. | Make model discovery health and credential selection explicit before broad use. |
 | Developer/system instructions | Responses text route | Pass | Live `codex exec` with `developer_instructions` exited 0 and recorded a 200 row. | Basic developer instruction routing works. | Keep covered in smokes. |
 | Codex CLI through DeepSeek | `POST /v1/responses` | Pass | Plan 098 live `codex exec` against `pragnition-deepseek/deepseek-v4-flash` exited 0. Fake-upstream smoke also proved mixed Codex-style tool definitions are filtered to representable Chat function tools and `parallel_tool_calls` is not forwarded to DeepSeek. | Basic Codex CLI text routing through DeepSeek now works. | Keep covered in switch-gate smokes. |
-| Codex CLI through OpenRouter | `POST /v1/responses` | Partial | Plan 098 live `codex exec` against `pragnition-openrouter/anthropic/claude-3-haiku` exited nonzero, but the old local `tools[n].type is unsupported` blocker and DeepSeek-only `parallel_tool_calls` blocker were absent. Safe metadata showed upstream/provider response failure for the tested model. Fake-upstream smoke proved mixed tool filtering and OpenRouter `parallel_tool_calls` forwarding. | Local tool-family validation no longer blocks the route, but the tested OpenRouter model path is not ready. | Investigate OpenRouter provider/model tool response behavior. |
+| Codex CLI through OpenRouter | `POST /v1/responses` | Partial | Plan 098 live `codex exec` against `pragnition-openrouter/anthropic/claude-3-haiku` exited nonzero, but the old local `tools[n].type is unsupported` blocker and DeepSeek-only `parallel_tool_calls` blocker were absent. Safe metadata showed upstream/provider response failure for the tested model. Fake-upstream smokes prove mixed tool filtering, OpenRouter `parallel_tool_calls` forwarding, and local rejection of Codex custom-tool transcript items before upstream. | Local tool-family validation no longer blocks the route, but the tested OpenRouter model path is not ready. | Investigate OpenRouter provider/model tool response behavior. |
 | Direct Responses through all provider types | `POST /v1/responses` | Pass | Direct real-credential Responses calls returned 200 for Codex, DeepSeek, and OpenRouter. | Provider routing works outside Codex CLI's default tool set. | Keep as provider smoke coverage. |
 | Reasoning efforts | Codex CLI config | Pass | Live `minimal`, `low`, `medium`, `high`, and `xhigh` Codex CLI probes exited 0 and each recorded a 200 row. | Reasoning-effort mapping is no longer a switch blocker for the tested Codex model. | Keep covered in smokes. |
 | Fast or priority service tier | Codex CLI config | Pass | Live `service_tier="flex"` and `service_tier="priority"` Codex CLI probes exited 0 and recorded 200 rows. | Service-tier mapping is no longer a switch blocker for the tested Codex model. | Keep covered in smokes. |
 | Image via `--image` | Responses input | Pass | Live `codex exec --image` exited 0 and recorded 200 rows. | Basic multimodal Codex input works. | Keep covered in switch-gate smokes. |
 | Explicit Responses image input | `POST /v1/responses` | Pass | Plan 096 live image smoke and earlier direct decoder coverage both passed. | Basic explicit image support works. | Keep covered in switch-gate smokes. |
 | Tool definitions | Responses request | Fixed locally for current Chat-adapter routes | Direct recorder observed Codex sending tool definitions. Plan 094 preserved representable Codex function tools. Plan 098 filters non-chat-representable Responses tool families for DeepSeek/OpenRouter, skips deferred and strict-only tools for those providers, keeps duplicate checks among forwarded tools, and handles all-filtered tool sets without forwarding `tools` or `tool_choice`. | Function tools improved; hosted/deferred namespace/freeform parity remains limited. | Audit hosted/deferred tool families separately. |
-| Tool-call loop | Responses output and follow-up | Partial | Direct live function-call-output follow-up returned 200 with SSE bytes. Workspace edit still did not mutate the file. | Direct transcript support works, but full Codex agent tool-loop behavior is still not reliable. | Inspect Codex tool families and patch/apply flows from real `codex exec`. |
-| Workspace edit through Codex CLI | Local workspace | Fail | Live `codex exec` exited 0 and recorded 200 rows, but the target file was unchanged. | Blocking for normal coding-agent use. | Preserve enough Codex tool-loop behavior for file edits, or expose a clear unsupported state. |
+| Tool-call loop | Responses output and follow-up | Partial | Direct live function-call-output follow-up returned 200 with SSE bytes. Plan 099 fake smokes pass final-only and added-plus-delta `custom_tool_call` output, accept `custom_tool_call_output` follow-up for Codex, and reject custom-tool transcript items for DeepSeek/OpenRouter before upstream. | Function and tested custom apply-patch transcripts work; full Codex tool-family parity remains unproven. | Audit hosted, deferred, namespaced, MCP, shell, and tool-search families separately. |
+| Workspace edit through Codex CLI | Local workspace | Pass for tested Codex path | Plan 099 live `codex exec` exited 0, recorded 200 rows, and changed the target file in a temporary workspace. | The tested Codex provider apply-patch edit path is no longer a switch blocker. | Keep in switch-gate smokes; do not infer full tool parity. |
 | Function-call output input | `POST /v1/responses` | Pass | Direct live follow-up with a synthetic prior function call and function-call output returned 200. | The local route can carry function-call output back to the model. | Keep covered in switch-gate smokes. |
 | Direct Codex chat text | `POST /v1/chat/completions` | Pass | Live direct API probe returned 200 with assistant message content. | Existing direct chat path still works. | Keep covered in smokes. |
 | Direct Codex chat reasoning/service tier | `POST /v1/chat/completions` | Fail | Live direct API probe returned 502 `upstream_http_error`. | Relevant to Codex option compatibility. | Fix Codex provider option mapping. |
@@ -119,32 +128,28 @@ compatible coding-agent backend.
 
 ## Blockers
 
-1. Workspace edits through Codex CLI still do not work.
-
-   The live workspace edit probe exited 0 and recorded successful upstream rows,
-   but the target file was unchanged. This blocks normal coding-agent use.
-
-2. Full Codex tool parity is not proven.
+1. Full Codex tool parity is not proven.
 
    Function tool definitions, function-call SSE output, and
-   function-call-output follow-up input are now covered locally. Hosted,
-   deferred, namespaced, MCP, custom, tool-search, shell, and patch-style tool
-   families are still not full parity and need separate compatibility work.
+   function-call-output follow-up input are now covered locally. The tested
+   custom `apply_patch` path is also covered. Hosted, deferred, namespaced, MCP,
+   tool-search, shell, and other custom tool families are still not full parity
+   and need separate compatibility work.
 
-3. Codex CLI through OpenRouter is still partial.
+2. Codex CLI through OpenRouter is still partial.
 
    DeepSeek text now passes through real `codex exec`, and OpenRouter is no
    longer blocked by local tool-family validation. The tested OpenRouter model
    still failed at the provider-response layer, so OpenRouter is not ready for
    broad Codex CLI use.
 
-4. Primary Codex credential health can hide valid secondary accounts.
+3. Primary Codex credential health can hide valid secondary accounts.
 
    The real primary Codex OAuth credential returned 401 and had
    `refresh_unauthorized`. The smoke temporarily disabled it and restored it
    afterward to test the remaining real Codex credential set.
 
-5. Health semantics are upstream-centered.
+4. Health semantics are upstream-centered.
 
    The historical route-level `501` from a function-call output is fixed
    locally, but the larger reporting issue remains: future UI should
@@ -159,8 +164,10 @@ compatible coding-agent backend.
 - Plan 096: ran real switch-gate smokes and updated this audit.
 - Plan 097: write a quota and usage pooling policy plan. Quota pooling is
   separate from current availability fallback pooling.
-- Later compatibility work: fix Codex CLI workspace edit/tool-loop behavior and
-  OpenRouter provider/model tool response behavior.
+- Plan 099: relay Codex custom tool calls needed by the tested apply-patch
+  workspace edit path.
+- Later compatibility work: fix OpenRouter provider/model tool response
+  behavior and audit broader Codex tool families.
 
 ## Switch Gate
 

@@ -2461,6 +2461,7 @@ func (u *serveCheckUpstream) handleServeCheckCodexResponses(w http.ResponseWrite
 				ImageURL string `json:"image_url"`
 				Detail   string `json:"detail"`
 			} `json:"content"`
+			Input string `json:"input"`
 		} `json:"input"`
 		Tools             []any             `json:"tools"`
 		ToolChoice        string            `json:"tool_choice"`
@@ -2561,6 +2562,12 @@ func (u *serveCheckUpstream) handleServeCheckCodexResponses(w http.ResponseWrite
 			return
 		}
 	}
+	if body.Model == "codex-custom-tool-followup" {
+		if len(body.Input) != 3 || body.Input[1].Type != "custom_tool_call" || body.Input[1].CallID != customToolCallIDMarker || body.Input[1].Name != "apply_patch" || body.Input[1].Input != customToolInputMarker || body.Input[2].Type != "custom_tool_call_output" || body.Input[2].CallID != customToolCallIDMarker || body.Input[2].Output != customToolOutputMarker {
+			http.Error(w, "bad codex custom tool followup", http.StatusBadRequest)
+			return
+		}
+	}
 	if body.Model == "codex-pool-success" && auth == serveCheckCodexRoutedAccessToken {
 		http.Error(w, "raw codex pool 503 body", http.StatusServiceUnavailable)
 		return
@@ -2647,6 +2654,10 @@ func (u *serveCheckUpstream) handleServeCheckCodexResponses(w http.ResponseWrite
 		write(fmt.Sprintf("data: {\"type\":\"response.output_item.added\",\"item\":{\"id\":\"fc_stream\",\"type\":\"function_call\",\"call_id\":%q,\"name\":%q}}\n\n", toolCallIDMarker, toolNameMarker))
 		write(fmt.Sprintf("data: {\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"fc_stream\",\"delta\":%q}\n\n", `{"value":"`+toolArgumentMarker+`"}`))
 		write(`data: {"type":"response.completed","response":{"id":"raw-provider-response-id-marker","usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7}}}` + "\n\n")
+	case "codex-custom-tool-response":
+		writeCodexCustomToolCallSSE(w)
+	case "codex-custom-tool-response-delta":
+		writeCodexCustomToolCallDeltaSSE(w)
 	case "codex-stream-failed-after-start":
 		write(`data: {"type":"response.output_text.delta","delta":"partial leak"}` + "\n\n")
 		write(`data: {"type":"response.failed","response":{"error":{"message":"raw failed marker"}}}` + "\n\n")

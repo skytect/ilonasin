@@ -165,6 +165,7 @@ func responsesMessageResult(final chatAttempt) (openai.ChatCompletionMessageResu
 	if err != nil {
 		return openai.ChatCompletionMessageResult{}, http.StatusBadGateway, "upstream_invalid_response"
 	}
+	message.ResponsesOutputItems = final.result.ResponsesOutputItems
 	return message, status, errorClass
 }
 
@@ -206,7 +207,7 @@ func writeResponsesSSE(w http.ResponseWriter, r *http.Request, responseID string
 		return err
 	}
 	itemIndex := 0
-	if message.Content != "" || !message.HasToolCalls {
+	if message.Content != "" || (!message.HasToolCalls && len(message.ResponsesOutputItems) == 0) {
 		if err := writeResponseSSEEvent(r.Context(), w, flusher, "response.output_item.done", map[string]any{
 			"type": "response.output_item.done",
 			"item": map[string]any{
@@ -228,6 +229,15 @@ func writeResponsesSSE(w http.ResponseWriter, r *http.Request, responseID string
 		if err := writeResponseSSEEvent(r.Context(), w, flusher, "response.output_item.done", map[string]any{
 			"type": "response.output_item.done",
 			"item": item,
+		}); err != nil {
+			return err
+		}
+		itemIndex++
+	}
+	for _, item := range message.ResponsesOutputItems {
+		if err := writeResponseSSEEvent(r.Context(), w, flusher, "response.output_item.done", map[string]any{
+			"type": "response.output_item.done",
+			"item": responseCustomToolCallItem(responseID, itemIndex, item),
 		}); err != nil {
 			return err
 		}
@@ -261,6 +271,16 @@ func responseFunctionCallItem(responseID string, index int, call map[string]any)
 		"name":      name,
 		"arguments": arguments,
 	}, nil
+}
+
+func responseCustomToolCallItem(responseID string, index int, item openai.ResponsesOutputItem) map[string]any {
+	return map[string]any{
+		"id":      fmt.Sprintf("%s_item_%d", responseID, index),
+		"type":    "custom_tool_call",
+		"call_id": item.CallID,
+		"name":    item.Name,
+		"input":   item.Input,
+	}
 }
 
 func writeResponseSSEEvent(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, event string, payload map[string]any) error {

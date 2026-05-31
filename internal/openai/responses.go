@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 )
 
 type ResponsesRequest struct {
 	Model             string
 	Instructions      string
 	Input             []ResponseInputItem
+	RawInput          []json.RawMessage
 	Tools             []json.RawMessage
 	ToolChoice        string
 	ParallelToolCalls *bool
@@ -27,6 +29,7 @@ type ResponseInputItem struct {
 	CallID    string
 	Name      string
 	Arguments string
+	Input     string
 	Output    string
 }
 
@@ -63,6 +66,10 @@ func DecodeResponses(r io.Reader) (ResponsesRequest, error) {
 		if err != nil {
 			return ResponsesRequest{}, err
 		}
+	}
+	rawInput, err := rawResponsesInputItems(raw["input"])
+	if err != nil {
+		return ResponsesRequest{}, err
 	}
 	input, err := parseResponsesInput(raw["input"])
 	if err != nil {
@@ -105,6 +112,7 @@ func DecodeResponses(r io.Reader) (ResponsesRequest, error) {
 		Model:             model,
 		Instructions:      instructions,
 		Input:             input,
+		RawInput:          rawInput,
 		Tools:             tools,
 		ToolChoice:        toolChoice,
 		ParallelToolCalls: parallel,
@@ -188,6 +196,20 @@ func parseResponsesInput(raw json.RawMessage) ([]ResponseInputItem, error) {
 	return out, nil
 }
 
+func rawResponsesInputItems(raw json.RawMessage) ([]json.RawMessage, error) {
+	if len(bytes.TrimSpace(raw)) == 0 || isJSONNull(raw) {
+		return nil, errors.New("input is required")
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil, errors.New("input must be an array")
+	}
+	if len(items) == 0 {
+		return nil, errors.New("input must not be empty")
+	}
+	return items, nil
+}
+
 func parseResponsesInputItem(raw map[string]json.RawMessage, index int) (ResponseInputItem, error) {
 	typ, err := requiredRawString(raw["type"], fmt.Sprintf("input[%d].type", index))
 	if err != nil {
@@ -200,6 +222,10 @@ func parseResponsesInputItem(raw map[string]json.RawMessage, index int) (Respons
 		return parseResponsesFunctionCallItem(raw, index, typ)
 	case "function_call_output":
 		return parseResponsesFunctionCallOutputItem(raw, index, typ)
+	case "custom_tool_call":
+		return parseResponsesCustomToolCallItem(raw, index, typ)
+	case "custom_tool_call_output":
+		return parseResponsesCustomToolCallOutputItem(raw, index, typ)
 	default:
 		return ResponseInputItem{}, fmt.Errorf("input[%d].type is unsupported", index)
 	}
@@ -232,10 +258,13 @@ func parseResponsesMessageItem(raw map[string]json.RawMessage, index int, typ st
 func parseResponsesFunctionCallItem(raw map[string]json.RawMessage, index int, typ string) (ResponseInputItem, error) {
 	for key := range raw {
 		switch key {
-		case "type", "call_id", "name", "arguments":
+		case "id", "type", "call_id", "name", "arguments":
 		default:
 			return ResponseInputItem{}, fmt.Errorf("input[%d] contains unsupported fields", index)
 		}
+	}
+	if _, err := optionalRawString(raw["id"], fmt.Sprintf("input[%d].id", index)); err != nil {
+		return ResponseInputItem{}, err
 	}
 	callID, err := requiredRawString(raw["call_id"], fmt.Sprintf("input[%d].call_id", index))
 	if err != nil {
@@ -283,14 +312,84 @@ func parseResponsesFunctionCallOutputItem(raw map[string]json.RawMessage, index 
 	return ResponseInputItem{Type: typ, CallID: callID, Output: output}, nil
 }
 
+func parseResponsesCustomToolCallItem(raw map[string]json.RawMessage, index int, typ string) (ResponseInputItem, error) {
+	for key := range raw {
+		switch key {
+		case "id", "type", "call_id", "name", "input":
+		default:
+			return ResponseInputItem{}, fmt.Errorf("input[%d] contains unsupported fields", index)
+		}
+	}
+	if _, err := optionalRawString(raw["id"], fmt.Sprintf("input[%d].id", index)); err != nil {
+		return ResponseInputItem{}, err
+	}
+	callID, err := requiredRawString(raw["call_id"], fmt.Sprintf("input[%d].call_id", index))
+	if err != nil {
+		return ResponseInputItem{}, err
+	}
+	if callID == "" {
+		return ResponseInputItem{}, fmt.Errorf("input[%d].call_id is required", index)
+	}
+	name, err := requiredRawString(raw["name"], fmt.Sprintf("input[%d].name", index))
+	if err != nil {
+		return ResponseInputItem{}, err
+	}
+	if !isFunctionName(name) {
+		return ResponseInputItem{}, fmt.Errorf("input[%d].name is invalid", index)
+	}
+	input, err := requiredRawString(raw["input"], fmt.Sprintf("input[%d].input", index))
+	if err != nil {
+		return ResponseInputItem{}, err
+	}
+	return ResponseInputItem{Type: typ, CallID: callID, Name: name, Input: input}, nil
+}
+
+func parseResponsesCustomToolCallOutputItem(raw map[string]json.RawMessage, index int, typ string) (ResponseInputItem, error) {
+	for key := range raw {
+		switch key {
+		case "type", "call_id", "name", "output":
+		default:
+			return ResponseInputItem{}, fmt.Errorf("input[%d] contains unsupported fields", index)
+		}
+	}
+	callID, err := requiredRawString(raw["call_id"], fmt.Sprintf("input[%d].call_id", index))
+	if err != nil {
+		return ResponseInputItem{}, err
+	}
+	if callID == "" {
+		return ResponseInputItem{}, fmt.Errorf("input[%d].call_id is required", index)
+	}
+	if nameRaw, ok := raw["name"]; ok && !isJSONNull(nameRaw) {
+		name, err := requiredRawString(nameRaw, fmt.Sprintf("input[%d].name", index))
+		if err != nil {
+			return ResponseInputItem{}, err
+		}
+		if !isFunctionName(name) {
+			return ResponseInputItem{}, fmt.Errorf("input[%d].name is invalid", index)
+		}
+	}
+	if rawOutput, ok := raw["output"]; ok && len(bytes.TrimSpace(rawOutput)) > 0 && bytes.TrimSpace(rawOutput)[0] == '[' {
+		return ResponseInputItem{}, fmt.Errorf("input[%d].output structured content is unsupported", index)
+	}
+	output, err := requiredRawString(raw["output"], fmt.Sprintf("input[%d].output", index))
+	if err != nil {
+		return ResponseInputItem{}, err
+	}
+	return ResponseInputItem{Type: typ, CallID: callID, Output: output}, nil
+}
+
 func validateResponsesToolTranscript(items []ResponseInputItem) error {
-	calls := map[string]int{}
+	type callInfo struct {
+		index int
+		typ   string
+	}
+	calls := map[string]callInfo{}
 	outputs := map[string]int{}
 	pending := map[string]bool{}
 	acceptingOutputs := false
 	for i, item := range items {
 		switch item.Type {
-		case "function_call":
+		case "function_call", "custom_tool_call":
 			if acceptingOutputs && len(pending) != 0 {
 				return fmt.Errorf("input[%d].type cannot appear before all function_call_output items", i)
 			}
@@ -300,14 +399,18 @@ func validateResponsesToolTranscript(items []ResponseInputItem) error {
 			if _, exists := calls[item.CallID]; exists {
 				return fmt.Errorf("input[%d].call_id is duplicated", i)
 			}
-			calls[item.CallID] = i
+			calls[item.CallID] = callInfo{index: i, typ: item.Type}
 			pending[item.CallID] = true
-		case "function_call_output":
+		case "function_call_output", "custom_tool_call_output":
 			if _, exists := outputs[item.CallID]; exists {
 				return fmt.Errorf("input[%d].call_id output is duplicated", i)
 			}
-			if _, exists := calls[item.CallID]; !exists {
+			call, exists := calls[item.CallID]
+			if !exists {
 				return fmt.Errorf("input[%d].call_id does not match a prior function_call", i)
+			}
+			if (item.Type == "function_call_output") != (call.typ == "function_call") {
+				return fmt.Errorf("input[%d].call_id output type does not match prior call", i)
 			}
 			if _, exists := pending[item.CallID]; !exists {
 				return fmt.Errorf("input[%d].call_id output is out of order", i)
@@ -321,9 +424,9 @@ func validateResponsesToolTranscript(items []ResponseInputItem) error {
 			}
 		}
 	}
-	for callID, i := range calls {
+	for callID, call := range calls {
 		if _, exists := outputs[callID]; !exists {
-			return fmt.Errorf("input[%d].call_id is missing function_call_output", i)
+			return fmt.Errorf("input[%d].call_id is missing function_call_output", call.index)
 		}
 	}
 	return nil
@@ -545,15 +648,41 @@ func validateResponsesInclude(raw json.RawMessage, hasReasoning bool) error {
 }
 
 func (r ResponsesRequest) ToChatCompletionRequest(providerType string) (ChatCompletionRequest, error) {
-	messages, err := responsesInputToChatMessages(r.Instructions, r.Input)
-	if err != nil {
-		return ChatCompletionRequest{}, err
+	var messages []Message
+	var err error
+	if providerType == "codex" {
+		for _, item := range r.Input {
+			switch item.Type {
+			case "message", "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output":
+			default:
+				return ChatCompletionRequest{}, errors.New("input contains unsupported Codex Responses item")
+			}
+		}
+		messages, err = nil, nil
+	} else {
+		messages, err = responsesInputToChatMessages(r.Instructions, r.Input)
+		if err != nil {
+			return ChatCompletionRequest{}, err
+		}
+	}
+	codexInstructions := r.Instructions
+	codexInput := []json.RawMessage(nil)
+	if providerType == "codex" {
+		codexInput, codexInstructions, err = codexResponsesInputAndInstructions(r.RawInput, r.Input, r.Instructions)
+		if err != nil {
+			return ChatCompletionRequest{}, err
+		}
 	}
 	req := ChatCompletionRequest{
-		Model:         r.Model,
-		Messages:      messages,
-		Stream:        false,
-		PresentFields: map[string]bool{"model": true, "messages": true},
+		Model:               r.Model,
+		Messages:            messages,
+		Stream:              false,
+		PresentFields:       map[string]bool{"model": true, "messages": true},
+		CodexInstructions:   codexInstructions,
+		CodexResponsesInput: nil,
+	}
+	if providerType == "codex" {
+		req.CodexResponsesInput = codexInput
 	}
 	tools, codexTools, err := responsesToolsToChatTools(r.Tools, providerType)
 	if err != nil {
@@ -594,6 +723,28 @@ func (r ResponsesRequest) ToChatCompletionRequest(providerType string) (ChatComp
 		req.PresentFields["provider_options"] = true
 	}
 	return req, nil
+}
+
+func codexResponsesInputAndInstructions(raw []json.RawMessage, input []ResponseInputItem, instructions string) ([]json.RawMessage, string, error) {
+	if len(raw) != len(input) {
+		return nil, "", errors.New("input is invalid")
+	}
+	out := make([]json.RawMessage, 0, len(raw))
+	instructionParts := []string{}
+	if instructions != "" {
+		instructionParts = append(instructionParts, instructions)
+	}
+	for i, item := range input {
+		if item.Type == "message" && (item.Role == "system" || item.Role == "developer") {
+			text := responsesContentText(item.Content)
+			if text != "" {
+				instructionParts = append(instructionParts, text)
+			}
+			continue
+		}
+		out = append(out, raw[i])
+	}
+	return out, strings.Join(instructionParts, "\n\n"), nil
 }
 
 func responsesInputToChatMessages(instructions string, input []ResponseInputItem) ([]Message, error) {

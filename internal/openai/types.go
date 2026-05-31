@@ -45,7 +45,9 @@ type ChatCompletionRequest struct {
 	LogitBias           map[string]json.Number `json:"logit_bias,omitempty"`
 	ReasoningOptions    map[string]any         `json:"provider_options,omitempty"`
 	PresentFields       map[string]bool        `json:"-"`
+	CodexResponsesInput []json.RawMessage      `json:"-"`
 	CodexResponsesTools []json.RawMessage      `json:"-"`
+	CodexInstructions   string                 `json:"-"`
 }
 
 type Message struct {
@@ -150,7 +152,7 @@ func (r ChatCompletionRequest) Validate() error {
 	if r.Model == "" {
 		return errors.New("model is required")
 	}
-	if len(r.Messages) == 0 {
+	if len(r.Messages) == 0 && len(r.CodexResponsesInput) == 0 {
 		return errors.New("messages is required")
 	}
 	if r.HasField("max_tokens") && r.MaxTokens == nil {
@@ -244,9 +246,17 @@ type ChatCompletionMetadata struct {
 
 type ChatCompletionMessageResult struct {
 	ChatCompletionMetadata
-	Content      string
-	HasToolCalls bool
-	ToolCalls    []map[string]any
+	Content              string
+	HasToolCalls         bool
+	ToolCalls            []map[string]any
+	ResponsesOutputItems []ResponsesOutputItem
+}
+
+type ResponsesOutputItem struct {
+	Type   string
+	CallID string
+	Name   string
+	Input  string
 }
 
 func MessageContentString(msg Message) (string, error) {

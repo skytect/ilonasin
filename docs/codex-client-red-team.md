@@ -19,7 +19,7 @@ tool-family list, not Chat Completions.
 
 The current blockers are narrower:
 
-- `codex exec` workspace edit exited 0 but left the target file unchanged.
+- `codex exec` workspace edit now passes for the tested Codex apply-patch path.
 - `codex exec` routed to DeepSeek now passes a text smoke through ilonasin.
 - `codex exec` routed to OpenRouter no longer fails with the local unsupported
   tool-type blocker, but the tested OpenRouter model still failed at the
@@ -39,6 +39,8 @@ The current blockers are narrower:
 - Auth is attached when using the env-key path.
 - Text, reasoning-effort, service-tier, developer-instruction, and image probes
   reach the local Responses endpoint and pass for the Codex provider.
+- A real `codex exec` workspace-edit smoke reached local Responses, relayed a
+  Codex custom `apply_patch` tool turn, and modified the temporary file.
 - Direct Responses probes pass for all three configured provider types.
 - `--image <FILE>...` consumes following positional arguments unless the prompt
   is separated with `--`.
@@ -54,7 +56,7 @@ The current blockers are narrower:
 | Image prompt | custom local provider | Pass for Codex | None in latest smoke | Keep covered |
 | Reasoning effort | custom local provider | Pass for `minimal`, `low`, `medium`, `high`, `xhigh` | None in latest smoke | Keep covered |
 | Fast or priority tier | custom local provider | Pass for `flex` and `priority` | None in latest smoke | Keep covered |
-| Workspace edit | custom local provider | Fails behaviorally | File unchanged after exit 0 | Fix Codex tool-loop/edit behavior |
+| Workspace edit | custom local provider | Pass for tested Codex apply-patch path | None in latest smoke | Keep covered; broader tool parity remains separate |
 | Codex CLI through DeepSeek | custom local provider | Pass | None in Plan 098 smoke | Keep covered |
 | Codex CLI through OpenRouter | custom local provider | Partial | Old local tool-type blocker absent; latest safe metadata showed upstream/provider response failure for the tested model. | Investigate OpenRouter model/tool response behavior |
 | Model discovery | `GET /v1/models` | Partial | Primary Codex credential 401 can hide secondary credentials | Make primary credential health explicit |
@@ -75,6 +77,13 @@ Latest direct probes:
 - direct local Responses calls passed for Codex, DeepSeek, and OpenRouter,
 - local model cache exposes Codex capability flags including `responses`,
   `tools`, `vision`, `reasoning`, and `service_tier`.
+- Plan 099 fake-upstream smokes pass Codex `custom_tool_call` output through
+  local Responses SSE, accept `custom_tool_call_output` follow-up for Codex,
+  reject custom tool transcripts for DeepSeek and OpenRouter before upstream,
+  and keep custom tool sentinels out of checked logs and metadata.
+- Plan 099 live `codex exec` workspace-edit smoke exited 0, modified the
+  temporary workspace file, disabled its fresh local token, and found zero
+  sentinel hits in checked logs and metadata fields.
 - Plan 098 local fake-upstream smokes pass mixed Codex-style Responses tools
   through DeepSeek/OpenRouter by forwarding only representable flat Chat
   function tools.
@@ -89,14 +98,16 @@ Plans `092` through `095` added the local Responses entrypoint, tool transcript
 handling, image decoding, and Codex capability metadata. Plan 098 removed the
 local blocker for non-Codex Codex CLI tool definitions by filtering
 non-chat-representable Responses tools and DeepSeek-unsupported
-`parallel_tool_calls`. The remaining compatibility problem is now agent
-behavior and provider-specific model/tool response behavior, especially
-workspace edit/tool loops.
+`parallel_tool_calls`. Plan 099 relays the Codex custom-tool subset used by the
+tested `apply_patch` workspace edit. Remaining compatibility work is now
+provider-specific model/tool response behavior and broader Codex hosted,
+deferred, namespaced, MCP, shell, and tool-search parity.
 
 ## Next Plan Direction
 
-- Fix workspace edit/tool-loop behavior under real `codex exec`.
 - Investigate OpenRouter model/tool response behavior under real `codex exec`.
+- Audit broader Codex tool families beyond the tested custom `apply_patch`
+  path.
 - Keep the live privacy/log scan in every switch-gate smoke.
 - Treat quota and usage pooling as a separate policy plan from current
   availability fallback pooling.

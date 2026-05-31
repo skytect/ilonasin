@@ -264,6 +264,9 @@ func ServeCheck(opts Options) error {
 	if err := exerciseLocalResponsesProviderToolCheck(context.Background(), rt.Config, base, created2.Token, fakeUpstream, checkStore); err != nil {
 		return fmt.Errorf("local responses provider tools check: %w", err)
 	}
+	if err := exerciseLocalResponsesCustomToolCheck(context.Background(), rt.Config, base, created2.Token, fakeUpstream, checkStore); err != nil {
+		return fmt.Errorf("local responses custom tool check: %w", err)
+	}
 	if len(instances) > 0 {
 		if err := exerciseModelDiscoveryCheck(context.Background(), base, created2.Token, instances, fakeUpstream, checkStore, upstreamService); err != nil {
 			return fmt.Errorf("model discovery check: %w", err)

@@ -87,16 +87,17 @@ type ChatCredential struct {
 }
 
 type ChatResult struct {
-	StatusCode    int
-	ContentType   string
-	Body          []byte
-	Usage         openai.Usage
-	ResolvedModel string
-	ErrorClass    string
-	Latency       time.Duration
-	RetryAfter    *time.Time
-	InvalidBody   bool
-	BodyTruncated bool
+	StatusCode           int
+	ContentType          string
+	Body                 []byte
+	Usage                openai.Usage
+	ResolvedModel        string
+	ErrorClass           string
+	ResponsesOutputItems []openai.ResponsesOutputItem
+	Latency              time.Duration
+	RetryAfter           *time.Time
+	InvalidBody          bool
+	BodyTruncated        bool
 }
 
 type ChatStreamSink interface {

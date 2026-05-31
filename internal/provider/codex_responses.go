@@ -175,30 +175,31 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 		slog.Int64("duration_ms", durationMS(start)),
 	)
 	return ChatResult{
-		StatusCode:    http.StatusOK,
-		ContentType:   "application/json",
-		Body:          out,
-		Usage:         parsed.Usage,
-		ResolvedModel: req.UpstreamModel,
-		Latency:       time.Since(start),
+		StatusCode:           http.StatusOK,
+		ContentType:          "application/json",
+		Body:                 out,
+		Usage:                parsed.Usage,
+		ResolvedModel:        req.UpstreamModel,
+		ResponsesOutputItems: parsed.OutputItems,
+		Latency:              time.Since(start),
 	}, nil
 }
 
 type codexResponsesRequest struct {
-	Model             string              `json:"model"`
-	Instructions      string              `json:"instructions,omitempty"`
-	Input             []codexResponseItem `json:"input"`
-	Tools             any                 `json:"tools"`
-	ToolChoice        string              `json:"tool_choice"`
-	ParallelToolCalls bool                `json:"parallel_tool_calls"`
-	Reasoning         *codexReasoning     `json:"reasoning,omitempty"`
-	Store             bool                `json:"store"`
-	Stream            bool                `json:"stream"`
-	Include           []string            `json:"include"`
-	ServiceTier       string              `json:"service_tier,omitempty"`
-	Text              *codexTextControls  `json:"text,omitempty"`
-	PromptCacheKey    string              `json:"prompt_cache_key,omitempty"`
-	ClientMetadata    map[string]string   `json:"client_metadata,omitempty"`
+	Model             string             `json:"model"`
+	Instructions      string             `json:"instructions,omitempty"`
+	Input             any                `json:"input"`
+	Tools             any                `json:"tools"`
+	ToolChoice        string             `json:"tool_choice"`
+	ParallelToolCalls bool               `json:"parallel_tool_calls"`
+	Reasoning         *codexReasoning    `json:"reasoning,omitempty"`
+	Store             bool               `json:"store"`
+	Stream            bool               `json:"stream"`
+	Include           []string           `json:"include"`
+	ServiceTier       string             `json:"service_tier,omitempty"`
+	Text              *codexTextControls `json:"text,omitempty"`
+	PromptCacheKey    string             `json:"prompt_cache_key,omitempty"`
+	ClientMetadata    map[string]string  `json:"client_metadata,omitempty"`
 }
 
 type codexResponsesModel struct {
@@ -276,7 +277,17 @@ func marshalCodexResponsesRequest(req openai.ChatCompletionRequest, upstreamMode
 		out.Text = textControls
 		out.ServiceTier = serviceTier
 	}
+	if len(req.CodexResponsesInput) > 0 {
+		out.Input = req.CodexResponsesInput
+		if req.CodexInstructions != "" {
+			out.Instructions = req.CodexInstructions
+		} else {
+			out.Instructions = model.BaseInstructions
+		}
+		return json.Marshal(out)
+	}
 	var instructions []string
+	inputItems := []codexResponseItem{}
 	for _, msg := range req.Messages {
 		switch msg.Role {
 		case "system":
@@ -290,7 +301,7 @@ func marshalCodexResponsesRequest(req openai.ChatCompletionRequest, upstreamMode
 			if err != nil {
 				return nil, err
 			}
-			out.Input = append(out.Input, codexResponseItem{
+			inputItems = append(inputItems, codexResponseItem{
 				Type:    "message",
 				Role:    "user",
 				Content: codexUserContent(parts),
@@ -301,7 +312,7 @@ func marshalCodexResponsesRequest(req openai.ChatCompletionRequest, upstreamMode
 				if err != nil {
 					return nil, err
 				}
-				out.Input = append(out.Input, codexResponseItem{
+				inputItems = append(inputItems, codexResponseItem{
 					Type:    "message",
 					Role:    "assistant",
 					Content: []codexContentItem{{Type: "output_text", Text: text}},
@@ -311,13 +322,13 @@ func marshalCodexResponsesRequest(req openai.ChatCompletionRequest, upstreamMode
 			if err != nil {
 				return nil, err
 			}
-			out.Input = append(out.Input, items...)
+			inputItems = append(inputItems, items...)
 		case "tool":
 			text, err := openai.MessageContentString(msg)
 			if err != nil {
 				return nil, err
 			}
-			out.Input = append(out.Input, codexResponseItem{
+			inputItems = append(inputItems, codexResponseItem{
 				Type:   "function_call_output",
 				CallID: msg.ToolCallID,
 				Output: text,
@@ -331,6 +342,7 @@ func marshalCodexResponsesRequest(req openai.ChatCompletionRequest, upstreamMode
 	} else {
 		out.Instructions = model.BaseInstructions
 	}
+	out.Input = inputItems
 	return json.Marshal(out)
 }
 
@@ -560,10 +572,11 @@ func (model codexResponsesModel) reasoningEffort(requested string) string {
 }
 
 type codexResponsesResult struct {
-	Text       string
-	ToolCalls  []map[string]any
-	Usage      openai.Usage
-	ErrorClass string
+	Text        string
+	ToolCalls   []map[string]any
+	OutputItems []openai.ResponsesOutputItem
+	Usage       openai.Usage
+	ErrorClass  string
 }
 
 type codexResponseParseState struct {
@@ -574,6 +587,7 @@ type codexResponseParseState struct {
 	sawTextDoneText bool
 	toolCalls       []map[string]any
 	toolState       codexResponseToolState
+	customToolState codexResponseCustomToolState
 	usage           openai.Usage
 	completed       bool
 }
@@ -588,6 +602,19 @@ type codexResponseToolCall struct {
 	CallID    string
 	Name      string
 	Arguments strings.Builder
+}
+
+type codexResponseCustomToolState struct {
+	order   []string
+	calls   map[string]*codexResponseCustomToolCall
+	aliases map[string]string
+	emitted map[string]bool
+}
+
+type codexResponseCustomToolCall struct {
+	CallID string
+	Name   string
+	Input  strings.Builder
 }
 
 func (a HTTPChatAdapter) readCodexResponses(ctx context.Context, body io.ReadCloser) (codexResponsesResult, error) {
@@ -656,9 +683,10 @@ func (a HTTPChatAdapter) readCodexResponses(ctx context.Context, body io.ReadClo
 
 func (state *codexResponseParseState) codexResponsesResult() codexResponsesResult {
 	return codexResponsesResult{
-		Text:      codexFinalText(state.itemDoneText, state.textDoneText, state.deltaText, state.sawItemDoneText, state.sawTextDoneText),
-		ToolCalls: state.toolCalls,
-		Usage:     state.usage,
+		Text:        codexFinalText(state.itemDoneText, state.textDoneText, state.deltaText, state.sawItemDoneText, state.sawTextDoneText),
+		ToolCalls:   state.toolCalls,
+		OutputItems: state.customToolItems(),
+		Usage:       state.usage,
 	}
 }
 
@@ -666,6 +694,9 @@ func (state *codexResponseParseState) aggregateBytes() int {
 	total := state.itemDoneText.Len() + state.textDoneText.Len() + state.deltaText.Len()
 	for _, call := range state.toolState.calls {
 		total += call.Arguments.Len()
+	}
+	for _, call := range state.customToolState.calls {
+		total += call.Input.Len()
 	}
 	return total
 }
@@ -705,6 +736,7 @@ func handleCodexEvent(data []byte, state *codexResponseParseState) error {
 			Name      string `json:"name"`
 			Namespace string `json:"namespace"`
 			Arguments string `json:"arguments"`
+			Input     string `json:"input"`
 			Content   []struct {
 				Type string `json:"type"`
 				Text string `json:"text"`
@@ -732,7 +764,7 @@ func handleCodexEvent(data []byte, state *codexResponseParseState) error {
 	if err := json.Unmarshal(data, &event); err != nil {
 		return err
 	}
-	if codexToolEvent(event.Type) || (event.Item != nil && codexToolEvent(event.Item.Type)) {
+	if unsupportedCodexToolEvent(event.Type) || (event.Item != nil && unsupportedCodexOutputItem(event.Item.Type)) {
 		return codexEventFailure{class: "upstream_invalid_response"}
 	}
 	switch event.Type {
@@ -743,6 +775,8 @@ func handleCodexEvent(data []byte, state *codexResponseParseState) error {
 		switch event.Item.Type {
 		case "function_call":
 			return state.addCodexFunctionCall(codexToolCallKey(event.Item.ID, event.Item.CallID), event.Item.CallID, event.Item.Name, event.Item.Namespace, "")
+		case "custom_tool_call":
+			return state.addCodexCustomToolCall(event.Item.ID, event.Item.CallID, event.Item.Name, event.Item.Input)
 		case "message", "reasoning":
 			return nil
 		default:
@@ -752,6 +786,8 @@ func handleCodexEvent(data []byte, state *codexResponseParseState) error {
 		return state.appendCodexFunctionCallArguments(codexToolCallKey(event.ItemID, event.CallID), event.Delta)
 	case "response.function_call_arguments.done":
 		return state.finishCodexFunctionCallArguments(codexToolCallKey(event.ItemID, event.CallID), event.Arguments)
+	case "response.custom_tool_call_input.delta":
+		return state.appendCodexCustomToolInput(event.ItemID, event.CallID, event.Delta)
 	case "response.output_item.done":
 		if event.Item == nil {
 			return codexEventFailure{class: "upstream_invalid_response"}
@@ -762,6 +798,8 @@ func handleCodexEvent(data []byte, state *codexResponseParseState) error {
 				return err
 			}
 			return state.emitCodexFunctionCall(codexToolCallKey(event.Item.ID, event.Item.CallID))
+		case "custom_tool_call":
+			return state.finishCodexCustomToolCall(event.Item.ID, event.Item.CallID, event.Item.Name, event.Item.Input)
 		case "message":
 			if event.Item.Role == "assistant" {
 				state.sawItemDoneText = true
@@ -904,6 +942,141 @@ func (state *codexResponseParseState) flushCodexFunctionCalls() error {
 		}
 	}
 	return nil
+}
+
+func (state *codexResponseParseState) addCodexCustomToolCall(itemID, callID, name, input string) error {
+	if callID == "" || name == "" {
+		return codexEventFailure{class: "upstream_invalid_response"}
+	}
+	if state.customToolState.calls == nil {
+		state.customToolState.calls = map[string]*codexResponseCustomToolCall{}
+		state.customToolState.aliases = map[string]string{}
+		state.customToolState.emitted = map[string]bool{}
+	}
+	key := callID
+	if itemID != "" {
+		if alias := state.customToolState.aliases[itemID]; alias != "" {
+			key = alias
+		} else if state.customToolState.calls[itemID] != nil {
+			key = itemID
+		}
+	}
+	if key == "" {
+		key = itemID
+	}
+	call := state.customToolState.calls[key]
+	if call == nil {
+		call = &codexResponseCustomToolCall{CallID: callID, Name: name}
+		state.customToolState.calls[key] = call
+		state.customToolState.order = append(state.customToolState.order, key)
+	} else {
+		if call.CallID == "" {
+			call.CallID = callID
+		} else if call.CallID != callID {
+			return codexEventFailure{class: "upstream_invalid_response"}
+		}
+		if call.Name == "" {
+			call.Name = name
+		} else if call.Name != name {
+			return codexEventFailure{class: "upstream_invalid_response"}
+		}
+	}
+	if itemID != "" {
+		state.customToolState.aliases[itemID] = key
+	}
+	if input != "" {
+		written := call.Input.String()
+		switch {
+		case written == "":
+			call.Input.WriteString(input)
+		case written == input:
+		case strings.HasPrefix(input, written):
+			call.Input.WriteString(input[len(written):])
+		default:
+			return codexEventFailure{class: "upstream_invalid_response"}
+		}
+	}
+	return nil
+}
+
+func (state *codexResponseParseState) appendCodexCustomToolInput(itemID, callID, delta string) error {
+	if delta == "" {
+		return nil
+	}
+	key := callID
+	if key == "" && state.customToolState.aliases != nil {
+		key = state.customToolState.aliases[itemID]
+	}
+	if key == "" {
+		key = itemID
+	}
+	if key == "" {
+		return codexEventFailure{class: "upstream_invalid_response"}
+	}
+	call := state.customToolState.calls[key]
+	if call == nil {
+		if callID == "" {
+			return codexEventFailure{class: "upstream_invalid_response"}
+		}
+		if state.customToolState.calls == nil {
+			state.customToolState.calls = map[string]*codexResponseCustomToolCall{}
+			state.customToolState.aliases = map[string]string{}
+			state.customToolState.emitted = map[string]bool{}
+		}
+		call = &codexResponseCustomToolCall{CallID: callID}
+		state.customToolState.calls[key] = call
+		state.customToolState.order = append(state.customToolState.order, key)
+		if itemID != "" {
+			state.customToolState.aliases[itemID] = key
+		}
+	}
+	call.Input.WriteString(delta)
+	return nil
+}
+
+func (state *codexResponseParseState) finishCodexCustomToolCall(itemID, callID, name, input string) error {
+	if err := state.addCodexCustomToolCall(itemID, callID, name, input); err != nil {
+		return err
+	}
+	key := callID
+	if itemID != "" && state.customToolState.aliases != nil {
+		if alias := state.customToolState.aliases[itemID]; alias != "" {
+			key = alias
+		} else if state.customToolState.calls[itemID] != nil {
+			key = itemID
+		}
+	}
+	if key == "" {
+		return codexEventFailure{class: "upstream_invalid_response"}
+	}
+	if state.customToolState.emitted[key] {
+		return fmt.Errorf("duplicate codex custom_tool_call")
+	}
+	state.customToolState.emitted[key] = true
+	return nil
+}
+
+func (state *codexResponseParseState) customToolItems() []openai.ResponsesOutputItem {
+	if len(state.customToolState.order) == 0 {
+		return nil
+	}
+	out := make([]openai.ResponsesOutputItem, 0, len(state.customToolState.order))
+	for _, key := range state.customToolState.order {
+		if !state.customToolState.emitted[key] {
+			continue
+		}
+		call := state.customToolState.calls[key]
+		if call == nil || call.CallID == "" || call.Name == "" {
+			continue
+		}
+		out = append(out, openai.ResponsesOutputItem{
+			Type:   "custom_tool_call",
+			CallID: call.CallID,
+			Name:   call.Name,
+			Input:  call.Input.String(),
+		})
+	}
+	return out
 }
 
 func codexFinalText(itemDoneText, textDoneText, deltaText strings.Builder, sawItemDoneText, sawTextDoneText bool) string {
@@ -1483,6 +1656,22 @@ func codexToolEvent(typ string) bool {
 		strings.Contains(typ, "computer_call") ||
 		strings.Contains(typ, "mcp_call") ||
 		strings.Contains(typ, "local_shell")
+}
+
+func unsupportedCodexToolEvent(typ string) bool {
+	typ = strings.ToLower(typ)
+	if typ == "response.custom_tool_call_input.delta" {
+		return false
+	}
+	return codexToolEvent(typ)
+}
+
+func unsupportedCodexOutputItem(typ string) bool {
+	typ = strings.ToLower(typ)
+	if typ == "custom_tool_call" {
+		return false
+	}
+	return codexToolEvent(typ)
 }
 
 func writeCodexRoleChunk(ctx context.Context, sink ChatStreamSink, summary *ChatStreamSummary, state *codexStreamState) error {

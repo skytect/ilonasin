@@ -187,9 +187,13 @@ func (r ChatCompletionRequest) Validate() error {
 	}
 	for i, msg := range r.Messages {
 		switch msg.Role {
-		case "system", "user":
+		case "system":
 			if !isJSONString(msg.Content) {
 				return fmt.Errorf("messages[%d].content must be a JSON string", i)
+			}
+		case "user":
+			if err := validateRawUserContent(msg.Content, i); err != nil {
+				return err
 			}
 		case "assistant":
 			if len(msg.ToolCalls) == 0 && !isJSONString(msg.Content) {
@@ -284,6 +288,61 @@ func MarshalChatCompletionResponse(id, model, content string, usage Usage) ([]by
 		}
 	}
 	return json.Marshal(body)
+}
+
+func MarshalChatCompletionToolCallsResponse(id, model string, toolCalls []map[string]any, usage Usage) ([]byte, error) {
+	return MarshalChatCompletionToolCallsContentResponse(id, model, "", toolCalls, usage)
+}
+
+func MarshalChatCompletionToolCallsContentResponse(id, model, content string, toolCalls []map[string]any, usage Usage) ([]byte, error) {
+	var messageContent any
+	if content != "" {
+		messageContent = content
+	}
+	body := map[string]any{
+		"id":      id,
+		"object":  "chat.completion",
+		"created": 0,
+		"model":   model,
+		"choices": []any{
+			map[string]any{
+				"index": 0,
+				"message": map[string]any{
+					"role":       "assistant",
+					"content":    messageContent,
+					"tool_calls": toolCalls,
+				},
+				"finish_reason": "tool_calls",
+			},
+		},
+		"usage": usageMap(usage),
+	}
+	return json.Marshal(body)
+}
+
+func usageMap(usage Usage) map[string]any {
+	body := map[string]any{
+		"prompt_tokens":     usage.PromptTokens,
+		"completion_tokens": usage.CompletionTokens,
+		"total_tokens":      usage.TotalTokens,
+	}
+	if usage.CachedTokens != 0 {
+		promptDetails := map[string]any{"cached_tokens": usage.CachedTokens}
+		if usage.CacheWriteTokens != 0 {
+			promptDetails["cache_write_tokens"] = usage.CacheWriteTokens
+		}
+		body["prompt_tokens_details"] = promptDetails
+	} else if usage.CacheWriteTokens != 0 {
+		body["prompt_tokens_details"] = map[string]any{
+			"cache_write_tokens": usage.CacheWriteTokens,
+		}
+	}
+	if usage.ReasoningTokens != 0 {
+		body["completion_tokens_details"] = map[string]any{
+			"reasoning_tokens": usage.ReasoningTokens,
+		}
+	}
+	return body
 }
 
 func MarshalUpstreamChatRequest(req ChatCompletionRequest, upstreamModel string) ([]byte, error) {
@@ -1368,9 +1427,17 @@ func validateRawMessages(raw json.RawMessage) error {
 			}
 		}
 		switch role {
-		case "system", "user":
+		case "system":
 			if rawContent, ok := msg["content"]; !ok || !isJSONString(rawContent) {
 				return fmt.Errorf("messages[%d].content must be a JSON string", i)
+			}
+		case "user":
+			rawContent, ok := msg["content"]
+			if !ok {
+				return fmt.Errorf("messages[%d].content must be a JSON string or content array", i)
+			}
+			if err := validateRawUserContent(rawContent, i); err != nil {
+				return err
 			}
 		case "assistant":
 			_, hasToolCalls := msg["tool_calls"]

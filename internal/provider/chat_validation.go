@@ -22,29 +22,61 @@ func (a HTTPChatAdapter) ValidateChatRequest(instance Instance, req openai.ChatC
 			if err := rejectPresentFields(req, openRouterOnlyFields...); err != nil {
 				return err
 			}
+			if hasContentArrays(req) {
+				return fmt.Errorf("multimodal content is not supported")
+			}
 		}
 		if err := validateChatResponseFormat(instance.Type, req); err != nil {
 			return err
 		}
 		return validateProviderOptions(instance.Type, req)
 	case "codex":
-		unsupported := append(commonUnsupported, "tools", "tool_choice", "parallel_tool_calls", "prediction", "user", "logprobs", "top_logprobs", "provider_options", "max_tokens", "max_completion_tokens", "temperature", "top_p", "presence_penalty", "frequency_penalty", "stop", "response_format")
+		unsupported := append(commonUnsupported, "parallel_tool_calls", "prediction", "user", "logprobs", "top_logprobs", "max_tokens", "max_completion_tokens", "temperature", "top_p", "presence_penalty", "frequency_penalty", "stop", "response_format")
 		unsupported = append(unsupported, openRouterOnlyFields...)
 		if err := rejectPresentFields(req, unsupported...); err != nil {
 			return err
 		}
-		if hasToolMessages(req) {
-			return fmt.Errorf("tool messages are not supported")
+		if req.HasField("tool_choice") {
+			choice, ok := req.ToolChoice.(string)
+			if !ok || choice != "auto" {
+				return fmt.Errorf("tool_choice is not supported")
+			}
 		}
-		return nil
+		if err := validateCodexToolTranscript(req); err != nil {
+			return err
+		}
+		return validateProviderOptions(instance.Type, req)
 	default:
 		return fmt.Errorf("provider type %q does not support chat validation", instance.Type)
 	}
 }
 
-func hasToolMessages(req openai.ChatCompletionRequest) bool {
+func validateCodexToolTranscript(req openai.ChatCompletionRequest) error {
+	pending := map[string]bool{}
+	seenResults := map[string]bool{}
+	for i, msg := range req.Messages {
+		switch msg.Role {
+		case "assistant":
+			for _, call := range msg.ToolCalls {
+				id, _ := call["id"].(string)
+				if id != "" {
+					pending[id] = true
+				}
+			}
+		case "tool":
+			if !pending[msg.ToolCallID] || seenResults[msg.ToolCallID] {
+				return fmt.Errorf("messages[%d].tool_call_id does not match a prior assistant tool call", i)
+			}
+			seenResults[msg.ToolCallID] = true
+			delete(pending, msg.ToolCallID)
+		}
+	}
+	return nil
+}
+
+func hasContentArrays(req openai.ChatCompletionRequest) bool {
 	for _, msg := range req.Messages {
-		if msg.Role == "tool" || len(msg.ToolCalls) > 0 || msg.ToolCallID != "" {
+		if openai.MessageContentIsArray(msg) {
 			return true
 		}
 	}
@@ -103,6 +135,8 @@ func validateProviderOptions(providerType string, req openai.ChatCompletionReque
 		return validateDeepSeekOptions(raw)
 	case "openrouter":
 		return validateOpenRouterOptions(raw)
+	case "codex":
+		return validateCodexOptions(raw)
 	default:
 		return fmt.Errorf("provider_options is not supported for %s", providerType)
 	}

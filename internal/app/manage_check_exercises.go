@@ -47,8 +47,7 @@ func exerciseUpstreamCredentialCheck(ctx context.Context, registry provider.Regi
 	}
 	defer mgmt.Close(ctx)
 	client := management.NewUnixLocalTokenClient(mgmt.socketPath)
-	service := &credentials.UpstreamService{Registry: registry, Repo: store}
-	if err := tui.ExerciseUpstreamCredentialLifecycle(ctx, cfg, registry, client, service); err != nil {
+	if err := tui.ExerciseUpstreamCredentialLifecycle(ctx, cfg, registry, client, client); err != nil {
 		return err
 	}
 	if err := exerciseUpstreamCredentialManagementResponseSafety(ctx, client, store, registry); err != nil {
@@ -244,14 +243,49 @@ func exerciseFallbackPolicyCheck(ctx context.Context, registry provider.Registry
 	if err != nil {
 		return err
 	}
+	resolved, err := service.ResolveAPIKeys(ctx, instance.ID)
+	if err != nil {
+		return err
+	}
+	if len(resolved) != 1 {
+		return fmt.Errorf("fallback policy default resolved %d credentials", len(resolved))
+	}
 	mgmt, err := startManagementServer(ctx, checkDBDir, configPath, filepath.Join(checkDBDir, "ilonasin.sqlite"), registry, store)
 	if err != nil {
 		return err
 	}
 	defer mgmt.Close(ctx)
 	client := management.NewUnixLocalTokenClient(mgmt.socketPath)
-	if err := tui.ExerciseFallbackPolicyLifecycle(ctx, cfg, registry, client, service, service); err != nil {
+	if err := tui.ExerciseFallbackPolicyLifecycle(ctx, cfg, registry, client, client); err != nil {
 		return err
+	}
+	if _, err := client.EnableFallbackPolicy(ctx, management.FallbackPolicyRequest{
+		ProviderInstanceID: instance.ID,
+		CredentialKind:     credentials.CredentialKindAPIKey,
+		GroupLabel:         credentials.DefaultFallbackGroup,
+	}); err != nil {
+		return err
+	}
+	resolved, err = service.ResolveAPIKeys(ctx, instance.ID)
+	if err != nil {
+		return err
+	}
+	if len(resolved) != 2 {
+		return fmt.Errorf("fallback policy enable resolved %d credentials", len(resolved))
+	}
+	if _, err := client.DisableFallbackPolicy(ctx, management.FallbackPolicyRequest{
+		ProviderInstanceID: instance.ID,
+		CredentialKind:     credentials.CredentialKindAPIKey,
+		GroupLabel:         credentials.DefaultFallbackGroup,
+	}); err != nil {
+		return err
+	}
+	resolved, err = service.ResolveAPIKeys(ctx, instance.ID)
+	if err != nil {
+		return err
+	}
+	if len(resolved) != 1 {
+		return fmt.Errorf("fallback policy final resolved %d credentials", len(resolved))
 	}
 	afterProtected, err := fallbackPolicyProtectedSnapshot(ctx, store, configPath)
 	if err != nil {
@@ -312,7 +346,11 @@ func exerciseFallbackPolicyCheck(ctx context.Context, registry provider.Registry
 		}); err != nil {
 			return fmt.Errorf("seed codex oauth fallback policy secondary: %w", err)
 		}
-		if err := tui.ExerciseOAuthFallbackPolicySummary(ctx, cfg, registry, service); err != nil {
+		snapshot, err := management.Service{Registry: registry, Upstreams: service, OAuth: service}.LoadManagementSnapshot(ctx)
+		if err != nil {
+			return err
+		}
+		if err := tui.ExerciseOAuthFallbackPolicySummary(ctx, cfg, registry, &snapshotCheckClient{resp: snapshot}); err != nil {
 			return err
 		}
 		break
@@ -340,7 +378,7 @@ func exerciseLocalTokenCheck(ctx context.Context, homeDir, configPath string) er
 		mgmt.Close(ctx)
 		return err
 	}
-	if err := tui.ExerciseTokenLifecycle(ctx, client); err != nil {
+	if err := tui.ExerciseTokenLifecycle(ctx, client, client); err != nil {
 		mgmt.Close(ctx)
 		return err
 	}
@@ -598,7 +636,11 @@ func exerciseOAuthCheck(ctx context.Context, registry provider.Registry, cfg con
 	if err := assertOAuthStorageSafety(ctx, store); err != nil {
 		return err
 	}
-	return tui.ExerciseOAuthSummary(ctx, cfg, registry, service)
+	snapshot, err := management.Service{Registry: registry, OAuth: service}.LoadManagementSnapshot(ctx)
+	if err != nil {
+		return err
+	}
+	return tui.ExerciseOAuthSummary(ctx, cfg, registry, &snapshotCheckClient{resp: snapshot})
 }
 
 func exerciseOAuthDeviceLoginCheck(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
@@ -651,7 +693,7 @@ func exerciseOAuthDeviceLoginCheck(ctx context.Context, cfg config.Config, logge
 	}
 	defer mgmt.Close(ctx)
 	client := management.NewUnixLocalTokenClient(mgmt.socketPath)
-	if err := tui.ExerciseOAuthDeviceLogin(ctx, loginCfg, registry, service, client); err != nil {
+	if err := tui.ExerciseOAuthDeviceLogin(ctx, loginCfg, registry, client, client); err != nil {
 		return err
 	}
 	if err := fakeAuth.assertSuccessSeen(); err != nil {
@@ -840,7 +882,7 @@ func exerciseOAuthDeviceLoginFailures(ctx context.Context, cfg config.Config, st
 		}
 		if mode == "token_http" {
 			fakeAuth.setMode("exchange_http")
-			eventID, err := tui.ExerciseOAuthDeviceLoginFailure(ctx, cfg, service.Registry, service, client, "oauth_login_http_error")
+			eventID, err := tui.ExerciseOAuthDeviceLoginFailure(ctx, cfg, service.Registry, client, client, "oauth_login_http_error")
 			if err != nil {
 				return err
 			}
@@ -1159,7 +1201,7 @@ func exerciseOAuthRefreshCheck(ctx context.Context, cfg config.Config) error {
 	defer mgmt.Close(ctx)
 	client := management.NewUnixLocalTokenClient(mgmt.socketPath)
 	fakeAuth.setMode("success_replace")
-	if err := tui.ExerciseOAuthRefresh(ctx, cfg, registry, service, client); err != nil {
+	if err := tui.ExerciseOAuthRefresh(ctx, cfg, registry, client, client); err != nil {
 		return err
 	}
 	if fakeAuth.refreshToken() != "oauth-refresh-old-refresh-second" {

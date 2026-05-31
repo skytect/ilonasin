@@ -98,8 +98,16 @@ func socketAccepts(ctx context.Context, socketPath string) bool {
 }
 
 func HTTPClient(socketPath string) *http.Client {
+	return HTTPClientWithTimeout(socketPath, 5*time.Second)
+}
+
+func LongPollHTTPClient(socketPath string) *http.Client {
+	return HTTPClientWithTimeout(socketPath, 0)
+}
+
+func HTTPClientWithTimeout(socketPath string, timeout time.Duration) *http.Client {
 	return &http.Client{
-		Timeout: 5 * time.Second,
+		Timeout: timeout,
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 				var d net.Dialer

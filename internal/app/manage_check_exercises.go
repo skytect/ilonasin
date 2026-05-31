@@ -633,7 +633,17 @@ func exerciseOAuthDeviceLoginCheck(ctx context.Context, cfg config.Config, logge
 		DeviceLogins: credentials.NewOAuthDeviceLoginSessions(2, 40*time.Millisecond),
 		Logger:       logger,
 	}
-	if err := tui.ExerciseOAuthDeviceLogin(ctx, loginCfg, registry, service, service); err != nil {
+	mgmt, err := startManagementServerWithService(ctx, checkDBDir, filepath.Join(checkDBDir, "config.toml"), filepath.Join(checkDBDir, "ilonasin.sqlite"), management.Service{
+		Registry:       registry,
+		OAuth:          service,
+		OAuthMutations: service,
+	})
+	if err != nil {
+		return err
+	}
+	defer mgmt.Close(ctx)
+	client := management.NewUnixLocalTokenClient(mgmt.socketPath)
+	if err := tui.ExerciseOAuthDeviceLogin(ctx, loginCfg, registry, service, client); err != nil {
 		return err
 	}
 	if err := fakeAuth.assertSuccessSeen(); err != nil {
@@ -642,7 +652,62 @@ func exerciseOAuthDeviceLoginCheck(ctx context.Context, cfg config.Config, logge
 	if err := assertOAuthDeviceLoginStorage(ctx, store); err != nil {
 		return err
 	}
-	if err := exerciseOAuthDeviceLoginFailures(ctx, loginCfg, store, service, fakeAuth); err != nil {
+	if err := exerciseOAuthDeviceLoginManagementLongPoll(ctx, store, service, client, mgmt.socketPath, fakeAuth); err != nil {
+		return err
+	}
+	if err := exerciseOAuthDeviceLoginFailures(ctx, loginCfg, store, service, client, fakeAuth); err != nil {
+		return err
+	}
+	return nil
+}
+
+func exerciseOAuthDeviceLoginManagementLongPoll(ctx context.Context, store *sqlite.Store, service *credentials.UpstreamService, client management.HTTPTokenClient, socketPath string, fakeAuth *oauthDeviceAuthServer) error {
+	service.DeviceLogins = credentials.NewOAuthDeviceLoginSessions(2, 40*time.Millisecond)
+	fakeAuth.setMode("pending_long_poll")
+	started, err := client.StartOAuthDeviceLogin(ctx, management.StartOAuthDeviceLoginRequest{ProviderInstanceID: "codex"})
+	if err != nil {
+		return err
+	}
+	if started.Challenge.Handle == "" {
+		return fmt.Errorf("oauth management long-poll handle missing")
+	}
+	client.Client = management.HTTPClientWithTimeout(socketPath, time.Nanosecond)
+	client.LongPollClient = management.LongPollHTTPClient(socketPath)
+	if _, err := client.CompleteOAuthDeviceLogin(ctx, management.CompleteOAuthDeviceLoginRequest{Handle: started.Challenge.Handle}); err != nil {
+		return fmt.Errorf("oauth management long-poll complete failed: %w", err)
+	}
+	client.Client = management.HTTPClient(socketPath)
+	if err := assertOAuthHandleNotExposed(ctx, store, client, started.Challenge.Handle); err != nil {
+		return err
+	}
+	if fakeAuth.pollCount() < 2 {
+		return fmt.Errorf("oauth management long-poll did not poll")
+	}
+	fakeAuth.setMode("timeout")
+	started, err = client.StartOAuthDeviceLogin(ctx, management.StartOAuthDeviceLoginRequest{ProviderInstanceID: "codex"})
+	if err != nil {
+		return err
+	}
+	cancelCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := client.CompleteOAuthDeviceLogin(cancelCtx, management.CompleteOAuthDeviceLoginRequest{Handle: started.Challenge.Handle}); !errors.Is(err, context.Canceled) {
+		return fmt.Errorf("oauth management completion cancellation err=%v", err)
+	}
+	return nil
+}
+
+func assertOAuthHandleNotExposed(ctx context.Context, store *sqlite.Store, client management.HTTPTokenClient, handle string) error {
+	if handle == "" {
+		return fmt.Errorf("oauth management handle empty")
+	}
+	snapshot, err := client.LoadManagementSnapshot(ctx)
+	if err != nil {
+		return err
+	}
+	if strings.Contains(fmt.Sprintf("%+v", snapshot), handle) {
+		return fmt.Errorf("oauth management handle leaked into snapshot")
+	}
+	if err := assertMarkerAbsentInOAuthTables(ctx, store, handle); err != nil {
 		return err
 	}
 	return nil
@@ -690,7 +755,7 @@ func assertOAuthDeviceLoginStorage(ctx context.Context, store *sqlite.Store) err
 	return nil
 }
 
-func exerciseOAuthDeviceLoginFailures(ctx context.Context, cfg config.Config, store *sqlite.Store, service *credentials.UpstreamService, fakeAuth *oauthDeviceAuthServer) error {
+func exerciseOAuthDeviceLoginFailures(ctx context.Context, cfg config.Config, store *sqlite.Store, service *credentials.UpstreamService, client management.HTTPTokenClient, fakeAuth *oauthDeviceAuthServer) error {
 	baseline, err := oauthCredentialCount(ctx, store)
 	if err != nil {
 		return err
@@ -767,7 +832,7 @@ func exerciseOAuthDeviceLoginFailures(ctx context.Context, cfg config.Config, st
 		}
 		if mode == "token_http" {
 			fakeAuth.setMode("exchange_http")
-			eventID, err := tui.ExerciseOAuthDeviceLoginFailure(ctx, cfg, service.Registry, service, service, "oauth_login_http_error")
+			eventID, err := tui.ExerciseOAuthDeviceLoginFailure(ctx, cfg, service.Registry, service, client, "oauth_login_http_error")
 			if err != nil {
 				return err
 			}
@@ -1075,8 +1140,18 @@ func exerciseOAuthRefreshCheck(ctx context.Context, cfg config.Config) error {
 		return err
 	}
 
+	mgmt, err := startManagementServerWithService(ctx, checkDBDir, filepath.Join(checkDBDir, "config.toml"), filepath.Join(checkDBDir, "ilonasin.sqlite"), management.Service{
+		Registry:       registry,
+		OAuth:          service,
+		OAuthMutations: service,
+	})
+	if err != nil {
+		return err
+	}
+	defer mgmt.Close(ctx)
+	client := management.NewUnixLocalTokenClient(mgmt.socketPath)
 	fakeAuth.setMode("success_replace")
-	if err := tui.ExerciseOAuthRefresh(ctx, cfg, registry, service, service); err != nil {
+	if err := tui.ExerciseOAuthRefresh(ctx, cfg, registry, service, client); err != nil {
 		return err
 	}
 	if fakeAuth.refreshToken() != "oauth-refresh-old-refresh-second" {
@@ -1132,8 +1207,63 @@ func exerciseOAuthRefreshCheck(ctx context.Context, cfg config.Config) error {
 		}
 	}
 
+	if err := exerciseOAuthRefreshManagementFailure(ctx, service, client, fakeAuth); err != nil {
+		return err
+	}
 	if err := exerciseOAuthRefreshFailureModes(ctx, store, service, fakeAuth); err != nil {
 		return err
+	}
+	return nil
+}
+
+func exerciseOAuthRefreshManagementFailure(ctx context.Context, service *credentials.UpstreamService, client management.HTTPTokenClient, fakeAuth *oauthRefreshAuthServer) error {
+	created, err := service.AddOAuthCredential(ctx, credentials.NewOAuthCredentialInput{
+		ProviderInstanceID:  "codex",
+		Label:               "refresh management failure",
+		AccessToken:         "oauth-refresh-management-access",
+		RefreshToken:        "oauth-refresh-management-refresh",
+		AccountID:           "refresh-management-failure",
+		AccountDisplayLabel: "Management Failure",
+	})
+	if err != nil {
+		return err
+	}
+	fakeAuth.setMode("http")
+	body := []byte(fmt.Sprintf(`{"id":%d}`, created.ID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, client.BaseURL+management.PathOAuthCredentials+"/refresh", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode < 400 {
+		return fmt.Errorf("oauth refresh management failure returned status=%d", resp.StatusCode)
+	}
+	if !strings.Contains(string(respBody), "oauth_refresh_failed") {
+		return fmt.Errorf("oauth refresh management failure class missing")
+	}
+	for _, forbidden := range []string{
+		"oauth-refresh-management-access",
+		"oauth-refresh-management-refresh",
+		"refresh-management-failure",
+		"token endpoint body",
+		"raw-provider-payload",
+		"Bearer ",
+		"acct_",
+		"balance",
+		"credit",
+	} {
+		if strings.Contains(string(respBody), forbidden) {
+			return fmt.Errorf("oauth refresh management failure leaked forbidden marker")
+		}
 	}
 	return nil
 }

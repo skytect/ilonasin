@@ -52,6 +52,7 @@ type Service struct {
 	Upstreams         UpstreamMetadataReader
 	UpstreamMutations UpstreamMutationManager
 	OAuth             OAuthMetadataReader
+	OAuthMutations    OAuthMutationManager
 	ModelCache        ModelCacheReader
 	Observability     ObservabilityReader
 }

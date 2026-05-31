@@ -21,7 +21,7 @@ func Serve(opts Options) error {
 	}
 	defer rt.cleanup()
 	defer rt.Store.Close()
-	mgmt, err := startManagementServer(context.Background(), rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database, rt.Registry, rt.Store)
+	mgmt, err := startManagementServer(context.Background(), rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database, rt.Registry, rt.Store, rt.Logger)
 	if err != nil {
 		return err
 	}
@@ -62,20 +62,9 @@ func Manage(opts Options) error {
 		slog.String("event", "app_command_start"),
 		slog.String("command", "manage"),
 	)
-	refresher := provider.NewHTTPOAuthRefresher(nil)
-	refresher.Logger = rt.Logger
-	login := provider.NewHTTPOAuthDeviceLogin(nil)
-	login.Logger = rt.Logger
-	upstreams := &credentials.UpstreamService{
-		Registry:       rt.Registry,
-		Repo:           rt.Store,
-		OAuthRefresher: refresher,
-		OAuthLogin:     login,
-		Logger:         rt.Logger,
-	}
 	tokenClient := management.NewUnixLocalTokenClient(management.SocketPath(rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database))
 	if _, err := tokenClient.LoadManagementSnapshot(context.Background()); err != nil {
 		return err
 	}
-	return tui.Run(rt.Config, rt.Registry, tokenClient, tokenClient, tokenClient, upstreams, nil, nil, rt.Store, rt.Logger)
+	return tui.Run(rt.Config, rt.Registry, tokenClient, tokenClient, tokenClient, tokenClient, nil, nil, rt.Store, rt.Logger)
 }

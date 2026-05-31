@@ -238,7 +238,7 @@ func exerciseManagementSnapshotTUIReload(ctx context.Context) error {
 		return fmt.Errorf("snapshot TUI view used local registry provider")
 	}
 	failing := &snapshotCheckClient{err: fmt.Errorf("snapshot failure")}
-	if err := tui.Check(cfg, registry, failing, failingTokenClient{}, nil, inertOAuth{}, inertModelCache{}, inertObservability{}, inertPruner{}, &out); err == nil {
+	if err := tui.Check(cfg, registry, failing, failingTokenClient{}, nil, nil, inertModelCache{}, inertObservability{}, inertPruner{}, &out); err == nil {
 		return fmt.Errorf("snapshot reload failure fell back to direct readers")
 	}
 	return nil

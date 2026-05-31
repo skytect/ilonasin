@@ -204,6 +204,11 @@ func ServeCheck(opts Options) error {
 		management.PathFallbackPolicies,
 		management.PathFallbackPolicies + "/enable",
 		management.PathFallbackPolicies + "/disable",
+		management.PathOAuthDeviceLogin,
+		management.PathOAuthDeviceLogin + "/start",
+		management.PathOAuthDeviceLogin + "/complete",
+		management.PathOAuthCredentials,
+		management.PathOAuthCredentials + "/refresh",
 	} {
 		if status, err := getStatus(base+path, ""); err != nil || status != http.StatusNotFound {
 			return fmt.Errorf("public management mutation route %s status=%d err=%v", path, status, err)

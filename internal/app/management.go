@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -18,23 +19,39 @@ type managementRuntime struct {
 	server     *http.Server
 }
 
-func startManagementServer(ctx context.Context, homeDir, configPath, databasePath string, registry provider.Registry, store *sqlite.Store) (managementRuntime, error) {
+func startManagementServer(ctx context.Context, homeDir, configPath, databasePath string, registry provider.Registry, store *sqlite.Store, loggers ...*slog.Logger) (managementRuntime, error) {
+	logger := firstSlogLogger(loggers)
+	refresher := provider.NewHTTPOAuthRefresher(nil)
+	refresher.Logger = logger
+	login := provider.NewHTTPOAuthDeviceLogin(nil)
+	login.Logger = logger
+	upstreams := &credentials.UpstreamService{
+		Registry:       registry,
+		Repo:           store,
+		OAuthRefresher: refresher,
+		OAuthLogin:     login,
+		Logger:         logger,
+	}
+	return startManagementServerWithService(ctx, homeDir, configPath, databasePath, management.Service{
+		Tokens:            credentials.Service{Repo: store},
+		Registry:          registry,
+		Upstreams:         upstreams,
+		UpstreamMutations: upstreams,
+		OAuth:             upstreams,
+		OAuthMutations:    upstreams,
+		ModelCache:        store,
+		Observability:     store,
+	})
+}
+
+func startManagementServerWithService(ctx context.Context, homeDir, configPath, databasePath string, service management.HandlerService) (managementRuntime, error) {
 	socketPath := management.SocketPath(homeDir, configPath, databasePath)
 	listener, owner, err := management.PrepareUnixListener(ctx, socketPath)
 	if err != nil {
 		return managementRuntime{}, err
 	}
-	upstreams := &credentials.UpstreamService{Registry: registry, Repo: store}
 	srv := &http.Server{
-		Handler: management.Handler(management.Service{
-			Tokens:            credentials.Service{Repo: store},
-			Registry:          registry,
-			Upstreams:         upstreams,
-			UpstreamMutations: upstreams,
-			OAuth:             upstreams,
-			ModelCache:        store,
-			Observability:     store,
-		}),
+		Handler:           management.Handler(service),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	errc := make(chan error, 1)
@@ -51,6 +68,15 @@ func startManagementServer(ctx context.Context, homeDir, configPath, databasePat
 	default:
 	}
 	return managementRuntime{socketPath: socketPath, owner: owner, server: srv}, nil
+}
+
+func firstSlogLogger(loggers []*slog.Logger) *slog.Logger {
+	for _, logger := range loggers {
+		if logger != nil {
+			return logger
+		}
+	}
+	return nil
 }
 
 func (m managementRuntime) Close(ctx context.Context) {

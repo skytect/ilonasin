@@ -15,12 +15,15 @@ const (
 	PathLocalTokens         = "/_ilonasin/manage/local-tokens"
 	PathUpstreamCredentials = "/_ilonasin/manage/upstream-credentials"
 	PathFallbackPolicies    = "/_ilonasin/manage/fallback-policies"
+	PathOAuthDeviceLogin    = "/_ilonasin/manage/oauth-device-login"
+	PathOAuthCredentials    = "/_ilonasin/manage/oauth-credentials"
 )
 
 type HandlerService interface {
 	LocalTokenClient
 	SnapshotClient
 	UpstreamCredentialClient
+	OAuthClient
 }
 
 func Handler(service HandlerService) http.Handler {
@@ -126,6 +129,45 @@ func Handler(service HandlerService) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, resp)
 	})
+	mux.HandleFunc("POST "+PathOAuthDeviceLogin+"/start", func(w http.ResponseWriter, r *http.Request) {
+		var req StartOAuthDeviceLoginRequest
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest)
+			return
+		}
+		resp, err := service.StartOAuthDeviceLogin(r.Context(), req)
+		if err != nil {
+			writeOAuthManagementError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+	})
+	mux.HandleFunc("POST "+PathOAuthDeviceLogin+"/complete", func(w http.ResponseWriter, r *http.Request) {
+		var req CompleteOAuthDeviceLoginRequest
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest)
+			return
+		}
+		resp, err := service.CompleteOAuthDeviceLogin(r.Context(), req)
+		if err != nil {
+			writeOAuthManagementError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+	})
+	mux.HandleFunc("POST "+PathOAuthCredentials+"/refresh", func(w http.ResponseWriter, r *http.Request) {
+		var req RefreshOAuthCredentialRequest
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest)
+			return
+		}
+		resp, err := service.RefreshOAuthCredential(r.Context(), req)
+		if err != nil {
+			writeOAuthManagementError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+	})
 	return mux
 }
 
@@ -142,7 +184,7 @@ func decodeJSON(r *http.Request, out any) error {
 }
 
 func writeError(w http.ResponseWriter, status int) {
-	writeJSON(w, status, map[string]string{"error": http.StatusText(status)})
+	writeJSON(w, status, managementErrorResponse{Error: http.StatusText(status)})
 }
 
 func writeManagementError(w http.ResponseWriter, err error) {

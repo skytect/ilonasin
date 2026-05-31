@@ -12,9 +12,7 @@ import (
 	goruntime "runtime"
 	"strings"
 
-	"ilonasin/internal/credentials"
 	"ilonasin/internal/management"
-	"ilonasin/internal/provider"
 	"ilonasin/internal/tui"
 )
 
@@ -30,7 +28,7 @@ func ManageCheck(opts Options) error {
 	if err != nil {
 		return err
 	}
-	mgmt, err := startManagementServer(context.Background(), rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database, rt.Registry, rt.Store)
+	mgmt, err := startManagementServer(context.Background(), rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database, rt.Registry, rt.Store, rt.Logger)
 	if err != nil {
 		return err
 	}
@@ -75,19 +73,8 @@ func ManageCheck(opts Options) error {
 		return err
 	}
 	var buf bytes.Buffer
-	refresher := provider.NewHTTPOAuthRefresher(nil)
-	refresher.Logger = rt.Logger
-	login := provider.NewHTTPOAuthDeviceLogin(nil)
-	login.Logger = rt.Logger
-	upstreams := &credentials.UpstreamService{
-		Registry:       rt.Registry,
-		Repo:           rt.Store,
-		OAuthRefresher: refresher,
-		OAuthLogin:     login,
-		Logger:         rt.Logger,
-	}
 	tokenClient := management.NewUnixLocalTokenClient(management.SocketPath(rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database))
-	if err := tui.Check(rt.Config, rt.Registry, tokenClient, tokenClient, tokenClient, upstreams, nil, nil, rt.Store, &buf, rt.Logger); err != nil {
+	if err := tui.Check(rt.Config, rt.Registry, tokenClient, tokenClient, tokenClient, tokenClient, nil, nil, rt.Store, &buf, rt.Logger); err != nil {
 		return err
 	}
 	afterSnapshot, err := selectedHomeSnapshot(context.Background(), rt.Store, rt.ConfigPath)
@@ -121,6 +108,10 @@ func assertProductionUpstreamMutationWiring() error {
 		{path: "internal/tui/tui.go", forbidden: "func Run(cfg config.Config, registry provider.Registry, snapshot management.SnapshotClient, tokens management.LocalTokenClient, upstreams " + "credentials.UpstreamCredentialManager"},
 		{path: "internal/tui/tui.go", forbidden: "func Check(cfg config.Config, registry provider.Registry, snapshot management.SnapshotClient, tokens management.LocalTokenClient, upstreams " + "credentials.UpstreamCredentialManager"},
 		{path: "internal/tui/tui.go", forbidden: "upstreams        " + "credentials.UpstreamCredentialManager"},
+		{path: "internal/tui/tui.go", forbidden: "oauthRefresh     " + "credentials.OAuthRefreshController"},
+		{path: "internal/tui/tui.go", forbidden: "oauthLogin       " + "credentials.OAuthDeviceLoginController"},
+		{path: "internal/tui/tui.go", forbidden: "func Run(cfg config.Config, registry provider.Registry, snapshot management.SnapshotClient, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, oauth " + "credentials.OAuthMetadataReader"},
+		{path: "internal/tui/tui.go", forbidden: "func Check(cfg config.Config, registry provider.Registry, snapshot management.SnapshotClient, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, oauth " + "credentials.OAuthMetadataReader"},
 	}
 	for _, check := range checks {
 		body, err := os.ReadFile(filepath.Join(root, check.path))
@@ -164,7 +155,7 @@ func assertTUIUpstreamArg(path, name string) error {
 			return true
 		}
 		found = true
-		if len(call.Args) < 5 || !identName(call.Args[4], "tokenClient") {
+		if len(call.Args) < 6 || !identName(call.Args[4], "tokenClient") || !identName(call.Args[5], "tokenClient") {
 			invalid = true
 		}
 		return true
@@ -173,7 +164,7 @@ func assertTUIUpstreamArg(path, name string) error {
 		return fmt.Errorf("production tui.%s call missing in %s", name, path)
 	}
 	if invalid {
-		return fmt.Errorf("production tui.%s upstream mutation argument is not the management client", name)
+		return fmt.Errorf("production tui.%s mutation arguments are not the management client", name)
 	}
 	return nil
 }

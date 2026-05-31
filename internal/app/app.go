@@ -181,7 +181,7 @@ func (f *oauthDeviceAuthServer) handleDeviceToken(w http.ResponseWriter, r *http
 		_, _ = w.Write([]byte(`{"error":"authorization_pending"}`))
 		return
 	}
-	if mode == "pending_404" && polls == 1 {
+	if (mode == "pending_404" || mode == "pending_long_poll") && polls == 1 {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"error":"authorization_pending"}`))
@@ -283,6 +283,8 @@ func (f *oauthDeviceAuthServer) handleDeviceExchange(w http.ResponseWriter, r *h
 		_, _ = w.Write([]byte(`{"id_token":"` + fakeIDToken("acct_device_plain_403", "Codex Login", "pro") + `","access_token":"oauth-login-access-marker","refresh_token":"oauth-login-refresh-marker","expires_in":3600}`))
 	case "pending_empty_404":
 		_, _ = w.Write([]byte(`{"id_token":"` + fakeIDToken("acct_device_empty_404", "Codex Login", "pro") + `","access_token":"oauth-login-access-marker","refresh_token":"oauth-login-refresh-marker","expires_in":3600}`))
+	case "pending_long_poll":
+		_, _ = w.Write([]byte(`{"id_token":"` + fakeIDToken("acct_device_long_poll", "Codex Long Poll", "pro") + `","access_token":"oauth-login-long-poll-access","refresh_token":"oauth-login-long-poll-refresh","expires_in":3600}`))
 	case "unsafe_metadata":
 		_, _ = w.Write([]byte(`{"id_token":"` + fakeIDToken("acct_device_unsafe_meta", "device-auth-marker", "code-verifier-marker") + `","access_token":"oauth-login-access-marker","refresh_token":"oauth-login-refresh-marker","expires_in":3600}`))
 	default:

@@ -753,6 +753,7 @@ func handleCodexEvent(data []byte, state *codexResponseParseState) error {
 		ItemID    string `json:"item_id"`
 		CallID    string `json:"call_id"`
 		Arguments string `json:"arguments"`
+		Input     string `json:"input"`
 		Item      *struct {
 			ID        string            `json:"id"`
 			Type      string            `json:"type"`
@@ -821,6 +822,8 @@ func handleCodexEvent(data []byte, state *codexResponseParseState) error {
 		return state.finishCodexFunctionCallArguments(codexToolCallKey(event.ItemID, event.CallID), event.Arguments)
 	case "response.custom_tool_call_input.delta":
 		return state.appendCodexCustomToolInput(event.ItemID, event.CallID, event.Delta)
+	case "response.custom_tool_call_input.done":
+		return state.finishCodexCustomToolInput(event.ItemID, event.CallID, event.Input)
 	case "response.output_item.done":
 		if event.Item == nil {
 			return codexEventFailure{class: "upstream_invalid_response"}
@@ -1138,6 +1141,50 @@ func (state *codexResponseParseState) appendCodexCustomToolInput(itemID, callID,
 		}
 	}
 	call.Input.WriteString(delta)
+	return nil
+}
+
+func (state *codexResponseParseState) finishCodexCustomToolInput(itemID, callID, input string) error {
+	if input == "" {
+		return nil
+	}
+	key := callID
+	if key == "" && state.customToolState.aliases != nil {
+		key = state.customToolState.aliases[itemID]
+	}
+	if key == "" {
+		key = itemID
+	}
+	if key == "" {
+		return codexEventFailure{class: "upstream_invalid_response"}
+	}
+	call := state.customToolState.calls[key]
+	if call == nil {
+		if callID == "" {
+			return codexEventFailure{class: "upstream_invalid_response"}
+		}
+		if state.customToolState.calls == nil {
+			state.customToolState.calls = map[string]*codexResponseCustomToolCall{}
+			state.customToolState.aliases = map[string]string{}
+			state.customToolState.emitted = map[string]bool{}
+		}
+		call = &codexResponseCustomToolCall{CallID: callID}
+		state.customToolState.calls[key] = call
+		state.customToolState.order = append(state.customToolState.order, key)
+		if itemID != "" {
+			state.customToolState.aliases[itemID] = key
+		}
+	}
+	written := call.Input.String()
+	switch {
+	case written == "":
+		call.Input.WriteString(input)
+	case written == input:
+	case strings.HasPrefix(input, written):
+		call.Input.WriteString(input[len(written):])
+	default:
+		return codexEventFailure{class: "upstream_invalid_response"}
+	}
 	return nil
 }
 
@@ -1768,7 +1815,7 @@ func codexToolEvent(typ string) bool {
 
 func unsupportedCodexToolEvent(typ string) bool {
 	typ = strings.ToLower(typ)
-	if typ == "response.custom_tool_call_input.delta" {
+	if typ == "response.custom_tool_call_input.delta" || typ == "response.custom_tool_call_input.done" {
 		return false
 	}
 	return codexToolEvent(typ)

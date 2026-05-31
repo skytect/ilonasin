@@ -23,16 +23,17 @@ type ResponsesRequest struct {
 }
 
 type ResponseInputItem struct {
-	Type      string
-	Role      string
-	Content   []ResponseContentItem
-	CallID    string
-	Name      string
-	Namespace string
-	Arguments string
-	Input     string
-	Output    string
-	Execution string
+	Type             string
+	Role             string
+	Content          []ResponseContentItem
+	CallID           string
+	Name             string
+	Namespace        string
+	Arguments        string
+	Input            string
+	Output           string
+	StructuredOutput bool
+	Execution        string
 }
 
 type ResponseContentItem struct {
@@ -238,13 +239,6 @@ func parseResponsesInputItem(raw map[string]json.RawMessage, index int) (Respons
 }
 
 func parseResponsesMessageItem(raw map[string]json.RawMessage, index int, typ string) (ResponseInputItem, error) {
-	for key := range raw {
-		switch key {
-		case "type", "role", "content", "phase":
-		default:
-			return ResponseInputItem{}, fmt.Errorf("input[%d] contains unsupported fields", index)
-		}
-	}
 	role, err := requiredRawString(raw["role"], fmt.Sprintf("input[%d].role", index))
 	if err != nil {
 		return ResponseInputItem{}, err
@@ -262,13 +256,6 @@ func parseResponsesMessageItem(raw map[string]json.RawMessage, index int, typ st
 }
 
 func parseResponsesFunctionCallItem(raw map[string]json.RawMessage, index int, typ string) (ResponseInputItem, error) {
-	for key := range raw {
-		switch key {
-		case "id", "type", "call_id", "name", "namespace", "arguments":
-		default:
-			return ResponseInputItem{}, fmt.Errorf("input[%d] contains unsupported fields", index)
-		}
-	}
 	if _, err := optionalRawString(raw["id"], fmt.Sprintf("input[%d].id", index)); err != nil {
 		return ResponseInputItem{}, err
 	}
@@ -305,13 +292,6 @@ func parseResponsesFunctionCallItem(raw map[string]json.RawMessage, index int, t
 }
 
 func parseResponsesFunctionCallOutputItem(raw map[string]json.RawMessage, index int, typ string) (ResponseInputItem, error) {
-	for key := range raw {
-		switch key {
-		case "type", "call_id", "output":
-		default:
-			return ResponseInputItem{}, fmt.Errorf("input[%d] contains unsupported fields", index)
-		}
-	}
 	callID, err := requiredRawString(raw["call_id"], fmt.Sprintf("input[%d].call_id", index))
 	if err != nil {
 		return ResponseInputItem{}, err
@@ -319,24 +299,14 @@ func parseResponsesFunctionCallOutputItem(raw map[string]json.RawMessage, index 
 	if callID == "" {
 		return ResponseInputItem{}, fmt.Errorf("input[%d].call_id is required", index)
 	}
-	if rawOutput, ok := raw["output"]; ok && len(bytes.TrimSpace(rawOutput)) > 0 && bytes.TrimSpace(rawOutput)[0] == '[' {
-		return ResponseInputItem{}, fmt.Errorf("input[%d].output structured content is unsupported", index)
-	}
-	output, err := requiredRawString(raw["output"], fmt.Sprintf("input[%d].output", index))
+	output, structured, err := parseResponsesOutput(raw["output"], fmt.Sprintf("input[%d].output", index))
 	if err != nil {
 		return ResponseInputItem{}, err
 	}
-	return ResponseInputItem{Type: typ, CallID: callID, Output: output}, nil
+	return ResponseInputItem{Type: typ, CallID: callID, Output: output, StructuredOutput: structured}, nil
 }
 
 func parseResponsesToolSearchCallItem(raw map[string]json.RawMessage, index int, typ string) (ResponseInputItem, error) {
-	for key := range raw {
-		switch key {
-		case "id", "type", "call_id", "execution", "arguments", "status":
-		default:
-			return ResponseInputItem{}, fmt.Errorf("input[%d] contains unsupported fields", index)
-		}
-	}
 	if _, err := optionalRawString(raw["id"], fmt.Sprintf("input[%d].id", index)); err != nil {
 		return ResponseInputItem{}, err
 	}
@@ -364,13 +334,6 @@ func parseResponsesToolSearchCallItem(raw map[string]json.RawMessage, index int,
 }
 
 func parseResponsesToolSearchOutputItem(raw map[string]json.RawMessage, index int, typ string) (ResponseInputItem, error) {
-	for key := range raw {
-		switch key {
-		case "type", "call_id", "status", "execution", "tools":
-		default:
-			return ResponseInputItem{}, fmt.Errorf("input[%d] contains unsupported fields", index)
-		}
-	}
 	callID, err := requiredRawString(raw["call_id"], fmt.Sprintf("input[%d].call_id", index))
 	if err != nil {
 		return ResponseInputItem{}, err
@@ -392,24 +355,13 @@ func parseResponsesToolSearchOutputItem(raw map[string]json.RawMessage, index in
 	if execution != "client" && execution != "server" {
 		return ResponseInputItem{}, fmt.Errorf("input[%d].execution is unsupported", index)
 	}
-	tools, err := parseResponsesTools(raw["tools"])
-	if err != nil {
-		return ResponseInputItem{}, fmt.Errorf("input[%d].tools is invalid", index)
-	}
-	if tools == nil {
+	if len(bytes.TrimSpace(raw["tools"])) == 0 || isJSONNull(raw["tools"]) {
 		return ResponseInputItem{}, fmt.Errorf("input[%d].tools is required", index)
 	}
 	return ResponseInputItem{Type: typ, CallID: callID, Execution: execution}, nil
 }
 
 func parseResponsesCustomToolCallItem(raw map[string]json.RawMessage, index int, typ string) (ResponseInputItem, error) {
-	for key := range raw {
-		switch key {
-		case "id", "type", "call_id", "name", "input":
-		default:
-			return ResponseInputItem{}, fmt.Errorf("input[%d] contains unsupported fields", index)
-		}
-	}
 	if _, err := optionalRawString(raw["id"], fmt.Sprintf("input[%d].id", index)); err != nil {
 		return ResponseInputItem{}, err
 	}
@@ -435,13 +387,6 @@ func parseResponsesCustomToolCallItem(raw map[string]json.RawMessage, index int,
 }
 
 func parseResponsesCustomToolCallOutputItem(raw map[string]json.RawMessage, index int, typ string) (ResponseInputItem, error) {
-	for key := range raw {
-		switch key {
-		case "type", "call_id", "name", "output":
-		default:
-			return ResponseInputItem{}, fmt.Errorf("input[%d] contains unsupported fields", index)
-		}
-	}
 	callID, err := requiredRawString(raw["call_id"], fmt.Sprintf("input[%d].call_id", index))
 	if err != nil {
 		return ResponseInputItem{}, err
@@ -458,14 +403,25 @@ func parseResponsesCustomToolCallOutputItem(raw map[string]json.RawMessage, inde
 			return ResponseInputItem{}, fmt.Errorf("input[%d].name is invalid", index)
 		}
 	}
-	if rawOutput, ok := raw["output"]; ok && len(bytes.TrimSpace(rawOutput)) > 0 && bytes.TrimSpace(rawOutput)[0] == '[' {
-		return ResponseInputItem{}, fmt.Errorf("input[%d].output structured content is unsupported", index)
-	}
-	output, err := requiredRawString(raw["output"], fmt.Sprintf("input[%d].output", index))
+	output, structured, err := parseResponsesOutput(raw["output"], fmt.Sprintf("input[%d].output", index))
 	if err != nil {
 		return ResponseInputItem{}, err
 	}
-	return ResponseInputItem{Type: typ, CallID: callID, Output: output}, nil
+	return ResponseInputItem{Type: typ, CallID: callID, Output: output, StructuredOutput: structured}, nil
+}
+
+func parseResponsesOutput(raw json.RawMessage, field string) (string, bool, error) {
+	if len(bytes.TrimSpace(raw)) == 0 || isJSONNull(raw) {
+		return "", false, fmt.Errorf("%s is required", field)
+	}
+	if bytes.TrimSpace(raw)[0] != '"' {
+		return "", true, nil
+	}
+	value, err := requiredRawString(raw, field)
+	if err != nil {
+		return "", false, err
+	}
+	return value, false, nil
 }
 
 func validateResponsesToolTranscript(items []ResponseInputItem) error {
@@ -934,6 +890,9 @@ func responsesInputToChatMessages(instructions string, input []ResponseInputItem
 			i--
 			messages = append(messages, Message{Role: "assistant", Content: json.RawMessage("null"), ToolCalls: calls})
 		case "function_call_output":
+			if item.StructuredOutput {
+				return nil, fmt.Errorf("input[%d].output structured content is unsupported", i)
+			}
 			messages = append(messages, Message{Role: "tool", Content: mustRawJSONString(item.Output), ToolCallID: item.CallID})
 		default:
 			return nil, fmt.Errorf("input[%d].type is unsupported", i)

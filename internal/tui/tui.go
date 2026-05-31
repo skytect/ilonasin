@@ -650,7 +650,7 @@ func ExerciseOAuthSummary(ctx context.Context, cfg config.Config, registry provi
 	view := model.View()
 	for _, text := range []string{
 		"OAuth accounts",
-		"codex oauth account Codex Safe plan team expires 2026-05-30T13:00:00Z refresh [redacted]",
+		"codex oauth account Codex Safe plan team expires 2026-05-30T13:00:00Z refresh refresh_token_expired",
 		"Provider accounts",
 		"codex credential 1 Codex Safe plan team",
 	} {

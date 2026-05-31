@@ -437,6 +437,10 @@ func validateOpenRouterProvider(raw any) error {
 			if err := validateOpenRouterMaxPrice(value); err != nil {
 				return err
 			}
+		case "preferred_max_latency", "preferred_min_throughput":
+			if err := validateOpenRouterPerformancePreference(key, value); err != nil {
+				return err
+			}
 		case "sort":
 			if err := validateOpenRouterProviderSort(value); err != nil {
 				return err
@@ -602,8 +606,48 @@ func validateOpenRouterMaxPrice(raw any) error {
 	return nil
 }
 
+func validateOpenRouterPerformancePreference(field string, raw any) error {
+	switch value := raw.(type) {
+	case json.Number:
+		if !isOpenRouterPositivePreferenceNumber(value) {
+			return fmt.Errorf("provider_options.openrouter.provider.%s must be a number between 0 and 1000000", field)
+		}
+		return nil
+	case map[string]any:
+		if len(value) == 0 {
+			return fmt.Errorf("provider_options.openrouter.provider.%s must be a non-empty object", field)
+		}
+		for key, rawField := range value {
+			switch key {
+			case "p50", "p75", "p90", "p99":
+			default:
+				return fmt.Errorf("provider_options.openrouter.provider.%s contains an unsupported field", field)
+			}
+			num, ok := rawField.(json.Number)
+			if !ok || !isOpenRouterPositivePreferenceNumber(num) {
+				return fmt.Errorf("provider_options.openrouter.provider.%s values must be numbers between 0 and 1000000", field)
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("provider_options.openrouter.provider.%s must be a number or object", field)
+	}
+}
+
+func isOpenRouterPositivePreferenceNumber(num json.Number) bool {
+	if !safeOpenRouterBoundedNumberToken(num.String()) {
+		return false
+	}
+	precise, ok := new(big.Rat).SetString(num.String())
+	if !ok || precise.Cmp(big.NewRat(0, 1)) <= 0 || precise.Cmp(big.NewRat(1000000, 1)) > 0 {
+		return false
+	}
+	value, err := num.Float64()
+	return err == nil && !math.IsInf(value, 0) && !math.IsNaN(value)
+}
+
 func isOpenRouterMaxPrice(num json.Number) bool {
-	if !safeOpenRouterMaxPriceToken(num.String()) {
+	if !safeOpenRouterBoundedNumberToken(num.String()) {
 		return false
 	}
 	precise, ok := new(big.Rat).SetString(num.String())
@@ -614,7 +658,7 @@ func isOpenRouterMaxPrice(num json.Number) bool {
 	return err == nil && !math.IsInf(value, 0) && !math.IsNaN(value)
 }
 
-func safeOpenRouterMaxPriceToken(value string) bool {
+func safeOpenRouterBoundedNumberToken(value string) bool {
 	if value == "" || len(value) > 128 {
 		return false
 	}

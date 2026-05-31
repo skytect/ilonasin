@@ -2622,6 +2622,26 @@ func newServeCheckUpstream() *serveCheckUpstream {
 					http.Error(w, err.Error(), http.StatusBadRequest)
 					return
 				}
+			case "provider-performance-direct":
+				if err := validateServeCheckOpenRouterProviderPerformanceDirect(r.URL.Path, body); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+			case "provider-performance-object":
+				if err := validateServeCheckOpenRouterProviderPerformanceObject(r.URL.Path, body); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+			case "provider-performance-sentinel":
+				if err := validateServeCheckOpenRouterProviderPerformanceSentinel(r.URL.Path, body); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+			case "provider-performance-combined":
+				if err := validateServeCheckOpenRouterProviderPerformanceCombined(r.URL.Path, body); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
 			case "provider-privacy":
 				if err := validateServeCheckOpenRouterPrivacyProvider(r.URL.Path, body); err != nil {
 					http.Error(w, err.Error(), http.StatusBadRequest)
@@ -3085,6 +3105,40 @@ func validateServeCheckOpenRouterProviderSortCombined(path string, body map[stri
 	})
 }
 
+func validateServeCheckOpenRouterProviderPerformanceDirect(path string, body map[string]any) error {
+	return validateServeCheckOpenRouterProviderExact(path, body, map[string]any{
+		"preferred_max_latency":    jsonNumberString("5"),
+		"preferred_min_throughput": jsonNumberString("100"),
+	})
+}
+
+func validateServeCheckOpenRouterProviderPerformanceObject(path string, body map[string]any) error {
+	return validateServeCheckOpenRouterProviderExact(path, body, map[string]any{
+		"preferred_max_latency":    map[string]string{"p50": "5", "p90": "10"},
+		"preferred_min_throughput": map[string]string{"p50": "100", "p90": "50"},
+	})
+}
+
+func validateServeCheckOpenRouterProviderPerformanceSentinel(path string, body map[string]any) error {
+	return validateServeCheckOpenRouterProviderExact(path, body, map[string]any{
+		"preferred_max_latency":    map[string]string{"p50": "0.00000123", "p99": "1e-7"},
+		"preferred_min_throughput": map[string]string{"p75": "98765.4321", "p99": "1e-1024"},
+	})
+}
+
+func validateServeCheckOpenRouterProviderPerformanceCombined(path string, body map[string]any) error {
+	return validateServeCheckOpenRouterProviderExact(path, body, map[string]any{
+		"sort":                     providerStringMap{"by": "throughput", "partition": "model"},
+		"only":                     []string{"deepinfra"},
+		"ignore":                   []string{"openai"},
+		"allow_fallbacks":          false,
+		"quantizations":            []string{"fp16"},
+		"max_price":                map[string]string{"prompt": "0.00000123"},
+		"preferred_max_latency":    jsonNumberString("5"),
+		"preferred_min_throughput": map[string]string{"p50": "100", "p90": "50"},
+	})
+}
+
 func validateServeCheckOpenRouterProviderFields(path string, body map[string]any) error {
 	if path != "/api/v1/chat/completions" {
 		return fmt.Errorf("OpenRouter provider routing reached unsupported provider")
@@ -3122,6 +3176,10 @@ func validateServeCheckOpenRouterProviderFields(path string, body map[string]any
 			if !isOpenRouterSortTranslation(value) {
 				return fmt.Errorf("invalid OpenRouter sort translation")
 			}
+		case "preferred_max_latency", "preferred_min_throughput":
+			if !isOpenRouterPerformancePreferenceTranslation(value) {
+				return fmt.Errorf("invalid OpenRouter performance preference translation")
+			}
 		case "data_collection":
 			if value != "deny" {
 				return fmt.Errorf("invalid OpenRouter data_collection translation")
@@ -3138,6 +3196,7 @@ func validateServeCheckOpenRouterProviderFields(path string, body map[string]any
 }
 
 type providerStringMap map[string]string
+type jsonNumberString string
 
 func validateServeCheckOpenRouterProviderExact(path string, body map[string]any, expected map[string]any) error {
 	if err := validateServeCheckOpenRouterProviderFields(path, body); err != nil {
@@ -3191,6 +3250,8 @@ func providerValueEqual(got, want any) bool {
 			}
 		}
 		return true
+	case jsonNumberString:
+		return jsonNumberEquals(got, string(expected))
 	default:
 		return got == want
 	}
@@ -3245,6 +3306,30 @@ func isOpenRouterSortTranslation(value any) bool {
 					return false
 				}
 			default:
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+func isOpenRouterPerformancePreferenceTranslation(value any) bool {
+	switch preference := value.(type) {
+	case json.Number:
+		return true
+	case map[string]any:
+		if len(preference) == 0 {
+			return false
+		}
+		for key, value := range preference {
+			switch key {
+			case "p50", "p75", "p90", "p99":
+			default:
+				return false
+			}
+			if _, ok := value.(json.Number); !ok {
 				return false
 			}
 		}
@@ -4070,6 +4155,21 @@ func (u *serveCheckUpstream) handleServeCheckStream(w http.ResponseWriter, r *ht
 			}
 		case "stream-provider-sort-sentinel":
 			if err := validateServeCheckOpenRouterProviderSortSentinel(r.URL.Path, body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		case "stream-provider-performance-direct":
+			if err := validateServeCheckOpenRouterProviderPerformanceDirect(r.URL.Path, body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		case "stream-provider-performance-object":
+			if err := validateServeCheckOpenRouterProviderPerformanceObject(r.URL.Path, body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		case "stream-provider-performance-sentinel":
+			if err := validateServeCheckOpenRouterProviderPerformanceSentinel(r.URL.Path, body); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
@@ -5761,6 +5861,22 @@ func openRouterProviderSortCombinedExtra() string {
 	return `"provider_options":{"openrouter":{"provider":{"sort":{"by":"throughput","partition":"model"},"only":["deepinfra"],"ignore":["openai"],"allow_fallbacks":false,"quantizations":["fp16"],"max_price":{"prompt":0.00000123}}}}`
 }
 
+func openRouterProviderPerformanceDirectExtra() string {
+	return `"provider_options":{"openrouter":{"provider":{"preferred_max_latency":5,"preferred_min_throughput":100}}}`
+}
+
+func openRouterProviderPerformanceObjectExtra() string {
+	return `"provider_options":{"openrouter":{"provider":{"preferred_max_latency":{"p50":5,"p90":10},"preferred_min_throughput":{"p50":100,"p90":50}}}}`
+}
+
+func openRouterProviderPerformanceSentinelExtra() string {
+	return `"provider_options":{"openrouter":{"provider":{"preferred_max_latency":{"p50":0.00000123,"p99":1e-7},"preferred_min_throughput":{"p75":98765.4321,"p99":1e-1024}}}}`
+}
+
+func openRouterProviderPerformanceCombinedExtra() string {
+	return `"provider_options":{"openrouter":{"provider":{"sort":{"by":"throughput","partition":"model"},"only":["deepinfra"],"ignore":["openai"],"allow_fallbacks":false,"quantizations":["fp16"],"max_price":{"prompt":0.00000123},"preferred_max_latency":5,"preferred_min_throughput":{"p50":100,"p90":50}}}}`
+}
+
 func openRouterPrivacyProviderExtra() string {
 	return `"provider_options":{"openrouter":{"provider":{"require_parameters":true,"data_collection":"deny","zdr":true}}}`
 }
@@ -5837,8 +5953,34 @@ func providerOptionInvalidCases(providerType string) []providerOptionInvalidCase
 			{name: "sort-bad-partition", extra: `"provider_options":{"openrouter":{"provider":{"sort":{"partition":"` + providerOptionPrivacyMarker + `"}}}}`},
 			{name: "sort-null-partition", extra: `"provider_options":{"openrouter":{"provider":{"sort":{"partition":null}}}}`},
 			{name: "sort-with-order", extra: `"provider_options":{"openrouter":{"provider":{"sort":"price","order":["deepinfra"]}}}`},
-			{name: "provider-preferred-max-latency", extra: `"provider_options":{"openrouter":{"provider":{"preferred_max_latency":{"p50":"` + providerOptionPrivacyMarker + `"}}}}`},
-			{name: "provider-preferred-min-throughput", extra: `"provider_options":{"openrouter":{"provider":{"preferred_min_throughput":{"p50":"` + providerOptionPrivacyMarker + `"}}}}`},
+			{name: "preferred-max-latency-null", extra: `"provider_options":{"openrouter":{"provider":{"preferred_max_latency":null}}}`},
+			{name: "preferred-max-latency-string", extra: `"provider_options":{"openrouter":{"provider":{"preferred_max_latency":"5"}}}`},
+			{name: "preferred-max-latency-bool", extra: `"provider_options":{"openrouter":{"provider":{"preferred_max_latency":true}}}`},
+			{name: "preferred-max-latency-array", extra: `"provider_options":{"openrouter":{"provider":{"preferred_max_latency":[5]}}}`},
+			{name: "preferred-max-latency-empty-object", extra: `"provider_options":{"openrouter":{"provider":{"preferred_max_latency":{}}}}`},
+			{name: "preferred-max-latency-unknown-key", extra: `"provider_options":{"openrouter":{"provider":{"preferred_max_latency":{"` + providerOptionPrivacyMarker + `":5}}}}`},
+			{name: "preferred-max-latency-null-value", extra: `"provider_options":{"openrouter":{"provider":{"preferred_max_latency":{"p50":null}}}}`},
+			{name: "preferred-max-latency-string-value", extra: `"provider_options":{"openrouter":{"provider":{"preferred_max_latency":{"p50":"` + providerOptionPrivacyMarker + `"}}}}`},
+			{name: "preferred-max-latency-zero", extra: `"provider_options":{"openrouter":{"provider":{"preferred_max_latency":0}}}`},
+			{name: "preferred-max-latency-negative", extra: `"provider_options":{"openrouter":{"provider":{"preferred_max_latency":-0.000001}}}`},
+			{name: "preferred-max-latency-above-int", extra: `"provider_options":{"openrouter":{"provider":{"preferred_max_latency":1000001}}}`},
+			{name: "preferred-max-latency-above-decimal", extra: `"provider_options":{"openrouter":{"provider":{"preferred_max_latency":1000000.000001}}}`},
+			{name: "preferred-max-latency-overflow", extra: `"provider_options":{"openrouter":{"provider":{"preferred_max_latency":1e9999}}}`},
+			{name: "preferred-max-latency-huge-exponent", extra: `"provider_options":{"openrouter":{"provider":{"preferred_max_latency":1e1000000000}}}`},
+			{name: "preferred-min-throughput-null", extra: `"provider_options":{"openrouter":{"provider":{"preferred_min_throughput":null}}}`},
+			{name: "preferred-min-throughput-string", extra: `"provider_options":{"openrouter":{"provider":{"preferred_min_throughput":"100"}}}`},
+			{name: "preferred-min-throughput-bool", extra: `"provider_options":{"openrouter":{"provider":{"preferred_min_throughput":true}}}`},
+			{name: "preferred-min-throughput-array", extra: `"provider_options":{"openrouter":{"provider":{"preferred_min_throughput":[100]}}}`},
+			{name: "preferred-min-throughput-empty-object", extra: `"provider_options":{"openrouter":{"provider":{"preferred_min_throughput":{}}}}`},
+			{name: "preferred-min-throughput-unknown-key", extra: `"provider_options":{"openrouter":{"provider":{"preferred_min_throughput":{"` + providerOptionPrivacyMarker + `":100}}}}`},
+			{name: "preferred-min-throughput-null-value", extra: `"provider_options":{"openrouter":{"provider":{"preferred_min_throughput":{"p50":null}}}}`},
+			{name: "preferred-min-throughput-string-value", extra: `"provider_options":{"openrouter":{"provider":{"preferred_min_throughput":{"p50":"` + providerOptionPrivacyMarker + `"}}}}`},
+			{name: "preferred-min-throughput-zero", extra: `"provider_options":{"openrouter":{"provider":{"preferred_min_throughput":0}}}`},
+			{name: "preferred-min-throughput-negative", extra: `"provider_options":{"openrouter":{"provider":{"preferred_min_throughput":-0.000001}}}`},
+			{name: "preferred-min-throughput-above-int", extra: `"provider_options":{"openrouter":{"provider":{"preferred_min_throughput":1000001}}}`},
+			{name: "preferred-min-throughput-above-decimal", extra: `"provider_options":{"openrouter":{"provider":{"preferred_min_throughput":1000000.000001}}}`},
+			{name: "preferred-min-throughput-overflow", extra: `"provider_options":{"openrouter":{"provider":{"preferred_min_throughput":1e9999}}}`},
+			{name: "preferred-min-throughput-huge-exponent", extra: `"provider_options":{"openrouter":{"provider":{"preferred_min_throughput":1e1000000000}}}`},
 			{name: "provider-enforce-distillable-text", extra: `"provider_options":{"openrouter":{"provider":{"enforce_distillable_text":"` + providerOptionPrivacyMarker + `"}}}`},
 			{name: "provider-extra", extra: `"provider_options":{"openrouter":{"provider":{"require_parameters":true,"` + providerOptionPrivacyMarker + `":true}}}`},
 			{name: "user-id", extra: `"provider_options":{"openrouter":{"user_id":"` + userIDPrivacyMarker + `"}}`},
@@ -5854,6 +5996,7 @@ func providerOptionInvalidCases(providerType string) []providerOptionInvalidCase
 		{name: "openrouter-provider-targets", extra: openRouterProviderTargetsExtra()},
 		{name: "openrouter-provider-filters", extra: openRouterProviderFiltersExtra()},
 		{name: "openrouter-provider-sort", extra: openRouterProviderSortStringExtra()},
+		{name: "openrouter-provider-performance", extra: openRouterProviderPerformanceDirectExtra()},
 		{name: "extra-namespace", extra: `"provider_options":{"deepseek":{"thinking":{"type":"disabled"}},"openrouter":{"reasoning":{"effort":"high"}}}`},
 		{name: "unknown-key", extra: `"provider_options":{"deepseek":{"provider-option-private-marker":true}}`},
 		{name: "bad-thinking", extra: `"provider_options":{"deepseek":{"thinking":true}}`},
@@ -6247,6 +6390,45 @@ func exerciseChatAdapterCheck(ctx context.Context, base, token string, instance 
 		}
 		if !fakeUpstream.sawExpected(expectedPath, "provider-sort-combined") {
 			return fmt.Errorf("provider sort combined did not reach upstream provider=%s", instance.ID)
+		}
+		performanceDirectBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-performance-direct", openRouterProviderPerformanceDirectExtra()))
+		if status, _, err := postJSON(base+"/v1/chat/completions", token, performanceDirectBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("provider performance direct provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if !fakeUpstream.sawExpected(expectedPath, "provider-performance-direct") {
+			return fmt.Errorf("provider performance direct did not reach upstream provider=%s", instance.ID)
+		}
+		performanceObjectBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-performance-object", openRouterProviderPerformanceObjectExtra()))
+		if status, _, err := postJSON(base+"/v1/chat/completions", token, performanceObjectBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("provider performance object provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if !fakeUpstream.sawExpected(expectedPath, "provider-performance-object") {
+			return fmt.Errorf("provider performance object did not reach upstream provider=%s", instance.ID)
+		}
+		performanceSentinelBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-performance-sentinel", openRouterProviderPerformanceSentinelExtra()))
+		status, respBody, err = postJSON(base+"/v1/chat/completions", token, performanceSentinelBody)
+		if err != nil || status != http.StatusOK {
+			return fmt.Errorf("provider performance sentinel provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		for _, marker := range []string{"0.00000123", "1e-7", "98765.4321", "1e-1024"} {
+			if bytes.Contains(respBody, []byte(marker)) {
+				return fmt.Errorf("provider performance sentinel echoed private marker")
+			}
+		}
+		if !fakeUpstream.sawExpected(expectedPath, "provider-performance-sentinel") {
+			return fmt.Errorf("provider performance sentinel did not reach upstream provider=%s", instance.ID)
+		}
+		for _, marker := range []string{"0.00000123", "1e-7", "98765.4321", "1e-1024"} {
+			if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
+				return err
+			}
+		}
+		performanceCombinedBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-performance-combined", openRouterProviderPerformanceCombinedExtra()))
+		if status, _, err := postJSON(base+"/v1/chat/completions", token, performanceCombinedBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("provider performance combined provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if !fakeUpstream.sawExpected(expectedPath, "provider-performance-combined") {
+			return fmt.Errorf("provider performance combined did not reach upstream provider=%s", instance.ID)
 		}
 		privacyBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],%s}`, instance.ID+"/provider-privacy", openRouterPrivacyProviderExtra()))
 		if status, _, err := postJSON(base+"/v1/chat/completions", token, privacyBody); err != nil || status != http.StatusOK {
@@ -7000,6 +7182,38 @@ func exerciseStreamingChatAdapterCheck(ctx context.Context, base, token string, 
 		}
 		if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, "exacto"); err != nil {
 			return err
+		}
+		performanceDirectBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/stream-provider-performance-direct", openRouterProviderPerformanceDirectExtra()))
+		if status, _, _, _, err := postStream(base+"/v1/chat/completions", token, performanceDirectBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("stream provider performance direct provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if !fakeUpstream.sawExpectedStream(expectedPath, "stream-provider-performance-direct") {
+			return fmt.Errorf("stream provider performance direct did not reach upstream provider=%s", instance.ID)
+		}
+		performanceObjectBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/stream-provider-performance-object", openRouterProviderPerformanceObjectExtra()))
+		if status, _, _, _, err := postStream(base+"/v1/chat/completions", token, performanceObjectBody); err != nil || status != http.StatusOK {
+			return fmt.Errorf("stream provider performance object provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		if !fakeUpstream.sawExpectedStream(expectedPath, "stream-provider-performance-object") {
+			return fmt.Errorf("stream provider performance object did not reach upstream provider=%s", instance.ID)
+		}
+		performanceSentinelBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/stream-provider-performance-sentinel", openRouterProviderPerformanceSentinelExtra()))
+		status, _, _, respBody, err = postStream(base+"/v1/chat/completions", token, performanceSentinelBody)
+		if err != nil || status != http.StatusOK {
+			return fmt.Errorf("stream provider performance sentinel provider=%s status=%d err=%v", instance.ID, status, err)
+		}
+		for _, marker := range []string{"0.00000123", "1e-7", "98765.4321", "1e-1024"} {
+			if bytes.Contains(respBody, []byte(marker)) {
+				return fmt.Errorf("stream provider performance sentinel echoed private marker")
+			}
+		}
+		if !fakeUpstream.sawExpectedStream(expectedPath, "stream-provider-performance-sentinel") {
+			return fmt.Errorf("stream provider performance sentinel did not reach upstream provider=%s", instance.ID)
+		}
+		for _, marker := range []string{"0.00000123", "1e-7", "98765.4321", "1e-1024"} {
+			if err := assertServeCheckMarkerAbsentOutsideSecrets(ctx, store, marker); err != nil {
+				return err
+			}
 		}
 		privacyBody := []byte(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"check"}],"stream":true,"stream_options":{"include_usage":true},%s}`, instance.ID+"/stream-provider-privacy", openRouterPrivacyProviderExtra()))
 		if status, _, _, _, err := postStream(base+"/v1/chat/completions", token, privacyBody); err != nil || status != http.StatusOK {
@@ -7854,6 +8068,14 @@ func exerciseCodexNoEligibleCacheCheck(ctx context.Context, registry provider.Re
 	}
 	invalidProviderSortBody := []byte(`{"model":"codex/codex-noeligible-invalid-provider-sort","messages":[{"role":"user","content":"check"}],"provider_options":{"openrouter":{"provider":{"sort":{}}}}}`)
 	if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, invalidProviderSortBody, fakeUpstream, "/responses", "codex-noeligible-invalid-provider-sort", "codex noeligible invalid openrouter provider sort"); err != nil {
+		return err
+	}
+	unsupportedProviderPerformanceBody := []byte(`{"model":"codex/codex-noeligible-openrouter-provider-performance","messages":[{"role":"user","content":"check"}],` + openRouterProviderPerformanceDirectExtra() + `}`)
+	if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, unsupportedProviderPerformanceBody, fakeUpstream, "/responses", "codex-noeligible-openrouter-provider-performance", "codex noeligible openrouter provider performance"); err != nil {
+		return err
+	}
+	invalidProviderPerformanceBody := []byte(`{"model":"codex/codex-noeligible-invalid-provider-performance","messages":[{"role":"user","content":"check"}],"provider_options":{"openrouter":{"provider":{"preferred_max_latency":0}}}}`)
+	if err := assertUnsupportedChatNoUpstream(testServer.URL, created.Token, invalidProviderPerformanceBody, fakeUpstream, "/responses", "codex-noeligible-invalid-provider-performance", "codex noeligible invalid openrouter provider performance"); err != nil {
 		return err
 	}
 	unsupportedUserIDOptionsBody := []byte(`{"model":"codex/codex-noeligible-deepseek-user-id","messages":[{"role":"user","content":"check"}],` + deepSeekUserIDExtra(userIDPrivacyMarker) + `}`)

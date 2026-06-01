@@ -28,12 +28,8 @@
   routing, HTTP transport, TUI, config, and SQLite storage as separate
   boundaries.
 - The TUI may mutate SQLite, but it must not mutate `config.toml`.
-- Do not store prompts, completions, request bodies, response bodies, raw
-  provider payloads, raw SSE chunks, tool arguments, tool results, full bearer
-  tokens, full provider request IDs, or full account IDs. Full account IDs may
-  be derived transiently from credential secrets for outbound provider routing
-  headers only; never store them separately, log them, render them, snapshot
-  them, or write them to metadata.
+- Only store if IO logging is enabled for the request: prompts, completions, request bodies, response bodies, raw
+  provider payloads, raw SSE chunks, tool arguments, tool result.
 
 ## Execution Style
 

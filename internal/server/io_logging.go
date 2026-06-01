@@ -74,6 +74,10 @@ func (s *Server) ioLog(r *http.Request, record logging.IORecord) {
 	s.ioLogger.Record(record)
 }
 
+func (s *Server) captureIOEnabled() bool {
+	return s.ioLogger != nil
+}
+
 type ioRequestMetadata struct {
 	Model             string   `json:"model,omitempty"`
 	Stream            *bool    `json:"stream,omitempty"`

@@ -201,6 +201,31 @@ func codexResponsesRequestShapeAttrs(req openai.ChatCompletionRequest) []slog.At
 	return attrs
 }
 
+func codexResponsesErrorAttrs(body []byte) []slog.Attr {
+	body = bytes.TrimSpace(body)
+	if len(body) == 0 {
+		return nil
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil
+	}
+	var attrs []slog.Attr
+	if nested, ok := raw["error"].(map[string]any); ok {
+		if value := safeOAuthLogString(nested["type"]); value != "" {
+			attrs = append(attrs, slog.String("upstream_error_type", value))
+		}
+		if value := safeOAuthLogString(nested["message"]); value != "" {
+			attrs = append(attrs, slog.String("upstream_error_summary", value))
+		}
+		return attrs
+	}
+	if value := safeOAuthLogString(raw["message"]); value != "" {
+		attrs = append(attrs, slog.String("upstream_error_summary", value))
+	}
+	return attrs
+}
+
 type codexInputShape struct {
 	missingType             int
 	messageItems            int

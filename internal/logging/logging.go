@@ -199,7 +199,9 @@ func safeStructuralLogKey(key string) bool {
 		"codex_assistant_input_text_parts",
 		"codex_last_input_type",
 		"codex_last_input_role",
-		"codex_last_content_types":
+		"codex_last_content_types",
+		"upstream_error_summary",
+		"upstream_error_type":
 		return true
 	default:
 		return false

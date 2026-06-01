@@ -124,6 +124,9 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 		}
 		if resp.StatusCode == http.StatusBadRequest {
 			attrs = append(attrs, codexResponsesRequestShapeAttrs(req.Request)...)
+			if req.CaptureIO {
+				attrs = append(attrs, codexResponsesErrorAttrs(respBody)...)
+			}
 		}
 		logProviderHTTP(ctx, a.Logger, statusLevel(resp.StatusCode, errorClass), "provider_http", attrs...)
 		return ChatResult{StatusCode: http.StatusBadGateway, UpstreamStatusCode: resp.StatusCode, ContentType: "application/json", ErrorClass: errorClass, Latency: time.Since(start), RetryAfter: retryAfter}, fmt.Errorf("codex responses status %d", resp.StatusCode)

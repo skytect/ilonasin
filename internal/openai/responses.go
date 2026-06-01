@@ -704,7 +704,7 @@ func codexResponsesInputAndInstructions(raw []json.RawMessage, input []ResponseI
 			continue
 		}
 		if item.Type == "message" && (item.Role == "user" || item.Role == "assistant") {
-			encoded, err := codexResponsesMessageInput(raw[i])
+			encoded, err := codexResponsesMessageInput(raw[i], item)
 			if err != nil {
 				return nil, "", fmt.Errorf("input[%d] is invalid: %w", i, err)
 			}
@@ -716,12 +716,31 @@ func codexResponsesInputAndInstructions(raw []json.RawMessage, input []ResponseI
 	return out, strings.Join(instructionParts, "\n\n"), nil
 }
 
-func codexResponsesMessageInput(raw json.RawMessage) (json.RawMessage, error) {
+func codexResponsesMessageInput(raw json.RawMessage, item ResponseInputItem) (json.RawMessage, error) {
 	var payload map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return nil, err
 	}
-	delete(payload, "type")
+	if _, hasType := payload["type"]; !hasType {
+		return raw, nil
+	}
+	if _, hasRole := payload["role"]; !hasRole {
+		return raw, nil
+	}
+	if rawContent, ok := payload["content"]; ok {
+		if text, ok := rawJSONStringValue(rawContent); ok {
+			payload = map[string]json.RawMessage{
+				"role":    payload["role"],
+				"content": mustRawJSONString(text),
+			}
+			return json.Marshal(payload)
+		}
+	}
+	delete(payload, "id")
+	delete(payload, "status")
+	if item.Role == "user" || item.Role == "assistant" {
+		return json.Marshal(payload)
+	}
 	return json.Marshal(payload)
 }
 

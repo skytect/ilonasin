@@ -31,6 +31,7 @@ type ChatRequest struct {
 	Request         openai.ChatCompletionRequest
 	Credential      ChatCredential
 	ModelCredential BearerCredential
+	CaptureIO       bool
 }
 
 type ModelRequest struct {

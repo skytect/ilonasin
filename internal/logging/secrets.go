@@ -1,11 +1,44 @@
 package logging
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+)
 
 func normalizedSecretKey(key string) string {
-	key = strings.ToLower(strings.TrimSpace(key))
-	key = strings.ReplaceAll(key, "-", "_")
-	return key
+	key = strings.TrimSpace(key)
+	var b strings.Builder
+	lastUnderscore := false
+	lastWasLowerOrDigit := false
+	for _, r := range key {
+		switch {
+		case r == '-' || r == '_' || unicode.IsSpace(r):
+			if b.Len() > 0 && !lastUnderscore {
+				b.WriteByte('_')
+				lastUnderscore = true
+			}
+			lastWasLowerOrDigit = false
+		case unicode.IsUpper(r):
+			if b.Len() > 0 && !lastUnderscore && lastWasLowerOrDigit {
+				b.WriteByte('_')
+			}
+			b.WriteRune(unicode.ToLower(r))
+			lastUnderscore = false
+			lastWasLowerOrDigit = true
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			b.WriteRune(unicode.ToLower(r))
+			lastUnderscore = false
+			lastWasLowerOrDigit = unicode.IsLower(r) || unicode.IsDigit(r)
+		default:
+			if b.Len() > 0 && !lastUnderscore {
+				b.WriteByte('_')
+				lastUnderscore = true
+			}
+			lastWasLowerOrDigit = false
+		}
+	}
+	out := b.String()
+	return strings.Trim(out, "_")
 }
 
 func IsCredentialKey(key string) bool {
@@ -21,6 +54,7 @@ func IsCredentialKey(key string) bool {
 		"refresh_token",
 		"id_token",
 		"api_key",
+		"x_api_key",
 		"secret",
 		"client_secret",
 		"authorization_code",

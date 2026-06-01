@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -88,6 +89,9 @@ func ScrubIOBody(body []byte) string {
 			return string(out)
 		}
 	}
+	if clean, ok := scrubFormBody(trimmed); ok {
+		return clean
+	}
 	return scrubSecretMarkers(string(body))
 }
 
@@ -116,6 +120,7 @@ func scrubJSON(value any) any {
 
 func scrubSecretMarkers(value string) string {
 	value = redactHeaderLines(value)
+	value = redactKeyValueMarkers(value)
 	value = bearerPattern.ReplaceAllString(value, "Bearer [redacted]")
 	value = localTokenPattern.ReplaceAllString(value, "iln_[redacted]")
 	return value
@@ -124,7 +129,39 @@ func scrubSecretMarkers(value string) string {
 var (
 	bearerPattern     = regexp.MustCompile(`(?i)Bearer\s+[A-Za-z0-9._~+/=-]+`)
 	localTokenPattern = regexp.MustCompile(`iln_[A-Za-z0-9._~+/=-]+`)
+	keyValuePattern   = regexp.MustCompile(`(?i)([A-Za-z][A-Za-z0-9 _.-]{1,64})(\s*[:=]\s*)([^\s&;,]+)`)
 )
+
+func scrubFormBody(body []byte) (string, bool) {
+	text := string(body)
+	if !strings.Contains(text, "=") {
+		return "", false
+	}
+	values, err := url.ParseQuery(text)
+	if err != nil || len(values) == 0 {
+		return "", false
+	}
+	changed := false
+	for key, items := range values {
+		for i := range items {
+			if IsCredentialKey(key) {
+				items[i] = "[redacted]"
+				changed = true
+				continue
+			}
+			clean := scrubSecretMarkers(items[i])
+			if clean != items[i] {
+				items[i] = clean
+				changed = true
+			}
+		}
+		values[key] = items
+	}
+	if !changed {
+		return "", false
+	}
+	return values.Encode(), true
+}
 
 func redactHeaderLines(value string) string {
 	lines := strings.SplitAfter(value, "\n")
@@ -142,4 +179,14 @@ func redactHeaderLines(value string) string {
 		}
 	}
 	return strings.Join(lines, "")
+}
+
+func redactKeyValueMarkers(value string) string {
+	return keyValuePattern.ReplaceAllStringFunc(value, func(match string) string {
+		parts := keyValuePattern.FindStringSubmatch(match)
+		if len(parts) != 4 || !IsCredentialKey(parts[1]) {
+			return match
+		}
+		return parts[1] + parts[2] + "[redacted]"
+	})
 }

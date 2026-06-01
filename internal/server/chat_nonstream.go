@@ -167,29 +167,20 @@ func (s *Server) recordNonStreamingChat(r *http.Request, nc nonStreamContext, ex
 	if nc.maxOutputTokens > 0 {
 		requestMeta.MaxOutputTokens = nc.maxOutputTokens
 	}
-	requestMeta.CredentialID = exec.final.credential.ID
-	requestMeta.ResolvedModel = resolvedChatModel(nc.address.ProviderModelID, exec.final.result.ResolvedModel)
-	requestMeta.HTTPStatus = status
-	requestMeta.ErrorClass = errorClass
-	requestMeta.RetryCount = exec.authRetries + len(exec.fallbackEvents)
-	requestMeta.AuthRetryCount = exec.authRetries
-	requestMeta.AttemptCount = exec.attemptCount
-	requestMeta.FallbackCount = len(exec.fallbackEvents)
-	requestMeta.FallbackReason = fallbackReason(exec.fallbackEvents)
-	requestMeta.PromptTokens = exec.final.result.Usage.PromptTokens
-	requestMeta.CompletionTokens = exec.final.result.Usage.CompletionTokens
-	requestMeta.TotalTokens = exec.final.result.Usage.TotalTokens
-	requestMeta.ReasoningTokens = exec.final.result.Usage.ReasoningTokens
-	requestMeta.CacheHitTokens = exec.final.result.Usage.CachedTokens
-	requestMeta.CacheWriteTokens = exec.final.result.Usage.CacheWriteTokens
-	requestMeta.CostMicrounits = exec.final.result.Usage.CostMicrounits
-	requestMeta.TotalLatencyMS = time.Since(nc.start).Milliseconds()
-	requestMeta.UpstreamLatencyMS = exec.final.result.Latency.Milliseconds()
-	if exec.final.result.EffectiveServiceTier != "" {
-		requestMeta.EffectiveServiceTier = exec.final.result.EffectiveServiceTier
-	}
-	requestMeta.OutputTokensPerSecondTotal = outputTPS(requestMeta.CompletionTokens, requestMeta.TotalLatencyMS)
-	requestMeta.OutputTokensPerSecond = requestMeta.OutputTokensPerSecondTotal
+	finalizeChatRequestMetadata(&requestMeta, chatMetadataFinalizer{
+		credentialID:         exec.final.credential.ID,
+		upstreamModel:        nc.address.ProviderModelID,
+		resolvedModel:        exec.final.result.ResolvedModel,
+		status:               status,
+		errorClass:           errorClass,
+		authRetries:          exec.authRetries,
+		attemptCount:         exec.attemptCount,
+		fallbackEvents:       exec.fallbackEvents,
+		usage:                exec.final.result.Usage,
+		totalLatency:         time.Since(nc.start),
+		upstreamLatency:      exec.final.result.Latency,
+		effectiveServiceTier: exec.final.result.EffectiveServiceTier,
+	})
 	requestID, _ := s.recordWithID(recordCtx, requestMeta)
 	s.recordQuotaObservations(recordCtx, requestID, exec.quotaObservations)
 	s.recordFallbacks(recordCtx, requestID, exec.fallbackEvents)

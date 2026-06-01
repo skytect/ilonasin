@@ -261,34 +261,26 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 		errorClass = "upstream_http_error"
 	}
 	requestMeta := requestMetadataBase(sc.start, sc.token, sc.address, sc.instance, sc.request, sc.endpoint, true)
-	requestMeta.CredentialID = final.credential.ID
-	requestMeta.ResolvedModel = resolvedChatModel(sc.address.ProviderModelID, summary.ResolvedModel)
-	requestMeta.HTTPStatus = status
-	requestMeta.ErrorClass = errorClass
-	requestMeta.RetryCount = authRetries + len(fallbackEvents)
-	requestMeta.AuthRetryCount = authRetries
-	requestMeta.AttemptCount = attemptCount
-	requestMeta.FallbackCount = len(fallbackEvents)
-	requestMeta.FallbackReason = fallbackReason(fallbackEvents)
-	requestMeta.PromptTokens = summary.Usage.PromptTokens
-	requestMeta.CompletionTokens = summary.Usage.CompletionTokens
-	requestMeta.TotalTokens = summary.Usage.TotalTokens
-	requestMeta.ReasoningTokens = summary.Usage.ReasoningTokens
-	requestMeta.CacheHitTokens = summary.Usage.CachedTokens
-	requestMeta.CacheWriteTokens = summary.Usage.CacheWriteTokens
-	requestMeta.CostMicrounits = summary.Usage.CostMicrounits
-	requestMeta.TotalLatencyMS = time.Since(sc.start).Milliseconds()
-	requestMeta.UpstreamLatencyMS = summary.Latency.Milliseconds()
+	finalizeChatRequestMetadata(&requestMeta, chatMetadataFinalizer{
+		credentialID:         final.credential.ID,
+		upstreamModel:        sc.address.ProviderModelID,
+		resolvedModel:        summary.ResolvedModel,
+		status:               status,
+		errorClass:           errorClass,
+		authRetries:          authRetries,
+		attemptCount:         attemptCount,
+		fallbackEvents:       fallbackEvents,
+		usage:                summary.Usage,
+		totalLatency:         time.Since(sc.start),
+		upstreamLatency:      summary.Latency,
+		effectiveServiceTier: summary.EffectiveServiceTier,
+	})
 	requestMeta.TimeToFirstTokenMS = summary.TimeToFirstTokenMS
-	requestMeta.OutputTokensPerSecondTotal = outputTPS(requestMeta.CompletionTokens, requestMeta.TotalLatencyMS)
 	if requestMeta.OutputTokensPerSecondTotal == 0 {
 		requestMeta.OutputTokensPerSecondTotal = summary.OutputTokensPerSecond
 	}
 	requestMeta.OutputTokensPerSecond = requestMeta.OutputTokensPerSecondTotal
 	requestMeta.OutputTokensPerSecondAfterTTFT = outputTPSAfterTTFT(requestMeta.CompletionTokens, requestMeta.TotalLatencyMS, requestMeta.TimeToFirstTokenMS)
-	if summary.EffectiveServiceTier != "" {
-		requestMeta.EffectiveServiceTier = summary.EffectiveServiceTier
-	}
 	requestID, _ := s.recordWithID(recordCtx, requestMeta)
 	completionStatus := summary.CompletionStatus
 	if completionStatus == "" {

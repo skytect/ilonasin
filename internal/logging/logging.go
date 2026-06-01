@@ -218,36 +218,36 @@ func attrsToAny(attrs []slog.Attr) []any {
 
 func unsafeKey(key string) bool {
 	key = strings.ToLower(key)
-	for _, marker := range []string{
-		"auth",
-		"authorization",
+	key = strings.ReplaceAll(key, "-", "_")
+	switch key {
+	case "authorization",
+		"proxy_authorization",
 		"bearer",
+		"bearer_token",
 		"token",
+		"access_token",
+		"refresh_token",
+		"id_token",
+		"api_key",
 		"secret",
-		"key",
+		"client_secret",
 		"cookie",
-		"code",
+		"set_cookie",
+		"authorization_code",
+		"device_code",
+		"user_code",
+		"code_verifier",
 		"verifier",
-		"account",
-		"request_id",
-		"generation_id",
-		"url",
-		"uri",
-		"host",
-		"path",
-		"query",
+		"agent_identity",
+		"private_key",
 		"header",
+		"headers",
 		"body",
 		"payload",
-		"prompt",
-		"completion",
 		"raw",
-		"stdout",
-		"stderr",
-	} {
-		if strings.Contains(key, marker) {
-			return true
-		}
+		"stdout":
+		return true
+	default:
+		return false
 	}
-	return false
 }

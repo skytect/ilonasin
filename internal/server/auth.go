@@ -20,7 +20,7 @@ func (s *Server) withAuth(next func(http.ResponseWriter, *http.Request, credenti
 				if status == 0 {
 					status = http.StatusOK
 				}
-				s.ioLogOutput(r, status, w.Header().Get("Content-Type"), capture.bytes)
+				s.ioLogCapturedOutput(r, status, w.Header().Get("Content-Type"), capture.bytes, capture.body.Bytes(), capture.bodyTruncated)
 			}()
 		}
 		rec, err := s.auth.VerifyBearer(r.Context(), r.Header.Get("Authorization"))

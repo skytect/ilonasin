@@ -1,9 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"ilonasin/internal/logging"
@@ -11,10 +13,14 @@ import (
 
 type ioLogContextKey struct{}
 
+const maxIOOutputBodyBytes = 64 << 20
+
 type ioCountingResponseWriter struct {
 	http.ResponseWriter
-	status int
-	bytes  int
+	status        int
+	bytes         int
+	body          bytes.Buffer
+	bodyTruncated bool
 }
 
 func (w *ioCountingResponseWriter) WriteHeader(status int) {
@@ -30,6 +36,20 @@ func (w *ioCountingResponseWriter) Write(body []byte) (int, error) {
 	}
 	n, err := w.ResponseWriter.Write(body)
 	w.bytes += n
+	if isEventStreamContentType(w.Header().Get("Content-Type")) {
+		return n, err
+	}
+	if w.body.Len() < maxIOOutputBodyBytes {
+		remaining := maxIOOutputBodyBytes - w.body.Len()
+		if len(body) > remaining {
+			w.body.Write(body[:remaining])
+			w.bodyTruncated = true
+		} else {
+			w.body.Write(body)
+		}
+	} else if len(body) > 0 {
+		w.bodyTruncated = true
+	}
 	return n, err
 }
 
@@ -46,6 +66,7 @@ func (s *Server) ioLogInput(r *http.Request, body []byte) {
 		Route:       routeLabel(r),
 		ContentType: r.Header.Get("Content-Type"),
 		Bytes:       len(body),
+		Body:        logging.ScrubIOBody(body),
 		Meta:        ioRequestMeta(body),
 	})
 }
@@ -58,6 +79,42 @@ func (s *Server) ioLogOutput(r *http.Request, status int, contentType string, by
 		Status:      status,
 		ContentType: contentType,
 		Bytes:       bytes,
+	})
+}
+
+func (s *Server) ioLogCapturedOutput(r *http.Request, status int, contentType string, bytes int, body []byte, truncated bool) {
+	if isEventStreamContentType(contentType) {
+		s.ioLogOutput(r, status, contentType, bytes)
+		return
+	}
+	record := logging.IORecord{
+		Direction:   "output",
+		Method:      r.Method,
+		Route:       routeLabel(r),
+		Status:      status,
+		ContentType: contentType,
+		Bytes:       bytes,
+		Body:        logging.ScrubIOBody(body),
+	}
+	if truncated {
+		record.Meta = map[string]any{"body_truncated": true}
+	}
+	s.ioLog(r, record)
+}
+
+func isEventStreamContentType(contentType string) bool {
+	return strings.Contains(strings.ToLower(contentType), "text/event-stream")
+}
+
+func (s *Server) ioLogOutputBody(r *http.Request, status int, contentType string, body []byte) {
+	s.ioLog(r, logging.IORecord{
+		Direction:   "output",
+		Method:      r.Method,
+		Route:       routeLabel(r),
+		Status:      status,
+		ContentType: contentType,
+		Bytes:       len(body),
+		Body:        logging.ScrubIOBody(body),
 	})
 }
 

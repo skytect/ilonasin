@@ -107,7 +107,7 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 		writeError(w, http.StatusInternalServerError, "streaming is not available for this response writer", "api_error", "client_stream_unavailable")
 		return
 	}
-	sink := &streamSink{w: w, flusher: flusher}
+	sink := &streamSink{w: w, flusher: flusher, server: s, request: r}
 	var final streamAttempt
 	var fallbackEvents []metadata.FallbackEvent
 	var quotaObservations []metadata.QuotaObservation
@@ -311,6 +311,8 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 type streamSink struct {
 	w       http.ResponseWriter
 	flusher http.Flusher
+	server  *Server
+	request *http.Request
 	started bool
 }
 
@@ -325,15 +327,18 @@ func (s *streamSink) WriteEvent(_ context.Context, event provider.ChatStreamEven
 	if _, err := s.w.Write([]byte("\n\n")); err != nil {
 		return err
 	}
+	s.logStreamEvent(event.Data)
 	s.flusher.Flush()
 	return nil
 }
 
 func (s *streamSink) WriteDone(_ context.Context) error {
 	s.start()
-	if _, err := s.w.Write([]byte("data: [DONE]\n\n")); err != nil {
+	body := []byte("data: [DONE]\n\n")
+	if _, err := s.w.Write(body); err != nil {
 		return err
 	}
+	s.logStreamEvent(body)
 	s.flusher.Flush()
 	return nil
 }
@@ -348,4 +353,11 @@ func (s *streamSink) start() {
 	header.Set("Connection", "keep-alive")
 	s.w.WriteHeader(http.StatusOK)
 	s.started = true
+}
+
+func (s *streamSink) logStreamEvent(body []byte) {
+	if s.server == nil || s.request == nil || !s.server.captureIOEnabled() {
+		return
+	}
+	s.server.ioLogOutputBody(s.request, http.StatusOK, "text/event-stream", body)
 }

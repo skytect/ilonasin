@@ -20,7 +20,7 @@ The first product target is not a hosted SaaS. It is a local service that:
 - supports API-key and OAuth-style provider credentials,
 - offers a polished Bubble Tea/Lipgloss TUI for management,
 - avoids storing prompts, completions, request bodies, response bodies, tool
-  arguments, or raw stream chunks.
+  arguments, or raw stream chunks in normal operation.
 
 ## Locked Decisions
 
@@ -319,6 +319,13 @@ endpoint response body.
 
 Metadata-only telemetry is allowed and expected.
 
+`[logging].capture_io = true` is the explicit local debugging exception. When
+enabled, `ilonasin-io.log` may persist local request bodies, local response
+bodies, and streamed event payloads needed to debug wire-shape issues. It must
+not persist bearer tokens, local client tokens, upstream API keys, OAuth
+tokens, cookies, authorization codes, device codes, code verifiers, provider
+command stdout, or configured credential secret values.
+
 Full upstream account IDs may be derived transiently from credential secrets
 when building outbound provider routing headers. They must not be stored
 separately, logged, rendered, exposed in management snapshots, written to
@@ -355,8 +362,8 @@ Telemetry retention default: keep forever until pruned.
 
 The TUI should provide pruning controls later.
 
-Debugging features that capture bodies should be out of scope for the MVP. If
-added later, they must require an explicit temporary unsafe mode.
+Debugging features that capture bodies must remain behind the explicit
+`capture_io` switch and must write only to the local IO log.
 
 ### Provider Health
 

@@ -10,6 +10,7 @@ import (
 )
 
 func subscriptionUsageResponse(rows []metadata.SubscriptionUsageSnapshot, keepalive KeepaliveStatus) SubscriptionUsageResponse {
+	now := time.Now().UTC()
 	accountRows := make([]SubscriptionUsageRow, 0, len(rows))
 	for _, row := range rows {
 		accountRows = append(accountRows, subscriptionUsageRow(row))
@@ -17,7 +18,7 @@ func subscriptionUsageResponse(rows []metadata.SubscriptionUsageSnapshot, keepal
 	return SubscriptionUsageResponse{
 		ObservedAt: latestSubscriptionObserved(accountRows),
 		Accounts:   accountRows,
-		Pools:      subscriptionUsageAggregates(accountRows),
+		Pools:      subscriptionUsageAggregates(accountRows, now),
 		Keepalive:  keepalive,
 	}
 }
@@ -51,7 +52,7 @@ func subscriptionUsageRow(row metadata.SubscriptionUsageSnapshot) SubscriptionUs
 	return out
 }
 
-func subscriptionUsageAggregates(rows []SubscriptionUsageRow) []SubscriptionUsageAggregate {
+func subscriptionUsageAggregates(rows []SubscriptionUsageRow, now time.Time) []SubscriptionUsageAggregate {
 	type bucket struct {
 		agg                  SubscriptionUsageAggregate
 		primarySum           float64
@@ -95,8 +96,8 @@ func subscriptionUsageAggregates(rows []SubscriptionUsageRow) []SubscriptionUsag
 		}
 		b.agg.MinimumPrimaryRemainingPercent = math.Min(b.agg.MinimumPrimaryRemainingPercent, row.PrimaryRemainingPercent)
 		b.agg.MinimumSecondaryRemainingPercent = math.Min(b.agg.MinimumSecondaryRemainingPercent, row.SecondaryRemainingPercent)
-		b.agg.EarliestPrimaryResetAt = earliestTime(b.agg.EarliestPrimaryResetAt, row.PrimaryResetAt)
-		b.agg.EarliestSecondaryResetAt = earliestTime(b.agg.EarliestSecondaryResetAt, row.SecondaryResetAt)
+		b.agg.EarliestPrimaryResetAt = earliestFutureTime(b.agg.EarliestPrimaryResetAt, row.PrimaryResetAt, now)
+		b.agg.EarliestSecondaryResetAt = earliestFutureTime(b.agg.EarliestSecondaryResetAt, row.SecondaryResetAt, now)
 	}
 	out := make([]SubscriptionUsageAggregate, 0, len(buckets))
 	for _, b := range buckets {
@@ -200,11 +201,14 @@ func latestSubscriptionObserved(rows []SubscriptionUsageRow) time.Time {
 	return out
 }
 
-func earliestTime(current, candidate *time.Time) *time.Time {
+func earliestFutureTime(current, candidate *time.Time, now time.Time) *time.Time {
 	if candidate == nil {
 		return current
 	}
 	next := candidate.UTC()
+	if !next.After(now) {
+		return current
+	}
 	if current == nil || next.Before(*current) {
 		return &next
 	}

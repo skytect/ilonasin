@@ -212,8 +212,7 @@ func rawResponsesInputItems(raw json.RawMessage) ([]json.RawMessage, error) {
 	}
 	out := make([]json.RawMessage, 0, len(items))
 	for i, item := range items {
-		normalized := normalizeResponsesInputItem(item)
-		rawItem, err := json.Marshal(normalized)
+		rawItem, err := json.Marshal(item)
 		if err != nil {
 			return nil, fmt.Errorf("input[%d] is invalid", i)
 		}

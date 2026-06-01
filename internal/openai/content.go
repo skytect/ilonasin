@@ -44,6 +44,14 @@ func MessageContentParts(msg Message) ([]ChatContentPart, error) {
 	return parts, nil
 }
 
+func MessageContentString(msg Message) (string, error) {
+	var text string
+	if err := json.Unmarshal(msg.Content, &text); err != nil {
+		return "", err
+	}
+	return text, nil
+}
+
 func validateRawUserContent(raw json.RawMessage, index int) error {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 {

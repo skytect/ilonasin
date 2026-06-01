@@ -50,7 +50,7 @@ func (m Model) apiSummaryBody(width int) string {
 			cardTitleStyle.Render("local surfaces"),
 			metricLine(endpointMetricChip("chat", "chat_completions")),
 			metricLine(endpointMetricChip("responses", "responses")),
-			metricLine(endpointMetricChip("anthropic", "anthropic_messages")),
+			metricLine(endpointMetricChip("anthropic", "anthropic_messages"), endpointMetricChip("count", "anthropic_count_tokens")),
 		),
 		renderCompactCard(metricCardWidth(width),
 			cardTitleStyle.Render("downstream keys"),

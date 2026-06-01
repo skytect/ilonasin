@@ -27,7 +27,7 @@ func (s *Server) withAuth(next func(http.ResponseWriter, *http.Request, credenti
 		rec, err := s.auth.VerifyBearer(r.Context(), localAuthorization(r))
 		if err != nil {
 			s.logHTTP(r, http.StatusUnauthorized, "local_auth", "authentication_error")
-			if isAnthropicMessagesRoute(r) {
+			if isAnthropicRoute(r) {
 				writeJSON(w, http.StatusUnauthorized, anthropic.ErrorForStatus(http.StatusUnauthorized, "missing or invalid bearer token"))
 			} else {
 				writeError(w, http.StatusUnauthorized, "missing or invalid bearer token", "authentication_error", "unauthorized")
@@ -43,14 +43,17 @@ func localAuthorization(r *http.Request) string {
 	if authorization := r.Header.Get("Authorization"); authorization != "" {
 		return authorization
 	}
-	if apiKey := r.Header.Get("X-Api-Key"); isAnthropicMessagesRoute(r) && apiKey != "" {
+	if apiKey := r.Header.Get("X-Api-Key"); isAnthropicRoute(r) && apiKey != "" {
 		return "Bearer " + apiKey
 	}
 	return ""
 }
 
-func isAnthropicMessagesRoute(r *http.Request) bool {
-	return r.Method == http.MethodPost && r.URL.Path == "/v1/messages"
+func isAnthropicRoute(r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		return false
+	}
+	return r.URL.Path == "/v1/messages" || r.URL.Path == "/v1/messages/count_tokens"
 }
 
 func (s *Server) logHTTP(r *http.Request, status int, event, errorClass string) {
@@ -93,6 +96,8 @@ func routeLabel(r *http.Request) string {
 		return "v1_chat_completions"
 	case r.Method == http.MethodPost && r.URL.Path == "/v1/messages":
 		return "v1_messages"
+	case r.Method == http.MethodPost && r.URL.Path == "/v1/messages/count_tokens":
+		return "v1_messages_count_tokens"
 	default:
 		return "unknown"
 	}

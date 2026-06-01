@@ -67,6 +67,10 @@ type ErrorBody struct {
 	Message string `json:"message"`
 }
 
+type CountTokensResponse struct {
+	InputTokens int `json:"input_tokens"`
+}
+
 func Error(message string) ErrorEnvelope {
 	return ErrorWithType(message, "invalid_request_error")
 }
@@ -94,6 +98,14 @@ func ErrorWithType(message, errorType string) ErrorEnvelope {
 }
 
 func DecodeRequest(r io.Reader) (Request, error) {
+	return decodeRequest(r, true)
+}
+
+func DecodeCountTokensRequest(r io.Reader) (Request, error) {
+	return decodeRequest(r, false)
+}
+
+func decodeRequest(r io.Reader, requireMaxTokens bool) (Request, error) {
 	dec := json.NewDecoder(r)
 	dec.UseNumber()
 	var raw map[string]json.RawMessage
@@ -115,8 +127,14 @@ func DecodeRequest(r io.Reader) (Request, error) {
 	if err := decodeRequiredString(raw, "model", &req.Model); err != nil {
 		return Request{}, err
 	}
-	if err := decodePositiveInt(raw, "max_tokens", &req.MaxTokens); err != nil {
-		return Request{}, err
+	if requireMaxTokens {
+		if err := decodePositiveInt(raw, "max_tokens", &req.MaxTokens); err != nil {
+			return Request{}, err
+		}
+	} else if _, ok := raw["max_tokens"]; ok {
+		if err := decodePositiveInt(raw, "max_tokens", &req.MaxTokens); err != nil {
+			return Request{}, err
+		}
 	}
 	if err := decodeMessages(raw["messages"], &req.Messages); err != nil {
 		return Request{}, err

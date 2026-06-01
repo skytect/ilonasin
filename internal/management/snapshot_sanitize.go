@@ -148,7 +148,7 @@ func safeAccountDisplayString(value string) string {
 func safeEndpointString(value string) string {
 	value = strings.TrimSpace(value)
 	switch value {
-	case "chat_completions", "responses", "anthropic_messages":
+	case "chat_completions", "responses", "anthropic_messages", "anthropic_count_tokens":
 		return value
 	default:
 		return ""

@@ -65,11 +65,9 @@ func usageGaugeBlock(label string, used, remaining float64, resetLabel string, w
 		width = 22
 	}
 	status := riskLabel(used)
-	usageLabel := "usage"
 	if width < 16 {
 		line := windowStyle.Render(label) + " " +
-			percentBar(used, width) + " " +
-			mutedStyle.Render("use") + " " +
+			balancedUsageBar(used, remaining, width) + " " +
 			valueStyle.Render(compactPercentText(used)+"/"+compactPercentText(remaining))
 		if resetLabel != "" {
 			line += "  " + mutedStyle.Render(compactResetText(resetLabel))
@@ -77,8 +75,7 @@ func usageGaugeBlock(label string, used, remaining float64, resetLabel string, w
 		return line
 	}
 	line := windowStyle.Render(label) + " " +
-		percentBar(used, width) + " " +
-		mutedStyle.Render(usageLabel) + " " +
+		balancedUsageBar(used, remaining, width) + " " +
 		valueStyle.Render("used "+percentText(used)) + " " +
 		mutedStyle.Render("left "+percentText(remaining)) + " " +
 		statusBadge(status)
@@ -88,7 +85,7 @@ func usageGaugeBlock(label string, used, remaining float64, resetLabel string, w
 	return line
 }
 
-func poolGaugeBlock(label string, remainingPoints, capacityPoints float64, resetLabel string, width int) string {
+func poolGaugeBlock(label string, usedPoints, remainingPoints, capacityPoints float64, resetLabel string, width int) string {
 	label = safeDisplay(label)
 	if label == "" {
 		label = "window"
@@ -99,31 +96,68 @@ func poolGaugeBlock(label string, remainingPoints, capacityPoints float64, reset
 	if capacityPoints < 0 {
 		capacityPoints = 0
 	}
+	usedPoints = boundedTUIFloat(usedPoints, 0, capacityPoints)
 	remainingPoints = boundedTUIFloat(remainingPoints, 0, capacityPoints)
+	usedPercent := 0.0
 	remainingPercent := 0.0
 	if capacityPoints > 0 {
+		usedPercent = (usedPoints / capacityPoints) * 100
 		remainingPercent = (remainingPoints / capacityPoints) * 100
 	}
-	remainingLabel := "pool remaining"
 	if width < 16 {
 		line := windowStyle.Render(label) + " " +
-			remainingBar(remainingPercent, width) + " " +
-			mutedStyle.Render("rem") + " " +
-			valueStyle.Render(fmt.Sprintf("%.1f/%.1f", remainingPoints, capacityPoints))
+			balancedUsageBar(usedPercent, remainingPercent, width) + " " +
+			valueStyle.Render(fmt.Sprintf("%.1f/%.1f", usedPoints, remainingPoints))
 		if resetLabel != "" {
 			line += "  " + mutedStyle.Render(compactResetText(resetLabel))
 		}
 		return line
 	}
 	line := windowStyle.Render(label) + " " +
-		remainingBar(remainingPercent, width) + " " +
-		mutedStyle.Render(remainingLabel) + " " +
-		valueStyle.Render(fmt.Sprintf("%.1f/%.1f", remainingPoints, capacityPoints)) + " " +
+		balancedUsageBar(usedPercent, remainingPercent, width) + " " +
+		valueStyle.Render(fmt.Sprintf("used %.1f", usedPoints)) + " " +
+		mutedStyle.Render(fmt.Sprintf("left %.1f", remainingPoints)) + " " +
+		mutedStyle.Render(fmt.Sprintf("cap %.1f", capacityPoints)) + " " +
 		statusBadge(remainingRiskLabel(remainingPercent))
 	if resetLabel != "" {
 		line += "  " + mutedStyle.Render(resetLabel)
 	}
 	return line
+}
+
+func balancedUsageBar(used, remaining float64, width int) string {
+	if width <= 0 {
+		width = 16
+	}
+	used = boundedTUIFloat(used, 0, 100)
+	remaining = boundedTUIFloat(remaining, 0, 100)
+	total := used + remaining
+	usedShare := 0.0
+	if total > 0 {
+		usedShare = used / total
+	}
+	usedCells := int(math.Round(usedShare * float64(width)))
+	if usedCells < 0 {
+		usedCells = 0
+	}
+	if usedCells > width {
+		usedCells = width
+	}
+	remainingCells := width - usedCells
+	usedStyle := goodBarStyle
+	if used >= 85 {
+		usedStyle = badBarStyle
+	} else if used >= 65 {
+		usedStyle = warnBarStyle
+	}
+	remainingStyle := goodBarStyle
+	if remaining <= 15 {
+		remainingStyle = badBarStyle
+	} else if remaining <= 35 {
+		remainingStyle = warnBarStyle
+	}
+	return usedStyle.Render(strings.Repeat("█", usedCells)) +
+		remainingStyle.Render(strings.Repeat("░", remainingCells))
 }
 
 func compactPercentText(value float64) string {

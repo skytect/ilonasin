@@ -32,16 +32,26 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 			accent = lipgloss.Color("160")
 		}
 		account := accountIdentity(row.AccountDisplayLabel, "subscription")
-		meta := []string{
-			safeDisplay(row.ProviderInstanceID),
-			fmt.Sprintf("credential %d", row.CredentialID),
-			accountMetaField("plan", row.PlanLabel),
-			accountMetaField("limit", row.LimitID),
+		identityLine := highlightedIdentity(row.AccountDisplayLabel, "subscription")
+		if safeAccountDisplay(row.AccountDisplayLabel) == account {
+			identityLine = ""
 		}
 		lines := []string{
 			cardTitleStyle.Render(account) + " " + statusBadge(state),
-			highlightedIdentity(row.AccountDisplayLabel, "subscription"),
-			accountMeta(meta...),
+			accountMeta(
+				metricChip("provider", row.ProviderInstanceID),
+				metricChip("credential", fmt.Sprintf("%d", row.CredentialID)),
+				metricChip("source", row.Source),
+			),
+			accountMeta(
+				metricChip("plan", row.PlanLabel),
+				metricChip("limit", subscriptionLimitLabel(row.LimitName, row.LimitID)),
+				timeChip("observed", now, row.ObservedAt),
+				metricChip("state", state),
+			),
+		}
+		if identityLine != "" {
+			lines = append(lines[:1], append([]string{identityLine}, lines[1:]...)...)
 		}
 		if row.ErrorClass != "" {
 			lines = append(lines, badBadgeStyle.Render("error")+" "+safeDisplay(row.ErrorClass))
@@ -75,8 +85,8 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 				metricChip("stale", fmt.Sprintf("%d", row.StaleCount)),
 			),
 		}
-		lines = append(lines, subscriptionPoolWindowLines(row, subscriptionCardWidth(width), now)...)
-		poolCards = append(poolCards, renderAccentCard(subscriptionCardWidth(width), accent, lines...))
+		lines = append(lines, subscriptionPoolWindowLines(row, width, now)...)
+		poolCards = append(poolCards, renderAccentCard(width, accent, lines...))
 	}
 	if len(poolCards) > 0 {
 		b.WriteString(renderCardGrid(width, poolCards))
@@ -145,7 +155,7 @@ func subscriptionAccountWindowLines(row management.SubscriptionUsageRow, width i
 	}
 	lines := make([]string, 0, len(windows))
 	for _, window := range windows {
-		lines = append(lines, usageGaugeBlock(windowLabel(window.Label, window.WindowMinutes), window.UsedPercent, window.RemainingPercent, resetText("reset", window.ResetAt, now), gaugeBarWidth(width)))
+		lines = append(lines, usageGaugeBlock(windowLabel(window.Label, window.WindowMinutes), window.UsedPercent, window.RemainingPercent, resetLocalText("reset", window.ResetAt, now), gaugeBarWidth(width)))
 	}
 	return lines
 }
@@ -156,9 +166,10 @@ func subscriptionPoolWindowLines(row management.SubscriptionUsageAggregate, widt
 	for _, window := range windows {
 		lines = append(lines, poolGaugeBlock(
 			windowLabel(window.Label, 0),
+			window.TotalUsedPercentPoints,
 			window.TotalRemainingPercentPoints,
 			window.TotalCapacityPercentPoints,
-			resetText("reset", window.EarliestResetAt, now),
+			resetLocalText("earliest reset", window.EarliestResetAt, now),
 			gaugeBarWidth(width),
 		))
 	}
@@ -198,7 +209,7 @@ func windowLabel(label string, minutes int) string {
 	}
 }
 
-func resetText(prefix string, resetAt *time.Time, now time.Time) string {
+func resetLocalText(prefix string, resetAt *time.Time, now time.Time) string {
 	prefix = strings.TrimSpace(prefix)
 	if prefix == "" {
 		prefix = "reset"
@@ -206,7 +217,15 @@ func resetText(prefix string, resetAt *time.Time, now time.Time) string {
 	if resetAt == nil {
 		return prefix + " none"
 	}
-	return prefix + " " + formatRelativeTime(now, *resetAt)
+	return prefix + " " + formatRelativeLocalTime(now, *resetAt)
+}
+
+func subscriptionLimitLabel(name, id string) string {
+	name = safeDisplay(name)
+	if name != "" {
+		return name
+	}
+	return safeDisplay(id)
 }
 
 func subscriptionKeepaliveState(status management.KeepaliveStatus) string {

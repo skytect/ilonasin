@@ -286,6 +286,9 @@ func unsupportedCodexToolEvent(typ string) bool {
 	if typ == "response.custom_tool_call_input.delta" || typ == "response.custom_tool_call_input.done" {
 		return false
 	}
+	if strings.HasPrefix(typ, "response.web_search_call.") {
+		return false
+	}
 	return codexToolEvent(typ)
 }
 

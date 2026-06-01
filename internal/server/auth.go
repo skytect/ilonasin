@@ -13,14 +13,14 @@ func (s *Server) withAuth(next func(http.ResponseWriter, *http.Request, credenti
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.ioLogger != nil {
 			r = r.WithContext(context.WithValue(r.Context(), ioLogContextKey{}, logging.EventID()))
-			capture := &ioCaptureResponseWriter{ResponseWriter: w}
+			capture := &ioCountingResponseWriter{ResponseWriter: w}
 			w = capture
 			defer func() {
 				status := capture.status
 				if status == 0 {
 					status = http.StatusOK
 				}
-				s.ioLogOutput(r, status, w.Header().Get("Content-Type"), capture.body.Bytes())
+				s.ioLogOutput(r, status, w.Header().Get("Content-Type"), capture.bytes)
 			}()
 		}
 		rec, err := s.auth.VerifyBearer(r.Context(), r.Header.Get("Authorization"))

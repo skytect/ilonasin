@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"net/http"
 	"time"
 
@@ -10,28 +9,29 @@ import (
 
 type ioLogContextKey struct{}
 
-type ioCaptureResponseWriter struct {
+type ioCountingResponseWriter struct {
 	http.ResponseWriter
-	body   bytes.Buffer
 	status int
+	bytes  int
 }
 
-func (w *ioCaptureResponseWriter) WriteHeader(status int) {
+func (w *ioCountingResponseWriter) WriteHeader(status int) {
 	if w.status == 0 {
 		w.status = status
 	}
 	w.ResponseWriter.WriteHeader(status)
 }
 
-func (w *ioCaptureResponseWriter) Write(body []byte) (int, error) {
+func (w *ioCountingResponseWriter) Write(body []byte) (int, error) {
 	if w.status == 0 {
 		w.status = http.StatusOK
 	}
-	_, _ = w.body.Write(body)
-	return w.ResponseWriter.Write(body)
+	n, err := w.ResponseWriter.Write(body)
+	w.bytes += n
+	return n, err
 }
 
-func (w *ioCaptureResponseWriter) Flush() {
+func (w *ioCountingResponseWriter) Flush() {
 	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
 		flusher.Flush()
 	}
@@ -44,19 +44,17 @@ func (s *Server) ioLogInput(r *http.Request, body []byte) {
 		Route:       routeLabel(r),
 		ContentType: r.Header.Get("Content-Type"),
 		Bytes:       len(body),
-		Body:        string(body),
 	})
 }
 
-func (s *Server) ioLogOutput(r *http.Request, status int, contentType string, body []byte) {
+func (s *Server) ioLogOutput(r *http.Request, status int, contentType string, bytes int) {
 	s.ioLog(r, logging.IORecord{
 		Direction:   "output",
 		Method:      r.Method,
 		Route:       routeLabel(r),
 		Status:      status,
 		ContentType: contentType,
-		Bytes:       len(body),
-		Body:        string(body),
+		Bytes:       bytes,
 	})
 }
 

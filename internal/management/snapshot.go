@@ -390,28 +390,7 @@ func sanitizeSnapshot(out *ManagementSnapshotResponse) {
 		out.Quotas[i].Source = safeSnapshotString(out.Quotas[i].Source)
 		out.Quotas[i].ErrorClass = safeSnapshotString(out.Quotas[i].ErrorClass)
 	}
-	for i := range out.SubscriptionUsage.Accounts {
-		out.SubscriptionUsage.Accounts[i].ProviderInstanceID = safeMachineString(out.SubscriptionUsage.Accounts[i].ProviderInstanceID)
-		out.SubscriptionUsage.Accounts[i].AccountDisplayLabel = safeSnapshotString(out.SubscriptionUsage.Accounts[i].AccountDisplayLabel)
-		out.SubscriptionUsage.Accounts[i].PlanLabel = safeSnapshotString(out.SubscriptionUsage.Accounts[i].PlanLabel)
-		out.SubscriptionUsage.Accounts[i].LimitID = safeSnapshotString(out.SubscriptionUsage.Accounts[i].LimitID)
-		out.SubscriptionUsage.Accounts[i].LimitName = safeSnapshotString(out.SubscriptionUsage.Accounts[i].LimitName)
-		out.SubscriptionUsage.Accounts[i].PlanType = safeSnapshotString(out.SubscriptionUsage.Accounts[i].PlanType)
-		out.SubscriptionUsage.Accounts[i].ReachedType = safeSnapshotString(out.SubscriptionUsage.Accounts[i].ReachedType)
-		out.SubscriptionUsage.Accounts[i].PrimaryLabel = safeSnapshotString(out.SubscriptionUsage.Accounts[i].PrimaryLabel)
-		out.SubscriptionUsage.Accounts[i].SecondaryLabel = safeSnapshotString(out.SubscriptionUsage.Accounts[i].SecondaryLabel)
-		out.SubscriptionUsage.Accounts[i].Source = safeSnapshotString(out.SubscriptionUsage.Accounts[i].Source)
-		out.SubscriptionUsage.Accounts[i].ErrorClass = safeSnapshotString(out.SubscriptionUsage.Accounts[i].ErrorClass)
-	}
-	for i := range out.SubscriptionUsage.Pools {
-		out.SubscriptionUsage.Pools[i].ProviderInstanceID = safeMachineString(out.SubscriptionUsage.Pools[i].ProviderInstanceID)
-		out.SubscriptionUsage.Pools[i].LimitID = safeSnapshotString(out.SubscriptionUsage.Pools[i].LimitID)
-		out.SubscriptionUsage.Pools[i].LimitName = safeSnapshotString(out.SubscriptionUsage.Pools[i].LimitName)
-	}
-	out.SubscriptionUsage.Keepalive.Status = safeSnapshotString(out.SubscriptionUsage.Keepalive.Status)
-	for i := range out.SubscriptionUsage.Keepalive.ScheduleTimes {
-		out.SubscriptionUsage.Keepalive.ScheduleTimes[i] = safeSnapshotString(out.SubscriptionUsage.Keepalive.ScheduleTimes[i])
-	}
+	sanitizeSubscriptionUsageResponse(&out.SubscriptionUsage)
 }
 
 func safeSnapshotString(value string) string {

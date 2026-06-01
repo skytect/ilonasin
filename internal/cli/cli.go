@@ -19,7 +19,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runServe(args[1:], stdout, stderr)
 	case "manage":
 		return runManage(args[1:], stdout, stderr)
-	case "-v", "--version", "version":
+	case "-v", "--version":
 		fmt.Fprintf(stdout, "ilonasin %s\n", VersionString())
 		return 0
 	case "-h", "--help", "help":
@@ -63,5 +63,5 @@ func runManage(args []string, stdout, stderr io.Writer) int {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, "usage: ilonasin <serve|manage|version> [--config path]")
+	fmt.Fprintln(w, "usage: ilonasin <serve|manage> [--config path]")
 }

@@ -34,9 +34,7 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "end":
 		m.setActiveScroll(m.activeScrollMax())
 	case "q", "ctrl+c":
-		m.clearReveal()
-		m.cancelOAuthLogin()
-		return m, tea.Quit
+		return m.quitAction()
 	case "n":
 		if m.activeTab != tabAccounts {
 			return m, nil
@@ -93,11 +91,9 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m.disableFallbackPolicyAction()
 	case "esc":
-		m.clearReveal()
-		m.oauthChallenge = nil
-		m.cancelOAuthLogin()
+		return m.cancelVisibleAction()
 	case "enter":
-		m.clearReveal()
+		return m.clearRevealAction()
 	case "down", "j":
 		m.clearReveal()
 		if m.activeTab == tabAccounts {

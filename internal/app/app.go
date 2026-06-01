@@ -4,12 +4,15 @@ import (
 	"log/slog"
 	"net/http"
 
+	"ilonasin/internal/logging"
 	"ilonasin/internal/provider"
 )
 
-func chatAdapters(client *http.Client, loggers ...*slog.Logger) provider.StaticChatAdapters {
+func chatAdapters(client *http.Client, ioLogger *logging.IOLogger, captureUpstreamIO bool, loggers ...*slog.Logger) provider.StaticChatAdapters {
 	adapter := provider.NewHTTPChatAdapter(client)
 	adapter.Logger = firstLogger(loggers)
+	adapter.IOLogger = ioLogger
+	adapter.CaptureUpstreamIO = captureUpstreamIO
 	return provider.StaticChatAdapters{
 		"deepseek":   adapter,
 		"openrouter": adapter,
@@ -17,9 +20,11 @@ func chatAdapters(client *http.Client, loggers ...*slog.Logger) provider.StaticC
 	}
 }
 
-func modelDiscoverers(client *http.Client, loggers ...*slog.Logger) provider.StaticModelDiscoverers {
+func modelDiscoverers(client *http.Client, ioLogger *logging.IOLogger, captureUpstreamIO bool, loggers ...*slog.Logger) provider.StaticModelDiscoverers {
 	adapter := provider.NewHTTPChatAdapter(client)
 	adapter.Logger = firstLogger(loggers)
+	adapter.IOLogger = ioLogger
+	adapter.CaptureUpstreamIO = captureUpstreamIO
 	return provider.StaticModelDiscoverers{
 		"deepseek":   adapter,
 		"openrouter": adapter,

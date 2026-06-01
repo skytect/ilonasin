@@ -95,7 +95,7 @@ func Setup(cfg config.Config, stderr io.Writer) (*slog.Logger, io.Closer, error)
 		return nil, nil, fmt.Errorf("unsupported logging format %q", format)
 	}
 	closer := closerFunc(func() error { return closeAll(closers) })
-	return slog.New(redactingHandler{next: handler}), closer, nil
+	return slog.New(secretGuardHandler{next: handler}), closer, nil
 }
 
 func EventID() string {
@@ -128,6 +128,11 @@ func parseLevel(value string) (slog.Level, error) {
 	}
 }
 
+func DebugEnabled(level string) bool {
+	parsed, err := parseLevel(level)
+	return err == nil && parsed <= slog.LevelDebug
+}
+
 func closeAll(closers []io.Closer) error {
 	var out error
 	for _, closer := range closers {
@@ -138,45 +143,45 @@ func closeAll(closers []io.Closer) error {
 	return out
 }
 
-type redactingHandler struct {
+type secretGuardHandler struct {
 	next slog.Handler
 }
 
-func (h redactingHandler) Enabled(ctx context.Context, level slog.Level) bool {
+func (h secretGuardHandler) Enabled(ctx context.Context, level slog.Level) bool {
 	return h.next.Enabled(ctx, level)
 }
 
-func (h redactingHandler) Handle(ctx context.Context, record slog.Record) error {
+func (h secretGuardHandler) Handle(ctx context.Context, record slog.Record) error {
 	clean := slog.NewRecord(record.Time, record.Level, record.Message, record.PC)
 	record.Attrs(func(attr slog.Attr) bool {
-		clean.AddAttrs(redactAttr(attr))
+		clean.AddAttrs(guardAttr(attr))
 		return true
 	})
 	return h.next.Handle(ctx, clean)
 }
 
-func (h redactingHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+func (h secretGuardHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	clean := make([]slog.Attr, 0, len(attrs))
 	for _, attr := range attrs {
-		clean = append(clean, redactAttr(attr))
+		clean = append(clean, guardAttr(attr))
 	}
-	return redactingHandler{next: h.next.WithAttrs(clean)}
+	return secretGuardHandler{next: h.next.WithAttrs(clean)}
 }
 
-func (h redactingHandler) WithGroup(name string) slog.Handler {
-	return redactingHandler{next: h.next.WithGroup(name)}
+func (h secretGuardHandler) WithGroup(name string) slog.Handler {
+	return secretGuardHandler{next: h.next.WithGroup(name)}
 }
 
-func redactAttr(attr slog.Attr) slog.Attr {
+func guardAttr(attr slog.Attr) slog.Attr {
 	attr.Value = attr.Value.Resolve()
-	if unsafeKey(attr.Key) && !safeStructuralLogKey(attr.Key) {
+	if IsSensitiveLogKey(attr.Key) {
 		return slog.String(attr.Key, redacted)
 	}
 	if attr.Value.Kind() == slog.KindGroup {
 		group := attr.Value.Group()
 		clean := make([]slog.Attr, 0, len(group))
 		for _, child := range group {
-			clean = append(clean, redactAttr(child))
+			clean = append(clean, guardAttr(child))
 		}
 		return slog.Group(attr.Key, attrsToAny(clean)...)
 	}
@@ -190,64 +195,10 @@ func redactAttr(attr slog.Attr) slog.Attr {
 	return attr
 }
 
-func safeStructuralLogKey(key string) bool {
-	switch key {
-	case "codex_input_items",
-		"codex_tools",
-		"codex_input_missing_type",
-		"codex_message_items",
-		"codex_assistant_input_text_parts",
-		"codex_last_input_type",
-		"codex_last_input_role",
-		"codex_last_content_types",
-		"upstream_error_summary",
-		"upstream_error_type":
-		return true
-	default:
-		return false
-	}
-}
-
 func attrsToAny(attrs []slog.Attr) []any {
 	out := make([]any, 0, len(attrs))
 	for _, attr := range attrs {
 		out = append(out, attr)
 	}
 	return out
-}
-
-func unsafeKey(key string) bool {
-	key = strings.ToLower(key)
-	key = strings.ReplaceAll(key, "-", "_")
-	switch key {
-	case "authorization",
-		"proxy_authorization",
-		"bearer",
-		"bearer_token",
-		"token",
-		"access_token",
-		"refresh_token",
-		"id_token",
-		"api_key",
-		"secret",
-		"client_secret",
-		"cookie",
-		"set_cookie",
-		"authorization_code",
-		"device_code",
-		"user_code",
-		"code_verifier",
-		"verifier",
-		"agent_identity",
-		"private_key",
-		"header",
-		"headers",
-		"body",
-		"payload",
-		"raw",
-		"stdout":
-		return true
-	default:
-		return false
-	}
 }

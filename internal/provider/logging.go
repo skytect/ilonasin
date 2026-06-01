@@ -23,10 +23,13 @@ func logProviderHTTP(ctx context.Context, logger *slog.Logger, level slog.Level,
 }
 
 func statusLevel(status int, errorClass string) slog.Level {
-	if errorClass != "" || status >= 500 {
+	if errorClass == "client_disconnected" || errorClass == "canceled" {
+		return slog.LevelInfo
+	}
+	if status >= 500 || errorClass == "upstream_network_error" || errorClass == "upstream_timeout" || errorClass == "upstream_invalid_response" || errorClass == "upstream_stream_invalid" || errorClass == "upstream_body_too_large" {
 		return slog.LevelError
 	}
-	if status >= 400 {
+	if status >= 400 || errorClass != "" {
 		return slog.LevelWarn
 	}
 	return slog.LevelInfo

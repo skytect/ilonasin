@@ -96,7 +96,7 @@ func scrubJSON(value any) any {
 	case map[string]any:
 		out := make(map[string]any, len(v))
 		for key, child := range v {
-			if secretJSONKey(key) {
+			if IsCredentialKey(key) {
 				out[key] = "[redacted]"
 				continue
 			}
@@ -111,32 +111,6 @@ func scrubJSON(value any) any {
 		return out
 	default:
 		return v
-	}
-}
-
-func secretJSONKey(key string) bool {
-	key = strings.ToLower(strings.TrimSpace(key))
-	key = strings.ReplaceAll(key, "-", "_")
-	switch key {
-	case "authorization",
-		"proxy_authorization",
-		"cookie",
-		"set_cookie",
-		"access_token",
-		"refresh_token",
-		"id_token",
-		"bearer_token",
-		"api_key",
-		"client_secret",
-		"authorization_code",
-		"device_code",
-		"user_code",
-		"code_verifier",
-		"agent_identity",
-		"private_key":
-		return true
-	default:
-		return false
 	}
 }
 
@@ -159,7 +133,7 @@ func redactHeaderLines(value string) string {
 		if !ok {
 			continue
 		}
-		if secretJSONKey(name) {
+		if IsCredentialKey(name) {
 			suffix := ""
 			if strings.HasSuffix(line, "\n") {
 				suffix = "\n"

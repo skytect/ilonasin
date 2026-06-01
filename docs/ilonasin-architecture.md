@@ -321,10 +321,13 @@ Metadata-only telemetry is allowed and expected.
 
 `[logging].capture_io = true` is the explicit local debugging exception. When
 enabled, `ilonasin-io.log` may persist local request bodies, local response
-bodies, and streamed event payloads needed to debug wire-shape issues. It must
-not persist bearer tokens, local client tokens, upstream API keys, OAuth
-tokens, cookies, authorization codes, device codes, code verifiers, provider
-command stdout, or configured credential secret values.
+bodies, and streamed event payloads needed to debug wire-shape issues. When the
+normal logging level is `debug`, the same IO log may also persist bounded
+upstream provider request bodies, response bodies, and streamed provider events
+captured at adapter boundaries. It must not persist bearer tokens, local client
+tokens, upstream API keys, OAuth tokens, cookies, authorization codes, device
+codes, code verifiers, provider command stdout, or configured credential secret
+values.
 
 Full upstream account IDs may be derived transiently from credential secrets
 when building outbound provider routing headers. They must not be stored

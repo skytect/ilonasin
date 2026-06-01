@@ -35,16 +35,17 @@ func (a HTTPChatAdapter) ListModels(ctx context.Context, req ModelRequest) (Mode
 	httpReq.Header.Set("Accept", "application/json")
 	resp, err := a.Client.Do(httpReq)
 	if err != nil {
-		logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
+		errorClass := classifyTransportError(err)
+		logProviderHTTP(ctx, a.Logger, statusLevel(http.StatusBadGateway, errorClass), "provider_http",
 			slog.String("endpoint", "models"),
 			slog.String("method", http.MethodGet),
 			slog.String("provider_instance", req.Instance.ID),
 			slog.String("provider_type", req.Instance.Type),
 			slog.Int64("credential_id", req.Credential.ID),
 			slog.Int64("duration_ms", durationMS(start)),
-			slog.String("error_class", classifyTransportError(err)),
+			slog.String("error_class", errorClass),
 		)
-		return ModelResult{ErrorClass: classifyTransportError(err)}, err
+		return ModelResult{ErrorClass: errorClass}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -78,6 +79,7 @@ func (a HTTPChatAdapter) ListModels(ctx context.Context, req ModelRequest) (Mode
 		return ModelResult{ErrorClass: "upstream_body_too_large", StatusCode: resp.StatusCode}, fmt.Errorf("upstream models body exceeded limit")
 	}
 	body, tooLarge, readErr := readLimitedUpstreamBody(resp.Body, MaxUpstreamModelsBodyBytes)
+	a.recordUpstreamBody(req.Instance, req.Credential.ID, "models", http.MethodGet, "upstream_output", resp.StatusCode, resp.Header.Get("Content-Type"), body, "")
 	if tooLarge {
 		logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
 			slog.String("endpoint", "models"),

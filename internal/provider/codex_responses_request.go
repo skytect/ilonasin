@@ -201,31 +201,6 @@ func codexResponsesRequestShapeAttrs(req openai.ChatCompletionRequest) []slog.At
 	return attrs
 }
 
-func codexResponsesErrorAttrs(body []byte) []slog.Attr {
-	body = bytes.TrimSpace(body)
-	if len(body) == 0 {
-		return nil
-	}
-	var raw map[string]any
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return nil
-	}
-	var attrs []slog.Attr
-	if nested, ok := raw["error"].(map[string]any); ok {
-		if value := safeOAuthLogString(nested["type"]); value != "" {
-			attrs = append(attrs, slog.String("upstream_error_type", value))
-		}
-		if value := safeOAuthLogString(nested["message"]); value != "" {
-			attrs = append(attrs, slog.String("upstream_error_summary", value))
-		}
-		return attrs
-	}
-	if value := safeOAuthLogString(raw["message"]); value != "" {
-		attrs = append(attrs, slog.String("upstream_error_summary", value))
-	}
-	return attrs
-}
-
 type codexInputShape struct {
 	missingType             int
 	messageItems            int
@@ -408,14 +383,15 @@ func (a HTTPChatAdapter) resolveCodexResponsesModel(ctx context.Context, req Cha
 	httpReq.Header.Set("Accept", "application/json")
 	resp, err := a.Client.Do(httpReq)
 	if err != nil {
-		logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
+		errorClass := classifyTransportError(err)
+		logProviderHTTP(ctx, a.Logger, statusLevel(http.StatusBadGateway, errorClass), "provider_http",
 			slog.String("endpoint", "models"),
 			slog.String("method", http.MethodGet),
 			slog.String("provider_instance", req.Instance.ID),
 			slog.String("provider_type", req.Instance.Type),
 			slog.Int64("credential_id", credential.ID),
 			slog.Int64("duration_ms", durationMS(start)),
-			slog.String("error_class", classifyTransportError(err)),
+			slog.String("error_class", errorClass),
 		)
 		return codexResponsesModel{}, err
 	}
@@ -441,6 +417,7 @@ func (a HTTPChatAdapter) resolveCodexResponsesModel(ctx context.Context, req Cha
 		return codexResponsesModel{}, fmt.Errorf("codex models status %d", resp.StatusCode)
 	}
 	body, tooLarge, readErr := readLimitedUpstreamBody(resp.Body, MaxUpstreamModelsBodyBytes)
+	a.recordUpstreamBody(req.Instance, credential.ID, "models", http.MethodGet, "upstream_output", resp.StatusCode, resp.Header.Get("Content-Type"), body, "")
 	if tooLarge {
 		return codexResponsesModel{}, fmt.Errorf("codex models body exceeded limit")
 	}

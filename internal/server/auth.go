@@ -90,10 +90,13 @@ func routeLabel(r *http.Request) string {
 }
 
 func levelForStatus(status int, errorClass string) slog.Level {
-	if errorClass != "" || status >= 500 {
+	if errorClass == "client_disconnected" || errorClass == "canceled" {
+		return slog.LevelInfo
+	}
+	if status >= 500 {
 		return slog.LevelError
 	}
-	if status >= 400 {
+	if status >= 400 || errorClass != "" {
 		return slog.LevelWarn
 	}
 	return slog.LevelInfo

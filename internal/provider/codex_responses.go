@@ -38,6 +38,7 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 	if err != nil {
 		return ChatResult{ErrorClass: "provider_config_error", Latency: time.Since(start)}, err
 	}
+	ioID := a.recordUpstreamBody(req.Instance, req.Credential.ID, "responses", http.MethodPost, "upstream_input", 0, "application/json", body, "")
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	httpReq, err := http.NewRequestWithContext(streamCtx, http.MethodPost, endpoint, bytes.NewReader(body))
@@ -52,7 +53,7 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 	resp, err := a.doStreamRequest(streamCtx, cancel, httpReq)
 	if err != nil {
 		errorClass := classifyTransportError(err)
-		logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
+		logProviderHTTP(ctx, a.Logger, statusLevel(http.StatusBadGateway, errorClass), "provider_http",
 			slog.String("endpoint", "responses"),
 			slog.String("method", http.MethodPost),
 			slog.String("provider_instance", req.Instance.ID),
@@ -67,6 +68,7 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		retryAfter := retryAfterFromHeader(resp.Header, time.Now())
 		respBody, tooLarge, readErr := readLimitedUpstreamBody(resp.Body, MaxUpstreamChatBodyBytes)
+		a.recordUpstreamBody(req.Instance, req.Credential.ID, "responses", http.MethodPost, "upstream_output", resp.StatusCode, resp.Header.Get("Content-Type"), respBody, ioID)
 		if tooLarge {
 			logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
 				slog.String("endpoint", "responses"),
@@ -94,7 +96,7 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 			return ChatResult{StatusCode: http.StatusBadGateway, UpstreamStatusCode: resp.StatusCode, ContentType: "application/json", ErrorClass: "upstream_network_error", Latency: time.Since(start), RetryAfter: retryAfter}, readErr
 		}
 		if resp.StatusCode == http.StatusUnauthorized {
-			logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
+			logProviderHTTP(ctx, a.Logger, statusLevel(resp.StatusCode, "upstream_auth_failed"), "provider_http",
 				slog.String("endpoint", "responses"),
 				slog.String("method", http.MethodPost),
 				slog.String("provider_instance", req.Instance.ID),
@@ -124,14 +126,12 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 		}
 		if resp.StatusCode == http.StatusBadRequest {
 			attrs = append(attrs, codexResponsesRequestShapeAttrs(req.Request)...)
-			if req.CaptureIO {
-				attrs = append(attrs, codexResponsesErrorAttrs(respBody)...)
-			}
 		}
 		logProviderHTTP(ctx, a.Logger, statusLevel(resp.StatusCode, errorClass), "provider_http", attrs...)
 		return ChatResult{StatusCode: http.StatusBadGateway, UpstreamStatusCode: resp.StatusCode, ContentType: "application/json", ErrorClass: errorClass, Latency: time.Since(start), RetryAfter: retryAfter}, fmt.Errorf("codex responses status %d", resp.StatusCode)
 	}
-	parsed, err := a.readCodexResponses(streamCtx, resp.Body)
+	capture := upstreamStreamCapture{instance: req.Instance, credentialID: req.Credential.ID, endpoint: "responses", status: resp.StatusCode, id: ioID}
+	parsed, err := a.readCodexResponses(streamCtx, resp.Body, capture)
 	if err != nil {
 		errorClass := parsed.ErrorClass
 		if errorClass == "" {

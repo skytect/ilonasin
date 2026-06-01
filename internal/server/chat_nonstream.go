@@ -61,7 +61,6 @@ func (s *Server) executeNonStreamingChat(r *http.Request, nc nonStreamContext) n
 			Request:         nc.request,
 			Credential:      providerChatCredential(credential),
 			ModelCredential: modelCredential,
-			CaptureIO:       s.captureIOEnabled(),
 		})
 		if s.shouldRefreshModelCredentialAfterChat401(nc.instance, result, modelCredential) {
 			refreshed, refreshErr := s.refreshOAuthCredentialForRetryIfBearer(r.Context(), modelCredential)
@@ -82,7 +81,6 @@ func (s *Server) executeNonStreamingChat(r *http.Request, nc nonStreamContext) n
 					Request:         nc.request,
 					Credential:      providerChatCredential(credential),
 					ModelCredential: modelCredential,
-					CaptureIO:       s.captureIOEnabled(),
 				})
 				if s.shouldRefreshModelCredentialAfterChat401(nc.instance, result, modelCredential) || s.shouldRefreshOAuthAfterChat401(nc.instance, result) {
 					result.StatusCode = http.StatusBadGateway
@@ -107,7 +105,6 @@ func (s *Server) executeNonStreamingChat(r *http.Request, nc nonStreamContext) n
 					Request:         nc.request,
 					Credential:      providerChatCredential(credential),
 					ModelCredential: modelCredential,
-					CaptureIO:       s.captureIOEnabled(),
 				})
 				if s.shouldRefreshOAuthAfterChat401(nc.instance, result) {
 					result.StatusCode = http.StatusBadGateway

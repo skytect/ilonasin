@@ -35,6 +35,7 @@ func (a HTTPChatAdapter) StreamChat(ctx context.Context, req ChatRequest, sink C
 	if err != nil {
 		return withStreamLatency(start, ChatStreamSummary{ErrorClass: "provider_config_error", CompletionStatus: "upstream_invalid"}), err
 	}
+	ioID := a.recordUpstreamBody(req.Instance, req.Credential.ID, "chat_completions_stream", http.MethodPost, "upstream_input", 0, "application/json", body, "")
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	httpReq, err := http.NewRequestWithContext(streamCtx, http.MethodPost, endpoint, bytes.NewReader(body))
@@ -48,7 +49,7 @@ func (a HTTPChatAdapter) StreamChat(ctx context.Context, req ChatRequest, sink C
 	resp, err := a.doStreamRequest(streamCtx, cancel, httpReq)
 	if err != nil {
 		errorClass := classifyTransportError(err)
-		logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
+		logProviderHTTP(ctx, a.Logger, statusLevel(http.StatusBadGateway, errorClass), "provider_http",
 			slog.String("endpoint", "chat_completions_stream"),
 			slog.String("method", http.MethodPost),
 			slog.String("provider_instance", req.Instance.ID),
@@ -90,7 +91,8 @@ func (a HTTPChatAdapter) StreamChat(ctx context.Context, req ChatRequest, sink C
 		StatusCode:       http.StatusOK,
 		CompletionStatus: "completed",
 	}
-	if err := a.readStream(streamCtx, resp.Body, sink, &summary, start, req.Instance.Type); err != nil {
+	streamCapture := upstreamStreamCapture{instance: req.Instance, credentialID: req.Credential.ID, endpoint: "chat_completions_stream", status: resp.StatusCode, id: ioID}
+	if err := a.readStream(streamCtx, resp.Body, sink, &summary, start, req.Instance.Type, streamCapture); err != nil {
 		if summary.ErrorClass == "" {
 			summary.ErrorClass = classifyStreamReadError(streamCtx, err)
 		}
@@ -103,7 +105,7 @@ func (a HTTPChatAdapter) StreamChat(ctx context.Context, req ChatRequest, sink C
 		if !summary.Started {
 			summary.PreStreamError = true
 		}
-		logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
+		logProviderHTTP(ctx, a.Logger, statusLevel(summary.StatusCode, summary.ErrorClass), "provider_http",
 			slog.String("endpoint", "chat_completions_stream"),
 			slog.String("method", http.MethodPost),
 			slog.String("provider_instance", req.Instance.ID),
@@ -199,7 +201,16 @@ func (a HTTPChatAdapter) doStreamRequest(ctx context.Context, cancel context.Can
 	}
 }
 
-func (a HTTPChatAdapter) readStream(ctx context.Context, body io.ReadCloser, sink ChatStreamSink, summary *ChatStreamSummary, start time.Time, providerType string) error {
+type upstreamStreamCapture struct {
+	instance     Instance
+	credentialID int64
+	endpoint     string
+	status       int
+	id           string
+	eventIndex   int
+}
+
+func (a HTTPChatAdapter) readStream(ctx context.Context, body io.ReadCloser, sink ChatStreamSink, summary *ChatStreamSummary, start time.Time, providerType string, capture upstreamStreamCapture) error {
 	reader := bufio.NewReaderSize(body, a.maxStreamLineBytes()+1)
 	var parts [][]byte
 	eventBytes := 0
@@ -208,7 +219,10 @@ func (a HTTPChatAdapter) readStream(ctx context.Context, body io.ReadCloser, sin
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				if len(parts) > 0 {
-					if err := a.handleStreamEvent(ctx, bytes.Join(parts, []byte("\n")), sink, summary, start, providerType); err != nil {
+					data := bytes.Join(parts, []byte("\n"))
+					capture.eventIndex++
+					capture.id = a.recordUpstreamSSE(capture.instance, capture.credentialID, capture.endpoint, capture.status, data, capture.id, capture.eventIndex)
+					if err := a.handleStreamEvent(ctx, data, sink, summary, start, providerType); err != nil {
 						return err
 					}
 					if summary.Done {
@@ -229,7 +243,10 @@ func (a HTTPChatAdapter) readStream(ctx context.Context, body io.ReadCloser, sin
 			if len(parts) == 0 {
 				continue
 			}
-			if err := a.handleStreamEvent(ctx, bytes.Join(parts, []byte("\n")), sink, summary, start, providerType); err != nil {
+			data := bytes.Join(parts, []byte("\n"))
+			capture.eventIndex++
+			capture.id = a.recordUpstreamSSE(capture.instance, capture.credentialID, capture.endpoint, capture.status, data, capture.id, capture.eventIndex)
+			if err := a.handleStreamEvent(ctx, data, sink, summary, start, providerType); err != nil {
 				return err
 			}
 			parts = nil

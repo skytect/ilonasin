@@ -61,7 +61,7 @@ type codexResponseCustomToolCall struct {
 	Input  strings.Builder
 }
 
-func (a HTTPChatAdapter) readCodexResponses(ctx context.Context, body io.ReadCloser) (codexResponsesResult, error) {
+func (a HTTPChatAdapter) readCodexResponses(ctx context.Context, body io.ReadCloser, capture upstreamStreamCapture) (codexResponsesResult, error) {
 	reader := bufio.NewReaderSize(body, a.maxStreamLineBytes()+1)
 	var parts [][]byte
 	eventBytes := 0
@@ -72,7 +72,10 @@ func (a HTTPChatAdapter) readCodexResponses(ctx context.Context, body io.ReadClo
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				if len(parts) > 0 {
-					if err := handleCodexEvent(bytes.Join(parts, []byte("\n")), &state); err != nil {
+					data := bytes.Join(parts, []byte("\n"))
+					capture.eventIndex++
+					capture.id = a.recordUpstreamSSE(capture.instance, capture.credentialID, capture.endpoint, capture.status, data, capture.id, capture.eventIndex)
+					if err := handleCodexEvent(data, &state); err != nil {
 						return codexResponsesResult{ErrorClass: "upstream_invalid_response"}, err
 					}
 				}
@@ -92,7 +95,10 @@ func (a HTTPChatAdapter) readCodexResponses(ctx context.Context, body io.ReadClo
 			if events > a.maxStreamEvents() {
 				return codexResponsesResult{ErrorClass: "upstream_invalid_response"}, fmt.Errorf("codex response event limit exceeded")
 			}
-			if err := handleCodexEvent(bytes.Join(parts, []byte("\n")), &state); err != nil {
+			data := bytes.Join(parts, []byte("\n"))
+			capture.eventIndex++
+			capture.id = a.recordUpstreamSSE(capture.instance, capture.credentialID, capture.endpoint, capture.status, data, capture.id, capture.eventIndex)
+			if err := handleCodexEvent(data, &state); err != nil {
 				return codexResponsesResult{ErrorClass: codexEventErrorClass(err)}, err
 			}
 			if state.aggregateBytes() > a.maxCodexAggregateBytes() {

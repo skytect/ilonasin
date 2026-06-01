@@ -69,7 +69,7 @@ func (a HTTPChatAdapter) FetchCodexSubscriptionUsage(ctx context.Context, req Co
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		class := classifyTransportError(err)
-		logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
+		logProviderHTTP(ctx, a.Logger, statusLevel(http.StatusBadGateway, class), "provider_http",
 			slog.String("endpoint", "subscription_usage"),
 			slog.String("method", http.MethodGet),
 			slog.String("provider_instance", req.Instance.ID),
@@ -84,9 +84,9 @@ func (a HTTPChatAdapter) FetchCodexSubscriptionUsage(ctx context.Context, req Co
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		class := "upstream_http_error"
 		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-			class = "auth_failed"
+			class = "upstream_auth_failed"
 		} else if resp.StatusCode == http.StatusTooManyRequests {
-			class = "rate_limited"
+			class = "rate_limit_exceeded"
 		}
 		logProviderHTTP(ctx, a.Logger, statusLevel(resp.StatusCode, class), "provider_http",
 			slog.String("endpoint", "subscription_usage"),
@@ -109,11 +109,12 @@ func (a HTTPChatAdapter) FetchCodexSubscriptionUsage(ctx context.Context, req Co
 			slog.Int64("credential_id", req.Credential.ID),
 			slog.Int("status", resp.StatusCode),
 			slog.Int64("duration_ms", durationMS(start)),
-			slog.String("error_class", "body_too_large"),
+			slog.String("error_class", "upstream_body_too_large"),
 		)
-		return CodexSubscriptionUsageResult{StatusCode: resp.StatusCode, ErrorClass: "body_too_large"}, fmt.Errorf("codex usage body exceeded limit")
+		return CodexSubscriptionUsageResult{StatusCode: resp.StatusCode, ErrorClass: "upstream_body_too_large"}, fmt.Errorf("codex usage body exceeded limit")
 	}
 	body, tooLarge, readErr := readLimitedUpstreamBody(resp.Body, MaxCodexUsageBodyBytes)
+	a.recordUpstreamBody(req.Instance, req.Credential.ID, "subscription_usage", http.MethodGet, "upstream_output", resp.StatusCode, resp.Header.Get("Content-Type"), body, "")
 	if tooLarge {
 		logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
 			slog.String("endpoint", "subscription_usage"),
@@ -123,9 +124,9 @@ func (a HTTPChatAdapter) FetchCodexSubscriptionUsage(ctx context.Context, req Co
 			slog.Int64("credential_id", req.Credential.ID),
 			slog.Int("status", resp.StatusCode),
 			slog.Int64("duration_ms", durationMS(start)),
-			slog.String("error_class", "body_too_large"),
+			slog.String("error_class", "upstream_body_too_large"),
 		)
-		return CodexSubscriptionUsageResult{StatusCode: resp.StatusCode, ErrorClass: "body_too_large"}, fmt.Errorf("codex usage body exceeded limit")
+		return CodexSubscriptionUsageResult{StatusCode: resp.StatusCode, ErrorClass: "upstream_body_too_large"}, fmt.Errorf("codex usage body exceeded limit")
 	}
 	if readErr != nil {
 		logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
@@ -151,9 +152,9 @@ func (a HTTPChatAdapter) FetchCodexSubscriptionUsage(ctx context.Context, req Co
 			slog.Int("status", resp.StatusCode),
 			slog.Int64("duration_ms", durationMS(start)),
 			slog.Int("response_bytes", len(body)),
-			slog.String("error_class", "invalid_response"),
+			slog.String("error_class", "upstream_invalid_response"),
 		)
-		return CodexSubscriptionUsageResult{StatusCode: resp.StatusCode, ErrorClass: "invalid_response"}, err
+		return CodexSubscriptionUsageResult{StatusCode: resp.StatusCode, ErrorClass: "upstream_invalid_response"}, err
 	}
 	logProviderHTTP(ctx, a.Logger, slog.LevelInfo, "provider_http",
 		slog.String("endpoint", "subscription_usage"),

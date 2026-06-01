@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"ilonasin/internal/logging"
 	"ilonasin/internal/openai"
 )
 
@@ -42,6 +43,8 @@ type HTTPChatAdapter struct {
 	MaxStreamEvents        int
 	MaxCodexAggregateBytes int
 	ModelTimeout           time.Duration
+	IOLogger               *logging.IOLogger
+	CaptureUpstreamIO      bool
 }
 
 func NewHTTPChatAdapter(client *http.Client) HTTPChatAdapter {
@@ -68,6 +71,7 @@ func (a HTTPChatAdapter) CompleteChat(ctx context.Context, req ChatRequest) (Cha
 	if err != nil {
 		return ChatResult{ErrorClass: "provider_config_error"}, err
 	}
+	ioID := a.recordUpstreamBody(req.Instance, req.Credential.ID, "chat_completions", http.MethodPost, "upstream_input", 0, "application/json", body, "")
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return ChatResult{ErrorClass: "upstream_request_error"}, err
@@ -78,16 +82,17 @@ func (a HTTPChatAdapter) CompleteChat(ctx context.Context, req ChatRequest) (Cha
 
 	resp, err := a.Client.Do(httpReq)
 	if err != nil {
-		logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
+		errorClass := classifyTransportError(err)
+		logProviderHTTP(ctx, a.Logger, statusLevel(http.StatusBadGateway, errorClass), "provider_http",
 			slog.String("endpoint", "chat_completions"),
 			slog.String("method", http.MethodPost),
 			slog.String("provider_instance", req.Instance.ID),
 			slog.String("provider_type", req.Instance.Type),
 			slog.Int64("credential_id", req.Credential.ID),
 			slog.Int64("duration_ms", durationMS(start)),
-			slog.String("error_class", classifyTransportError(err)),
+			slog.String("error_class", errorClass),
 		)
-		return ChatResult{ErrorClass: classifyTransportError(err), Latency: time.Since(start)}, err
+		return ChatResult{ErrorClass: errorClass, Latency: time.Since(start)}, err
 	}
 	defer resp.Body.Close()
 
@@ -115,6 +120,7 @@ func (a HTTPChatAdapter) CompleteChat(ctx context.Context, req ChatRequest) (Cha
 	}
 	respBody, tooLarge, readErr := readLimitedUpstreamBody(resp.Body, MaxUpstreamChatBodyBytes)
 	latency := time.Since(start)
+	a.recordUpstreamBody(req.Instance, req.Credential.ID, "chat_completions", http.MethodPost, "upstream_output", resp.StatusCode, resp.Header.Get("Content-Type"), respBody, ioID)
 	if tooLarge {
 		logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
 			slog.String("endpoint", "chat_completions"),

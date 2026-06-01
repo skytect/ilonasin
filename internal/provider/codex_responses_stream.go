@@ -36,6 +36,7 @@ func (a HTTPChatAdapter) streamCodexChat(ctx context.Context, req ChatRequest, s
 	if err != nil {
 		return withStreamLatency(start, ChatStreamSummary{ErrorClass: "provider_config_error", CompletionStatus: "upstream_invalid", PreStreamError: true}), err
 	}
+	ioID := a.recordUpstreamBody(req.Instance, req.Credential.ID, "responses_stream", http.MethodPost, "upstream_input", 0, "application/json", body, "")
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	httpReq, err := http.NewRequestWithContext(streamCtx, http.MethodPost, endpoint, bytes.NewReader(body))
@@ -50,7 +51,7 @@ func (a HTTPChatAdapter) streamCodexChat(ctx context.Context, req ChatRequest, s
 	resp, err := a.doStreamRequest(streamCtx, cancel, httpReq)
 	if err != nil {
 		errorClass := classifyTransportError(err)
-		logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
+		logProviderHTTP(ctx, a.Logger, statusLevel(http.StatusBadGateway, errorClass), "provider_http",
 			slog.String("endpoint", "responses_stream"),
 			slog.String("method", http.MethodPost),
 			slog.String("provider_instance", req.Instance.ID),
@@ -74,6 +75,7 @@ func (a HTTPChatAdapter) streamCodexChat(ctx context.Context, req ChatRequest, s
 			errorClass = "upstream_auth_failed"
 		}
 		respBody, tooLarge, readErr := readLimitedUpstreamBody(resp.Body, MaxUpstreamChatBodyBytes)
+		a.recordUpstreamBody(req.Instance, req.Credential.ID, "responses_stream", http.MethodPost, "upstream_output", resp.StatusCode, resp.Header.Get("Content-Type"), respBody, ioID)
 		if tooLarge {
 			errorClass = "upstream_body_too_large"
 		} else if readErr != nil {
@@ -121,7 +123,8 @@ func (a HTTPChatAdapter) streamCodexChat(ctx context.Context, req ChatRequest, s
 		created:      time.Now().Unix(),
 		includeUsage: includeStreamUsage(req.Request),
 	}
-	if err := a.readCodexStream(streamCtx, resp.Body, sink, &summary, &state, start); err != nil {
+	streamCapture := upstreamStreamCapture{instance: req.Instance, credentialID: req.Credential.ID, endpoint: "responses_stream", status: resp.StatusCode, id: ioID}
+	if err := a.readCodexStream(streamCtx, resp.Body, sink, &summary, &state, start, streamCapture); err != nil {
 		if summary.ErrorClass == "" {
 			summary.ErrorClass = classifyCodexReadError(streamCtx, err)
 		}
@@ -142,8 +145,30 @@ func (a HTTPChatAdapter) streamCodexChat(ctx context.Context, req ChatRequest, s
 		if !summary.Started {
 			summary.PreStreamError = true
 		}
+		logProviderHTTP(ctx, a.Logger, statusLevel(summary.StatusCode, summary.ErrorClass), "provider_http",
+			slog.String("endpoint", "responses_stream"),
+			slog.String("method", http.MethodPost),
+			slog.String("provider_instance", req.Instance.ID),
+			slog.String("provider_type", req.Instance.Type),
+			slog.Int64("credential_id", req.Credential.ID),
+			slog.Int("status", summary.StatusCode),
+			slog.Int64("duration_ms", durationMS(start)),
+			slog.String("error_class", summary.ErrorClass),
+			slog.String("stream_status", summary.CompletionStatus),
+		)
 		return withStreamLatency(start, summary), err
 	}
+	logProviderHTTP(ctx, a.Logger, slog.LevelInfo, "provider_http",
+		slog.String("endpoint", "responses_stream"),
+		slog.String("method", http.MethodPost),
+		slog.String("provider_instance", req.Instance.ID),
+		slog.String("provider_type", req.Instance.Type),
+		slog.Int64("credential_id", req.Credential.ID),
+		slog.Int("status", summary.StatusCode),
+		slog.Int64("duration_ms", durationMS(start)),
+		slog.String("stream_status", summary.CompletionStatus),
+		slog.Int("chunk_count", summary.ChunkCount),
+	)
 	return withStreamLatency(start, summary), nil
 }
 
@@ -182,7 +207,7 @@ func includeStreamUsage(req openai.ChatCompletionRequest) bool {
 	return include
 }
 
-func (a HTTPChatAdapter) readCodexStream(ctx context.Context, body io.ReadCloser, sink ChatStreamSink, summary *ChatStreamSummary, state *codexStreamState, start time.Time) error {
+func (a HTTPChatAdapter) readCodexStream(ctx context.Context, body io.ReadCloser, sink ChatStreamSink, summary *ChatStreamSummary, state *codexStreamState, start time.Time, capture upstreamStreamCapture) error {
 	reader := bufio.NewReaderSize(body, a.maxStreamLineBytes()+1)
 	var parts [][]byte
 	eventBytes := 0
@@ -191,7 +216,10 @@ func (a HTTPChatAdapter) readCodexStream(ctx context.Context, body io.ReadCloser
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				if len(parts) > 0 {
-					if err := a.handleCodexStreamEvent(ctx, bytes.Join(parts, []byte("\n")), sink, summary, state, start); err != nil {
+					data := bytes.Join(parts, []byte("\n"))
+					capture.eventIndex++
+					capture.id = a.recordUpstreamSSE(capture.instance, capture.credentialID, capture.endpoint, capture.status, data, capture.id, capture.eventIndex)
+					if err := a.handleCodexStreamEvent(ctx, data, sink, summary, state, start); err != nil {
 						return err
 					}
 					if summary.Done {
@@ -218,7 +246,10 @@ func (a HTTPChatAdapter) readCodexStream(ctx context.Context, body io.ReadCloser
 				summary.CompletionStatus = "event_limit"
 				return fmt.Errorf("codex response event limit exceeded")
 			}
-			if err := a.handleCodexStreamEvent(ctx, bytes.Join(parts, []byte("\n")), sink, summary, state, start); err != nil {
+			data := bytes.Join(parts, []byte("\n"))
+			capture.eventIndex++
+			capture.id = a.recordUpstreamSSE(capture.instance, capture.credentialID, capture.endpoint, capture.status, data, capture.id, capture.eventIndex)
+			if err := a.handleCodexStreamEvent(ctx, data, sink, summary, state, start); err != nil {
 				return err
 			}
 			if state.aggregateBytes() > a.maxCodexAggregateBytes() {

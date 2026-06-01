@@ -69,7 +69,6 @@ func providersFromSnapshot(rows []management.ProviderInstance) []provider.Instan
 			Type:           row.Type,
 			BaseURL:        row.BaseURL,
 			AuthStyle:      row.AuthStyle,
-			Placeholder:    row.Placeholder,
 			APIKey:         row.APIKey,
 			OAuth:          row.OAuth,
 			OAuthRefresh:   row.OAuthRefresh,

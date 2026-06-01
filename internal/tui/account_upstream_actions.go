@@ -43,7 +43,7 @@ func (m *Model) disableFirstUpstreamCredential() error {
 func (m Model) visibleUpstreamCredentials(rows []management.UpstreamCredential) []management.UpstreamCredential {
 	allowed := map[string]bool{}
 	for _, instance := range m.visibleProviderRows() {
-		if instance.APIKey && !instance.Placeholder {
+		if instance.APIKey {
 			allowed[instance.ID] = true
 		}
 	}

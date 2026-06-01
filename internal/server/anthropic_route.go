@@ -72,7 +72,7 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request,
 		writeAnthropicError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if !instance.Chat || (!instance.APIKey && !instance.OAuth) || (instance.Placeholder && instance.Type != "codex") {
+	if !instance.Chat || (!instance.APIKey && !instance.OAuth) {
 		s.recordAnthropicEarly(r, start, token, addr, instance, chatReq, req, http.StatusNotImplemented, "provider_unimplemented")
 		s.logHTTP(r, http.StatusNotImplemented, "anthropic_route", "provider_unimplemented")
 		writeAnthropicError(w, http.StatusNotImplemented, providerUnsupportedCapabilityMessage)

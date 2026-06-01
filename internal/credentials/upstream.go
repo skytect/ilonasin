@@ -297,7 +297,7 @@ func (s *UpstreamService) AddAPIKey(ctx context.Context, providerInstanceID, lab
 	if !ok {
 		return UpstreamCredentialMetadata{}, ErrCredentialNotFound
 	}
-	if !instance.APIKey || instance.Placeholder {
+	if !instance.APIKey {
 		return UpstreamCredentialMetadata{}, fmt.Errorf("%w: provider %q does not support api-key credentials", ErrUnsupportedCredential, providerInstanceID)
 	}
 	meta, err := s.Repo.InsertAPIKeyCredential(ctx, NewUpstreamCredential{
@@ -404,7 +404,7 @@ func (s *UpstreamService) ResolveAPIKey(ctx context.Context, providerInstanceID 
 	if !ok {
 		return ResolvedAPIKeyCredential{}, ErrCredentialNotFound
 	}
-	if !instance.APIKey || instance.Placeholder {
+	if !instance.APIKey {
 		return ResolvedAPIKeyCredential{}, fmt.Errorf("%w: provider %q does not support api-key credentials", ErrUnsupportedCredential, providerInstanceID)
 	}
 	return s.Repo.ResolveAPIKeyCredential(ctx, providerInstanceID)
@@ -415,7 +415,7 @@ func (s *UpstreamService) ResolveAPIKeys(ctx context.Context, providerInstanceID
 	if !ok {
 		return nil, ErrCredentialNotFound
 	}
-	if !instance.APIKey || instance.Placeholder {
+	if !instance.APIKey {
 		return nil, fmt.Errorf("%w: provider %q does not support api-key credentials", ErrUnsupportedCredential, providerInstanceID)
 	}
 	return s.Repo.ResolveAPIKeyCredentials(ctx, providerInstanceID)
@@ -1093,7 +1093,7 @@ func (s *UpstreamService) setFallbackGroup(ctx context.Context, providerInstance
 	}
 	switch credentialKind {
 	case CredentialKindAPIKey:
-		if !instance.APIKey || instance.Placeholder {
+		if !instance.APIKey {
 			return fmt.Errorf("%w: provider %q does not support api-key fallback groups", ErrUnsupportedCredential, providerInstanceID)
 		}
 	case CredentialKindOAuth:

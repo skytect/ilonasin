@@ -46,7 +46,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request, token c
 		writeError(w, http.StatusNotFound, "provider instance is not configured", "invalid_request_error", "provider_not_configured")
 		return
 	}
-	if !instance.Chat || (!instance.APIKey && !instance.OAuth) || (instance.Placeholder && instance.Type != "codex") {
+	if !instance.Chat || (!instance.APIKey && !instance.OAuth) {
 		s.recordResponsesEarly(r, start, token, addr, instance, responsesReq, http.StatusNotImplemented, "provider_unimplemented")
 		s.logHTTP(r, http.StatusNotImplemented, "responses_route", "provider_unimplemented")
 		writeError(w, http.StatusNotImplemented, providerUnsupportedCapabilityMessage, "invalid_request_error", "provider_unimplemented")

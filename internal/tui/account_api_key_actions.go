@@ -80,7 +80,7 @@ func (m *Model) clearAPIKeyInput() {
 
 func firstAPIKeyProvider(registry provider.Registry) (provider.Instance, bool) {
 	for _, instance := range registry.List() {
-		if instance.APIKey && !instance.Placeholder {
+		if instance.APIKey {
 			return instance, true
 		}
 	}

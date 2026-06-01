@@ -15,7 +15,6 @@ type Defaults struct {
 	BaseURL        string
 	AuthIssuer     string
 	AuthStyle      string
-	Placeholder    bool
 	APIKey         bool
 	OAuth          bool
 	OAuthRefresh   bool
@@ -45,7 +44,6 @@ var builtIns = map[string]Defaults{
 		BaseURL:        "https://chatgpt.com/backend-api/codex",
 		AuthIssuer:     "https://auth.openai.com",
 		AuthStyle:      "deferred",
-		Placeholder:    true,
 		OAuth:          true,
 		OAuthRefresh:   true,
 		Chat:           true,
@@ -72,7 +70,6 @@ type Instance struct {
 	BaseURL        string
 	AuthIssuer     string
 	AuthStyle      string
-	Placeholder    bool
 	APIKey         bool
 	OAuth          bool
 	OAuthRefresh   bool
@@ -119,7 +116,6 @@ func NewRegistry(cfg config.Config) (Registry, error) {
 			BaseURL:        baseURL,
 			AuthIssuer:     authIssuer,
 			AuthStyle:      def.AuthStyle,
-			Placeholder:    def.Placeholder,
 			APIKey:         def.APIKey,
 			OAuth:          def.OAuth,
 			OAuthRefresh:   def.OAuthRefresh,

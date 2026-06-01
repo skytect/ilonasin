@@ -46,7 +46,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 		writeError(w, http.StatusNotFound, "provider instance is not configured", "invalid_request_error", "provider_not_configured")
 		return
 	}
-	if !instance.Chat || (!instance.APIKey && !instance.OAuth) || (instance.Placeholder && instance.Type != "codex") {
+	if !instance.Chat || (!instance.APIKey && !instance.OAuth) {
 		requestMeta := requestMetadataBase(start, token, addr, instance, req, metadataEndpointChatCompletions, req.Stream)
 		requestMeta.HTTPStatus = http.StatusNotImplemented
 		requestMeta.ErrorClass = "provider_unimplemented"

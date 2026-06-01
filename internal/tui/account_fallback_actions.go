@@ -85,7 +85,7 @@ func (m *Model) disableFirstFallbackPolicy() error {
 func (m Model) visibleFallbackPolicies(rows []management.FallbackPolicy) []management.FallbackPolicy {
 	allowed := map[string]map[string]bool{}
 	for _, instance := range m.visibleProviderRows() {
-		if instance.APIKey && !instance.Placeholder {
+		if instance.APIKey {
 			allowed[instance.ID] = map[string]bool{credentials.CredentialKindAPIKey: true}
 		}
 		if instance.OAuth && instance.Type == "codex" {

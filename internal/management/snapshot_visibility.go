@@ -30,7 +30,7 @@ func visibleFallbackPolicies(rows []credentials.FallbackPolicyMetadata, registry
 func fallbackPolicyProviderKinds(registry provider.Registry) map[string]map[string]bool {
 	allowed := map[string]map[string]bool{}
 	for _, instance := range registry.List() {
-		if instance.APIKey && !instance.Placeholder {
+		if instance.APIKey {
 			allowed[instance.ID] = map[string]bool{credentials.CredentialKindAPIKey: true}
 		}
 		if instance.OAuth && instance.Type == "codex" {
@@ -46,7 +46,7 @@ func fallbackPolicyProviderKinds(registry provider.Registry) map[string]map[stri
 func apiKeyProviderIDs(registry provider.Registry) map[string]bool {
 	allowed := map[string]bool{}
 	for _, instance := range registry.List() {
-		if instance.APIKey && !instance.Placeholder {
+		if instance.APIKey {
 			allowed[instance.ID] = true
 		}
 	}

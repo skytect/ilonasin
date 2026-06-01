@@ -26,7 +26,6 @@ type ProviderInstance struct {
 	Type           string `json:"type"`
 	BaseURL        string `json:"base_url"`
 	AuthStyle      string `json:"auth_style"`
-	Placeholder    bool   `json:"placeholder"`
 	APIKey         bool   `json:"api_key"`
 	OAuth          bool   `json:"oauth"`
 	OAuthRefresh   bool   `json:"oauth_refresh"`

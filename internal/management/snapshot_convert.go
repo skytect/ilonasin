@@ -12,7 +12,6 @@ func providerInstanceFromProvider(row provider.Instance) ProviderInstance {
 		Type:           row.Type,
 		BaseURL:        safeBaseURL(row.BaseURL),
 		AuthStyle:      row.AuthStyle,
-		Placeholder:    row.Placeholder,
 		APIKey:         row.APIKey,
 		OAuth:          row.OAuth,
 		OAuthRefresh:   row.OAuthRefresh,

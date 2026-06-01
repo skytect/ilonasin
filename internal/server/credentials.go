@@ -11,7 +11,7 @@ import (
 )
 
 func (s *Server) resolveModelCredentials(ctx context.Context, instance provider.Instance) ([]provider.BearerCredential, error) {
-	if instance.APIKey && !instance.Placeholder {
+	if instance.APIKey {
 		credentialsSet, err := s.upstreams.ResolveAPIKeys(ctx, instance.ID)
 		if err != nil {
 			return nil, err

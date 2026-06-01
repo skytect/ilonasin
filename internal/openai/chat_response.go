@@ -17,6 +17,7 @@ type ChatCompletionMetadata struct {
 type ChatCompletionMessageResult struct {
 	ChatCompletionMetadata
 	Content              string
+	FinishReason         string
 	HasToolCalls         bool
 	ToolCalls            []map[string]any
 	ResponsesOutputItems []ResponsesOutputItem
@@ -152,6 +153,7 @@ func ExtractChatCompletionMessageResult(body []byte) (ChatCompletionMessageResul
 	return ChatCompletionMessageResult{
 		ChatCompletionMetadata: metadata,
 		Content:                message.Content,
+		FinishReason:           message.FinishReason,
 		HasToolCalls:           len(toolCalls) > 0,
 		ToolCalls:              toolCalls,
 	}, nil
@@ -241,8 +243,9 @@ func extractChatCompletion(body []byte, includeMessage bool) (ChatCompletionMeta
 }
 
 type chatCompletionMessage struct {
-	Content   string
-	ToolCalls []json.RawMessage
+	Content      string
+	FinishReason string
+	ToolCalls    []json.RawMessage
 }
 
 func chatCompletionChoiceMessage(choice json.RawMessage) (chatCompletionMessage, error) {
@@ -251,19 +254,27 @@ func chatCompletionChoiceMessage(choice json.RawMessage) (chatCompletionMessage,
 			Content   json.RawMessage   `json:"content"`
 			ToolCalls []json.RawMessage `json:"tool_calls"`
 		} `json:"message"`
+		FinishReason *string `json:"finish_reason"`
 	}
 	if err := json.Unmarshal(choice, &parsed); err != nil {
 		return chatCompletionMessage{}, fmt.Errorf("upstream response choice is invalid")
 	}
+	message := chatCompletionMessage{}
+	if parsed.FinishReason != nil {
+		message.FinishReason = *parsed.FinishReason
+	}
 	content := strings.TrimSpace(string(parsed.Message.Content))
 	if content == "" || content == "null" {
-		return chatCompletionMessage{ToolCalls: parsed.Message.ToolCalls}, nil
+		message.ToolCalls = parsed.Message.ToolCalls
+		return message, nil
 	}
 	var text string
 	if err := json.Unmarshal(parsed.Message.Content, &text); err != nil {
 		return chatCompletionMessage{}, errors.New("upstream response message content is unsupported")
 	}
-	return chatCompletionMessage{Content: text, ToolCalls: parsed.Message.ToolCalls}, nil
+	message.Content = text
+	message.ToolCalls = parsed.Message.ToolCalls
+	return message, nil
 }
 
 func ExtractUsage(body []byte) (Usage, error) {

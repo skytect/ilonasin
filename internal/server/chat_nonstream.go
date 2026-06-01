@@ -13,15 +13,17 @@ import (
 )
 
 type nonStreamContext struct {
-	start       time.Time
-	endpoint    string
-	stream      bool
-	token       credentials.VerifiedLocalToken
-	address     routing.ModelAddress
-	instance    provider.Instance
-	credentials []provider.BearerCredential
-	adapter     provider.ChatAdapter
-	request     openai.ChatCompletionRequest
+	start           time.Time
+	endpoint        string
+	stream          bool
+	clientModel     string
+	maxOutputTokens int
+	token           credentials.VerifiedLocalToken
+	address         routing.ModelAddress
+	instance        provider.Instance
+	credentials     []provider.BearerCredential
+	adapter         provider.ChatAdapter
+	request         openai.ChatCompletionRequest
 }
 
 type chatAttempt struct {
@@ -159,6 +161,12 @@ func (s *Server) recordNonStreamingChat(r *http.Request, nc nonStreamContext, ex
 	recordCtx, cancel := nonStreamRecordContext(r, errorClass)
 	defer cancel()
 	requestMeta := requestMetadataBase(nc.start, nc.token, nc.address, nc.instance, nc.request, nc.endpoint, nc.stream)
+	if nc.clientModel != "" {
+		requestMeta.RequestedModel = nc.clientModel
+	}
+	if nc.maxOutputTokens > 0 {
+		requestMeta.MaxOutputTokens = nc.maxOutputTokens
+	}
 	requestMeta.CredentialID = exec.final.credential.ID
 	requestMeta.ResolvedModel = resolvedChatModel(nc.address.ProviderModelID, exec.final.result.ResolvedModel)
 	requestMeta.HTTPStatus = status

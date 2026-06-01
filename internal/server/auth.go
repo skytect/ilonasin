@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"ilonasin/internal/anthropic"
 	"ilonasin/internal/credentials"
 	"ilonasin/internal/logging"
 )
@@ -23,15 +24,33 @@ func (s *Server) withAuth(next func(http.ResponseWriter, *http.Request, credenti
 				s.ioLogCapturedOutput(r, status, w.Header().Get("Content-Type"), capture.bytes, capture.body.Bytes(), capture.bodyTruncated)
 			}()
 		}
-		rec, err := s.auth.VerifyBearer(r.Context(), r.Header.Get("Authorization"))
+		rec, err := s.auth.VerifyBearer(r.Context(), localAuthorization(r))
 		if err != nil {
 			s.logHTTP(r, http.StatusUnauthorized, "local_auth", "authentication_error")
-			writeError(w, http.StatusUnauthorized, "missing or invalid bearer token", "authentication_error", "unauthorized")
+			if isAnthropicMessagesRoute(r) {
+				writeJSON(w, http.StatusUnauthorized, anthropic.ErrorForStatus(http.StatusUnauthorized, "missing or invalid bearer token"))
+			} else {
+				writeError(w, http.StatusUnauthorized, "missing or invalid bearer token", "authentication_error", "unauthorized")
+			}
 			return
 		}
 		s.logHTTP(r, http.StatusOK, "local_auth", "")
 		next(w, r, rec)
 	}
+}
+
+func localAuthorization(r *http.Request) string {
+	if authorization := r.Header.Get("Authorization"); authorization != "" {
+		return authorization
+	}
+	if apiKey := r.Header.Get("X-Api-Key"); isAnthropicMessagesRoute(r) && apiKey != "" {
+		return "Bearer " + apiKey
+	}
+	return ""
+}
+
+func isAnthropicMessagesRoute(r *http.Request) bool {
+	return r.Method == http.MethodPost && r.URL.Path == "/v1/messages"
 }
 
 func (s *Server) logHTTP(r *http.Request, status int, event, errorClass string) {
@@ -72,6 +91,8 @@ func routeLabel(r *http.Request) string {
 		return "v1_responses"
 	case r.Method == http.MethodPost && r.URL.Path == "/v1/chat/completions":
 		return "v1_chat_completions"
+	case r.Method == http.MethodPost && r.URL.Path == "/v1/messages":
+		return "v1_messages"
 	default:
 		return "unknown"
 	}

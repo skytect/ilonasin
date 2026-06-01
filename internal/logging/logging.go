@@ -169,7 +169,7 @@ func (h redactingHandler) WithGroup(name string) slog.Handler {
 
 func redactAttr(attr slog.Attr) slog.Attr {
 	attr.Value = attr.Value.Resolve()
-	if unsafeKey(attr.Key) {
+	if unsafeKey(attr.Key) && !safeStructuralLogKey(attr.Key) {
 		return slog.String(attr.Key, redacted)
 	}
 	if attr.Value.Kind() == slog.KindGroup {
@@ -188,6 +188,22 @@ func redactAttr(attr slog.Attr) slog.Attr {
 		return slog.String(attr.Key, value)
 	}
 	return attr
+}
+
+func safeStructuralLogKey(key string) bool {
+	switch key {
+	case "codex_input_items",
+		"codex_tools",
+		"codex_input_missing_type",
+		"codex_message_items",
+		"codex_assistant_input_text_parts",
+		"codex_last_input_type",
+		"codex_last_input_role",
+		"codex_last_content_types":
+		return true
+	default:
+		return false
+	}
 }
 
 func attrsToAny(attrs []slog.Attr) []any {

@@ -888,9 +888,26 @@ func codexResponsesInputAndInstructions(raw []json.RawMessage, input []ResponseI
 			}
 			continue
 		}
+		if item.Type == "message" && (item.Role == "user" || item.Role == "assistant") {
+			encoded, err := codexResponsesMessageInput(raw[i])
+			if err != nil {
+				return nil, "", fmt.Errorf("input[%d] is invalid: %w", i, err)
+			}
+			out = append(out, encoded)
+			continue
+		}
 		out = append(out, raw[i])
 	}
 	return out, strings.Join(instructionParts, "\n\n"), nil
+}
+
+func codexResponsesMessageInput(raw json.RawMessage) (json.RawMessage, error) {
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, err
+	}
+	delete(payload, "type")
+	return json.Marshal(payload)
 }
 
 func responsesInputToChatMessages(instructions string, input []ResponseInputItem) ([]Message, error) {

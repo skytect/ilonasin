@@ -10,49 +10,6 @@ import (
 	"ilonasin/internal/provider"
 )
 
-func (s *Server) resolveModelCredential(ctx context.Context, instance provider.Instance) (provider.BearerCredential, error) {
-	if instance.APIKey && !instance.Placeholder {
-		credential, err := s.upstreams.ResolveAPIKey(ctx, instance.ID)
-		if err != nil {
-			return provider.BearerCredential{}, err
-		}
-		return provider.BearerCredential{
-			ID:                 credential.ID,
-			ProviderInstanceID: credential.ProviderInstanceID,
-			Kind:               provider.CredentialKindAPIKey,
-			BearerToken:        credential.APIKey,
-		}, nil
-	}
-	if instance.OAuth {
-		if s.oauth == nil {
-			return provider.BearerCredential{}, credentials.ErrNoEligibleCredential
-		}
-		credential, err := s.oauth.ResolveOAuthBearer(ctx, instance.ID, s.now().UTC())
-		if err != nil && errors.Is(err, credentials.ErrNoEligibleCredential) && s.refresh != nil && instance.Type == "codex" {
-			if refreshErr := s.refresh.RefreshOAuthProviderCredential(ctx, instance.ID); refreshErr == nil {
-				credential, err = s.oauth.ResolveOAuthBearer(ctx, instance.ID, s.now().UTC())
-				if err != nil {
-					return provider.BearerCredential{}, fmt.Errorf("%w: oauth refresh did not yield bearer", credentials.ErrOAuthRefreshFailed)
-				}
-			} else {
-				return provider.BearerCredential{}, fmt.Errorf("%w: oauth refresh unavailable", credentials.ErrOAuthRefreshFailed)
-			}
-		}
-		if err != nil {
-			return provider.BearerCredential{}, err
-		}
-		return provider.BearerCredential{
-			ID:                      credential.ID,
-			ProviderInstanceID:      credential.ProviderInstanceID,
-			Kind:                    provider.CredentialKindOAuthAccess,
-			BearerToken:             credential.BearerToken,
-			ChatGPTAccountID:        credential.ChatGPTAccountID,
-			ChatGPTAccountIsFedRAMP: credential.ChatGPTAccountIsFedRAMP,
-		}, nil
-	}
-	return provider.BearerCredential{}, credentials.ErrNoEligibleCredential
-}
-
 func (s *Server) resolveModelCredentials(ctx context.Context, instance provider.Instance) ([]provider.BearerCredential, error) {
 	if instance.APIKey && !instance.Placeholder {
 		credentialsSet, err := s.upstreams.ResolveAPIKeys(ctx, instance.ID)

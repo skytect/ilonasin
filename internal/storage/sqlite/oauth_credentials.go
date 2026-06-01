@@ -538,15 +538,8 @@ func (s *Store) ResolveOAuthBearerCredentials(ctx context.Context, providerInsta
 	if len(candidates) == 0 {
 		return nil, credentials.ErrNoEligibleCredential
 	}
-	primary, ok, err := s.materializeOAuthBearer(ctx, candidates[0], now, false)
-	if err != nil {
-		return nil, err
-	}
-	if !ok {
-		return nil, credentials.ErrNoEligibleCredential
-	}
-	out := []credentials.ResolvedOAuthBearerCredential{primary}
-	for _, row := range candidates[1:] {
+	out := make([]credentials.ResolvedOAuthBearerCredential, 0, len(candidates))
+	for _, row := range candidates {
 		credential, ok, err := s.materializeOAuthBearer(ctx, row, now, true)
 		if err != nil {
 			return nil, err
@@ -554,6 +547,9 @@ func (s *Store) ResolveOAuthBearerCredentials(ctx context.Context, providerInsta
 		if ok {
 			out = append(out, credential)
 		}
+	}
+	if len(out) == 0 {
+		return nil, credentials.ErrNoEligibleCredential
 	}
 	return out, nil
 }

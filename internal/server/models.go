@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -14,6 +15,11 @@ import (
 type reasoningEffort struct {
 	Effort      string `json:"effort"`
 	Description string `json:"description"`
+}
+
+type modelDiscoveryAttempt struct {
+	models []provider.ModelMetadata
+	live   bool
 }
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request, _ credentials.VerifiedLocalToken) {
@@ -70,7 +76,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request, _ credenti
 		if !instance.ModelDiscovery {
 			continue
 		}
-		credential, err := s.resolveModelCredential(r.Context(), instance)
+		credentialsSet, err := s.resolveModelCredentials(r.Context(), instance)
 		if err != nil {
 			if errors.Is(err, credentials.ErrNoEligibleCredential) {
 				continue
@@ -98,36 +104,15 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request, _ credenti
 			all = append(all, cached...)
 			continue
 		}
-		result, err := discoverer.ListModels(r.Context(), provider.ModelRequest{
-			Instance:   instance,
-			Credential: credential,
-		})
-		s.recordHealth(r.Context(), healthFromModelDiscovery(instance, credential, result, err))
-		if s.shouldRefreshOAuthAfterModel401(instance, result) {
-			if refreshed, refreshErr := s.refreshOAuthCredentialForRetryIfBearer(r.Context(), credential); refreshErr == nil {
-				credential = refreshed
-				result, err = discoverer.ListModels(r.Context(), provider.ModelRequest{
-					Instance:   instance,
-					Credential: credential,
-				})
-				s.recordHealth(r.Context(), healthFromModelDiscovery(instance, credential, result, err))
-			} else {
-				failedWithoutCache++
-				continue
-			}
-		}
-		if err == nil && len(result.Models) > 0 {
+		attempt := s.discoverModelsWithCredentials(r.Context(), instance, discoverer, credentialsSet)
+		if attempt.live && len(attempt.models) > 0 {
 			if s.cache != nil {
-				if err := s.cache.ReplaceModelCache(r.Context(), instance.ID, result.Models); err != nil {
+				if err := s.cache.ReplaceModelCache(r.Context(), instance.ID, attempt.models); err != nil {
 					writeError(w, http.StatusInternalServerError, "model cache is unavailable", "api_error", "model_cache_unavailable")
 					return
 				}
 			}
-			all = append(all, result.Models...)
-			continue
-		}
-		if s.isOAuthAuthFailure(instance, result) {
-			failedWithoutCache++
+			all = append(all, attempt.models...)
 			continue
 		}
 		cached := cacheByProvider[instance.ID]
@@ -239,6 +224,35 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request, _ credenti
 	writeJSON(w, http.StatusOK, resp)
 }
 
+func (s *Server) discoverModelsWithCredentials(ctx context.Context, instance provider.Instance, discoverer provider.ModelDiscoverer, credentialsSet []provider.BearerCredential) modelDiscoveryAttempt {
+	for _, credential := range credentialsSet {
+		result, err := discoverer.ListModels(ctx, provider.ModelRequest{
+			Instance:   instance,
+			Credential: credential,
+		})
+		s.recordHealth(ctx, healthFromModelDiscovery(instance, credential, result, err))
+		if err == nil && len(result.Models) > 0 {
+			return modelDiscoveryAttempt{models: result.Models, live: true}
+		}
+		if !s.shouldRefreshOAuthAfterModel401(instance, result) {
+			continue
+		}
+		refreshed, refreshErr := s.refreshOAuthCredentialForRetryIfBearer(ctx, credential)
+		if refreshErr != nil {
+			continue
+		}
+		result, err = discoverer.ListModels(ctx, provider.ModelRequest{
+			Instance:   instance,
+			Credential: refreshed,
+		})
+		s.recordHealth(ctx, healthFromModelDiscovery(instance, refreshed, result, err))
+		if err == nil && len(result.Models) > 0 {
+			return modelDiscoveryAttempt{models: result.Models, live: true}
+		}
+	}
+	return modelDiscoveryAttempt{}
+}
+
 func capabilityList(flags string) []string {
 	if strings.TrimSpace(flags) == "" {
 		return nil
@@ -303,8 +317,4 @@ func displayNameOrID(displayName, id string) string {
 
 func (s *Server) shouldRefreshOAuthAfterModel401(instance provider.Instance, result provider.ModelResult) bool {
 	return instance.Type == "codex" && instance.OAuth && result.StatusCode == http.StatusUnauthorized && s.refresh != nil
-}
-
-func (s *Server) isOAuthAuthFailure(instance provider.Instance, result provider.ModelResult) bool {
-	return instance.Type == "codex" && instance.OAuth && result.StatusCode == http.StatusUnauthorized
 }

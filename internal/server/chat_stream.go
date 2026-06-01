@@ -207,11 +207,13 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 	final := exec.final
 	summary := final.summary
 	summary = writeStreamingChatPreResponseError(w, summary, final.err, sink.started, sc.instance.Type)
-	recordCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
-	defer cancel()
+	s.recordStreamingChat(r, sc, exec, summary, sink.started)
+}
+
+func streamStatusAndError(summary provider.ChatStreamSummary, sinkStarted bool) (int, string) {
 	status := summary.StatusCode
 	if status == 0 {
-		if sink.started {
+		if sinkStarted {
 			status = http.StatusOK
 		} else {
 			status = http.StatusBadGateway
@@ -221,6 +223,21 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 	if errorClass == "" && status >= 400 {
 		errorClass = "upstream_http_error"
 	}
+	return status, errorClass
+}
+
+func streamCompletionStatus(summary provider.ChatStreamSummary) string {
+	if summary.CompletionStatus != "" {
+		return summary.CompletionStatus
+	}
+	return "upstream_invalid"
+}
+
+func (s *Server) recordStreamingChat(r *http.Request, sc streamContext, exec streamExecution, summary provider.ChatStreamSummary, sinkStarted bool) int64 {
+	recordCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
+	defer cancel()
+	final := exec.final
+	status, errorClass := streamStatusAndError(summary, sinkStarted)
 	requestMeta := requestMetadataBase(sc.start, sc.token, sc.address, sc.instance, sc.request, sc.endpoint, true)
 	finalizeChatRequestMetadata(&requestMeta, chatMetadataFinalizer{
 		credentialID:         final.credential.ID,
@@ -243,19 +260,16 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 	requestMeta.OutputTokensPerSecond = requestMeta.OutputTokensPerSecondTotal
 	requestMeta.OutputTokensPerSecondAfterTTFT = outputTPSAfterTTFT(requestMeta.CompletionTokens, requestMeta.TotalLatencyMS, requestMeta.TimeToFirstTokenMS)
 	requestID, _ := s.recordWithID(recordCtx, requestMeta)
-	completionStatus := summary.CompletionStatus
-	if completionStatus == "" {
-		completionStatus = "upstream_invalid"
-	}
 	_ = s.recordStream(recordCtx, metadata.Stream{
 		RequestMetadataID:     requestID,
 		TimeToFirstTokenMS:    summary.TimeToFirstTokenMS,
 		OutputTokensPerSecond: summary.OutputTokensPerSecond,
-		CompletionStatus:      completionStatus,
+		CompletionStatus:      streamCompletionStatus(summary),
 		ChunkCount:            summary.ChunkCount,
 	})
 	s.recordQuotaObservations(recordCtx, requestID, exec.quotaObservations)
 	s.recordFallbacks(recordCtx, requestID, exec.fallbackEvents)
+	return requestID
 }
 
 func writeStreamingChatPreResponseError(w http.ResponseWriter, summary provider.ChatStreamSummary, err error, sinkStarted bool, providerType string) provider.ChatStreamSummary {

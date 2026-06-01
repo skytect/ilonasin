@@ -88,7 +88,7 @@ func (s *Store) FindLocalTokenByHash(ctx context.Context, hash string) (credenti
 	return rec, nil
 }
 
-func scanLocalTokenMetadata(row localTokenScanner) (credentials.LocalTokenMetadata, error) {
+func scanLocalTokenMetadata(row rowScanner) (credentials.LocalTokenMetadata, error) {
 	var meta credentials.LocalTokenMetadata
 	var created string
 	var disabled sql.NullString

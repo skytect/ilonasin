@@ -2,7 +2,6 @@ package management
 
 import (
 	"fmt"
-	"math"
 	"sort"
 	"time"
 
@@ -68,11 +67,9 @@ func subscriptionUsageAggregates(rows []SubscriptionUsageRow, now time.Time) []S
 		b := buckets[key]
 		if b == nil {
 			b = &bucket{agg: SubscriptionUsageAggregate{
-				ProviderInstanceID:               row.ProviderInstanceID,
-				LimitID:                          row.LimitID,
-				LimitName:                        row.LimitName,
-				MinimumPrimaryRemainingPercent:   100,
-				MinimumSecondaryRemainingPercent: 100,
+				ProviderInstanceID: row.ProviderInstanceID,
+				LimitID:            row.LimitID,
+				LimitName:          row.LimitName,
 			}}
 			buckets[key] = b
 		}
@@ -94,16 +91,12 @@ func subscriptionUsageAggregates(rows []SubscriptionUsageRow, now time.Time) []S
 				b.secondaryLabel = row.SecondaryLabel
 			}
 		}
-		b.agg.MinimumPrimaryRemainingPercent = math.Min(b.agg.MinimumPrimaryRemainingPercent, row.PrimaryRemainingPercent)
-		b.agg.MinimumSecondaryRemainingPercent = math.Min(b.agg.MinimumSecondaryRemainingPercent, row.SecondaryRemainingPercent)
 		b.agg.EarliestPrimaryResetAt = earliestFutureTime(b.agg.EarliestPrimaryResetAt, row.PrimaryResetAt, now)
 		b.agg.EarliestSecondaryResetAt = earliestFutureTime(b.agg.EarliestSecondaryResetAt, row.SecondaryResetAt, now)
 	}
 	out := make([]SubscriptionUsageAggregate, 0, len(buckets))
 	for _, b := range buckets {
 		if b.agg.AccountCount > 0 {
-			b.agg.AveragePrimaryUsedPercent = b.primarySum / float64(b.agg.AccountCount)
-			b.agg.AverageSecondaryUsedPercent = b.secondarySum / float64(b.agg.AccountCount)
 			b.agg.Windows = subscriptionUsagePoolWindows(b.agg, b.primarySum, b.secondarySum, b.primaryWindowCount, b.secondaryWindowCount, b.primaryLabel, b.secondaryLabel)
 		}
 		out = append(out, b.agg)
@@ -147,26 +140,22 @@ func subscriptionUsagePoolWindows(row SubscriptionUsageAggregate, primarySum, se
 	if row.AccountCount == 0 {
 		return out
 	}
-	if primaryWindowCount > 0 || row.AveragePrimaryUsedPercent > 0 || row.MinimumPrimaryRemainingPercent < 100 || row.EarliestPrimaryResetAt != nil {
+	if primaryWindowCount > 0 || primarySum > 0 || row.EarliestPrimaryResetAt != nil {
 		out = append(out, subscriptionUsagePoolWindow(
 			"primary",
 			primaryLabel,
 			row.AccountCount,
 			row.StaleCount,
-			row.AveragePrimaryUsedPercent,
-			row.MinimumPrimaryRemainingPercent,
 			primarySum,
 			row.EarliestPrimaryResetAt,
 		))
 	}
-	if secondaryWindowCount > 0 || row.AverageSecondaryUsedPercent > 0 || row.MinimumSecondaryRemainingPercent < 100 || row.EarliestSecondaryResetAt != nil {
+	if secondaryWindowCount > 0 || secondarySum > 0 || row.EarliestSecondaryResetAt != nil {
 		out = append(out, subscriptionUsagePoolWindow(
 			"secondary",
 			secondaryLabel,
 			row.AccountCount,
 			row.StaleCount,
-			row.AverageSecondaryUsedPercent,
-			row.MinimumSecondaryRemainingPercent,
 			secondarySum,
 			row.EarliestSecondaryResetAt,
 		))
@@ -174,7 +163,7 @@ func subscriptionUsagePoolWindows(row SubscriptionUsageAggregate, primarySum, se
 	return out
 }
 
-func subscriptionUsagePoolWindow(kind, label string, accountCount, staleCount int, averageUsed, minimumRemaining, totalUsed float64, earliestReset *time.Time) SubscriptionUsagePoolWindow {
+func subscriptionUsagePoolWindow(kind, label string, accountCount, staleCount int, totalUsed float64, earliestReset *time.Time) SubscriptionUsagePoolWindow {
 	totalCapacity := float64(accountCount) * 100
 	totalUsed = boundedPercentPoints(totalUsed, totalCapacity)
 	return SubscriptionUsagePoolWindow{
@@ -182,8 +171,6 @@ func subscriptionUsagePoolWindow(kind, label string, accountCount, staleCount in
 		Label:                       label,
 		AccountCount:                accountCount,
 		StaleCount:                  staleCount,
-		AverageUsedPercent:          boundedPercent(averageUsed),
-		MinimumRemainingPercent:     boundedPercent(minimumRemaining),
 		TotalUsedPercentPoints:      totalUsed,
 		TotalRemainingPercentPoints: totalCapacity - totalUsed,
 		TotalCapacityPercentPoints:  totalCapacity,

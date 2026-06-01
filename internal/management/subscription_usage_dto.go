@@ -29,18 +29,14 @@ type SubscriptionUsageRow struct {
 }
 
 type SubscriptionUsageAggregate struct {
-	ProviderInstanceID               string                        `json:"provider_instance_id"`
-	LimitID                          string                        `json:"limit_id"`
-	LimitName                        string                        `json:"limit_name"`
-	AccountCount                     int                           `json:"account_count"`
-	StaleCount                       int                           `json:"stale_count"`
-	AveragePrimaryUsedPercent        float64                       `json:"average_primary_used_percent"`
-	MinimumPrimaryRemainingPercent   float64                       `json:"minimum_primary_remaining_percent"`
-	EarliestPrimaryResetAt           *time.Time                    `json:"earliest_primary_reset_at,omitempty"`
-	AverageSecondaryUsedPercent      float64                       `json:"average_secondary_used_percent"`
-	MinimumSecondaryRemainingPercent float64                       `json:"minimum_secondary_remaining_percent"`
-	EarliestSecondaryResetAt         *time.Time                    `json:"earliest_secondary_reset_at,omitempty"`
-	Windows                          []SubscriptionUsagePoolWindow `json:"windows"`
+	ProviderInstanceID       string                        `json:"provider_instance_id"`
+	LimitID                  string                        `json:"limit_id"`
+	LimitName                string                        `json:"limit_name"`
+	AccountCount             int                           `json:"account_count"`
+	StaleCount               int                           `json:"stale_count"`
+	EarliestPrimaryResetAt   *time.Time                    `json:"earliest_primary_reset_at,omitempty"`
+	EarliestSecondaryResetAt *time.Time                    `json:"earliest_secondary_reset_at,omitempty"`
+	Windows                  []SubscriptionUsagePoolWindow `json:"windows"`
 }
 
 type SubscriptionUsageWindow struct {
@@ -57,8 +53,6 @@ type SubscriptionUsagePoolWindow struct {
 	Label                       string     `json:"label"`
 	AccountCount                int        `json:"account_count"`
 	StaleCount                  int        `json:"stale_count"`
-	AverageUsedPercent          float64    `json:"average_used_percent"`
-	MinimumRemainingPercent     float64    `json:"minimum_remaining_percent"`
 	TotalUsedPercentPoints      float64    `json:"total_used_percent_points"`
 	TotalRemainingPercentPoints float64    `json:"total_remaining_percent_points"`
 	TotalCapacityPercentPoints  float64    `json:"total_capacity_percent_points"`

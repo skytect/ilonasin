@@ -326,11 +326,25 @@ func parseResponsesFunctionCallItem(raw map[string]json.RawMessage, index int, t
 		}
 		namespace = parsed
 	}
-	arguments, err := requiredRawString(raw["arguments"], fmt.Sprintf("input[%d].arguments", index))
+	arguments, err := parseResponsesFunctionArguments(raw["arguments"], fmt.Sprintf("input[%d].arguments", index))
 	if err != nil {
 		return ResponseInputItem{}, err
 	}
 	return ResponseInputItem{Type: typ, CallID: callID, Name: name, Namespace: namespace, Arguments: arguments}, nil
+}
+
+func parseResponsesFunctionArguments(raw json.RawMessage, field string) (string, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || isJSONNull(trimmed) {
+		return "", fmt.Errorf("%s is required", field)
+	}
+	if trimmed[0] == '"' {
+		return requiredRawString(trimmed, field)
+	}
+	if !json.Valid(trimmed) {
+		return "", fmt.Errorf("%s is invalid", field)
+	}
+	return string(trimmed), nil
 }
 
 func parseResponsesFunctionCallOutputItem(raw map[string]json.RawMessage, index int, typ string) (ResponseInputItem, error) {
@@ -711,6 +725,14 @@ func codexResponsesInputAndInstructions(raw []json.RawMessage, input []ResponseI
 			out = append(out, encoded)
 			continue
 		}
+		if item.Type == "function_call" {
+			encoded, err := codexResponsesFunctionCallInput(raw[i], item)
+			if err != nil {
+				return nil, "", fmt.Errorf("input[%d] is invalid: %w", i, err)
+			}
+			out = append(out, encoded)
+			continue
+		}
 		out = append(out, raw[i])
 	}
 	return out, strings.Join(instructionParts, "\n\n"), nil
@@ -741,6 +763,15 @@ func codexResponsesMessageInput(raw json.RawMessage, item ResponseInputItem) (js
 	if item.Role == "user" || item.Role == "assistant" {
 		return json.Marshal(payload)
 	}
+	return json.Marshal(payload)
+}
+
+func codexResponsesFunctionCallInput(raw json.RawMessage, item ResponseInputItem) (json.RawMessage, error) {
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, err
+	}
+	payload["arguments"] = mustRawJSONString(item.Arguments)
 	return json.Marshal(payload)
 }
 

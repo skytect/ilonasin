@@ -29,14 +29,12 @@ type SubscriptionUsageRow struct {
 }
 
 type SubscriptionUsageAggregate struct {
-	ProviderInstanceID       string                        `json:"provider_instance_id"`
-	LimitID                  string                        `json:"limit_id"`
-	LimitName                string                        `json:"limit_name"`
-	AccountCount             int                           `json:"account_count"`
-	StaleCount               int                           `json:"stale_count"`
-	EarliestPrimaryResetAt   *time.Time                    `json:"earliest_primary_reset_at,omitempty"`
-	EarliestSecondaryResetAt *time.Time                    `json:"earliest_secondary_reset_at,omitempty"`
-	Windows                  []SubscriptionUsagePoolWindow `json:"windows"`
+	ProviderInstanceID string                        `json:"provider_instance_id"`
+	LimitID            string                        `json:"limit_id"`
+	LimitName          string                        `json:"limit_name"`
+	AccountCount       int                           `json:"account_count"`
+	StaleCount         int                           `json:"stale_count"`
+	Windows            []SubscriptionUsagePoolWindow `json:"windows"`
 }
 
 type SubscriptionUsageWindow struct {

@@ -60,6 +60,8 @@ func subscriptionUsageAggregates(rows []SubscriptionUsageRow, now time.Time) []S
 		secondaryWindowCount int
 		primaryLabel         string
 		secondaryLabel       string
+		primaryReset         *time.Time
+		secondaryReset       *time.Time
 	}
 	buckets := map[string]*bucket{}
 	for _, row := range rows {
@@ -91,13 +93,13 @@ func subscriptionUsageAggregates(rows []SubscriptionUsageRow, now time.Time) []S
 				b.secondaryLabel = row.SecondaryLabel
 			}
 		}
-		b.agg.EarliestPrimaryResetAt = earliestFutureTime(b.agg.EarliestPrimaryResetAt, row.PrimaryResetAt, now)
-		b.agg.EarliestSecondaryResetAt = earliestFutureTime(b.agg.EarliestSecondaryResetAt, row.SecondaryResetAt, now)
+		b.primaryReset = earliestFutureTime(b.primaryReset, row.PrimaryResetAt, now)
+		b.secondaryReset = earliestFutureTime(b.secondaryReset, row.SecondaryResetAt, now)
 	}
 	out := make([]SubscriptionUsageAggregate, 0, len(buckets))
 	for _, b := range buckets {
 		if b.agg.AccountCount > 0 {
-			b.agg.Windows = subscriptionUsagePoolWindows(b.agg, b.primarySum, b.secondarySum, b.primaryWindowCount, b.secondaryWindowCount, b.primaryLabel, b.secondaryLabel)
+			b.agg.Windows = subscriptionUsagePoolWindows(b.agg, b.primarySum, b.secondarySum, b.primaryWindowCount, b.secondaryWindowCount, b.primaryLabel, b.secondaryLabel, b.primaryReset, b.secondaryReset)
 		}
 		out = append(out, b.agg)
 	}
@@ -135,29 +137,29 @@ func subscriptionUsageWindows(row SubscriptionUsageRow) []SubscriptionUsageWindo
 	return out
 }
 
-func subscriptionUsagePoolWindows(row SubscriptionUsageAggregate, primarySum, secondarySum float64, primaryWindowCount, secondaryWindowCount int, primaryLabel, secondaryLabel string) []SubscriptionUsagePoolWindow {
+func subscriptionUsagePoolWindows(row SubscriptionUsageAggregate, primarySum, secondarySum float64, primaryWindowCount, secondaryWindowCount int, primaryLabel, secondaryLabel string, primaryReset, secondaryReset *time.Time) []SubscriptionUsagePoolWindow {
 	out := make([]SubscriptionUsagePoolWindow, 0, 2)
 	if row.AccountCount == 0 {
 		return out
 	}
-	if primaryWindowCount > 0 || primarySum > 0 || row.EarliestPrimaryResetAt != nil {
+	if primaryWindowCount > 0 || primarySum > 0 || primaryReset != nil {
 		out = append(out, subscriptionUsagePoolWindow(
 			"primary",
 			primaryLabel,
 			row.AccountCount,
 			row.StaleCount,
 			primarySum,
-			row.EarliestPrimaryResetAt,
+			primaryReset,
 		))
 	}
-	if secondaryWindowCount > 0 || secondarySum > 0 || row.EarliestSecondaryResetAt != nil {
+	if secondaryWindowCount > 0 || secondarySum > 0 || secondaryReset != nil {
 		out = append(out, subscriptionUsagePoolWindow(
 			"secondary",
 			secondaryLabel,
 			row.AccountCount,
 			row.StaleCount,
 			secondarySum,
-			row.EarliestSecondaryResetAt,
+			secondaryReset,
 		))
 	}
 	return out

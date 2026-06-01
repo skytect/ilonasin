@@ -77,6 +77,14 @@ func (s *Server) shouldRefreshModelCredentialAfterStream401(instance provider.In
 	return instance.Type == "codex" && instance.OAuth && credential.ID != 0 && summary.StatusCode == http.StatusUnauthorized && summary.ErrorClass == "model_discovery_auth_failed" && summary.PreStreamError && !summary.Started && s.refresh != nil
 }
 
+func authRetryableChatAttempt(result provider.ChatResult) bool {
+	return result.StatusCode == http.StatusBadGateway && result.ErrorClass == "upstream_auth_failed"
+}
+
+func authRetryableStreamAttempt(summary provider.ChatStreamSummary, sinkStarted bool) bool {
+	return !sinkStarted && !summary.Started && summary.PreStreamError && summary.StatusCode == http.StatusBadGateway && summary.ErrorClass == "upstream_auth_failed"
+}
+
 func (s *Server) refreshOAuthCredentialForRetryIfBearer(ctx context.Context, credential provider.BearerCredential) (provider.BearerCredential, error) {
 	if s.refresh == nil {
 		return provider.BearerCredential{}, credentials.ErrNoEligibleCredential

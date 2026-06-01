@@ -175,7 +175,8 @@ func (s *Server) executeStreamingChat(r *http.Request, sc streamContext, sink *s
 			}
 			retryReason := ""
 			switch {
-			case summary.ErrorClass == "upstream_auth_failed":
+			case authRetryableStreamAttempt(summary, sink.started):
+				retryReason = "auth_retry"
 			case quotaRetryableStreamAttempt(summary, sink.started):
 				retryReason = "quota_retry"
 			case retryableStreamAttempt(summary, err, sink.started):
@@ -186,6 +187,9 @@ func (s *Server) executeStreamingChat(r *http.Request, sc streamContext, sink *s
 			}
 			next := plan.attempts[i+1]
 			exec.fallbackEvents = append(exec.fallbackEvents, chatFallbackEvent(time.Now(), sc.address, credential, next, retryReason))
+			if retryReason == "auth_retry" {
+				modelCredential = next
+			}
 		}
 	}
 	return exec

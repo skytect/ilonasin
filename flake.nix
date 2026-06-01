@@ -18,7 +18,9 @@
       packages = forAllSystems (
         pkgs:
         let
-          ilonasin = pkgs.callPackage ./nix/package.nix { };
+          ilonasin = pkgs.callPackage ./nix/package.nix {
+            commit = self.rev or self.dirtyRev or "";
+          };
         in
         {
           inherit ilonasin;

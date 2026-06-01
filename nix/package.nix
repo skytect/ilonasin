@@ -3,6 +3,8 @@
   buildGoModule,
   pkg-config,
   sqlite,
+  commit ? "",
+  commitSubject ? "",
 }:
 
 let
@@ -28,6 +30,8 @@ buildGoModule {
     "-s"
     "-w"
     "-X ilonasin/internal/cli.Version=${version}"
+    "-X ilonasin/internal/cli.Commit=${commit}"
+    "-X ilonasin/internal/cli.CommitSubject=${commitSubject}"
   ];
 
   meta = {

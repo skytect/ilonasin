@@ -239,6 +239,22 @@ func (s *Server) writeResponsesSSE(w http.ResponseWriter, r *http.Request, respo
 		if err != nil {
 			return err
 		}
+		if item.Type == "web_search_call" {
+			added := map[string]any{}
+			for key, value := range body {
+				added[key] = value
+			}
+			delete(added, "action")
+			if _, ok := added["status"]; !ok {
+				added["status"] = "in_progress"
+			}
+			if err := s.writeResponseSSEEvent(r, w, flusher, "response.output_item.added", map[string]any{
+				"type": "response.output_item.added",
+				"item": added,
+			}); err != nil {
+				return err
+			}
+		}
 		if err := s.writeResponseSSEEvent(r, w, flusher, "response.output_item.done", map[string]any{
 			"type": "response.output_item.done",
 			"item": body,
@@ -278,13 +294,17 @@ func responseFunctionCallItem(responseID string, index int, call map[string]any)
 }
 
 func responseOutputItem(responseID string, index int, item openai.ResponsesOutputItem) (map[string]any, error) {
+	id := item.ID
+	if id == "" {
+		id = fmt.Sprintf("%s_item_%d", responseID, index)
+	}
 	out := map[string]any{
-		"id":      fmt.Sprintf("%s_item_%d", responseID, index),
-		"type":    item.Type,
-		"call_id": item.CallID,
+		"id":   id,
+		"type": item.Type,
 	}
 	switch item.Type {
 	case "function_call":
+		out["call_id"] = item.CallID
 		out["name"] = item.Name
 		if item.Namespace != "" {
 			out["namespace"] = item.Namespace
@@ -295,6 +315,7 @@ func responseOutputItem(responseID string, index int, item openai.ResponsesOutpu
 			out["arguments"] = json.RawMessage(`{}`)
 		}
 	case "tool_search_call":
+		out["call_id"] = item.CallID
 		out["execution"] = item.Execution
 		if len(item.Arguments) > 0 {
 			out["arguments"] = item.Arguments
@@ -308,7 +329,11 @@ func responseOutputItem(responseID string, index int, item openai.ResponsesOutpu
 		if item.Status != "" {
 			out["status"] = item.Status
 		}
+		if len(item.Action) > 0 {
+			out["action"] = item.Action
+		}
 	case "custom_tool_call":
+		out["call_id"] = item.CallID
 		out["name"] = item.Name
 		out["input"] = item.Input
 	default:

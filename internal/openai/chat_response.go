@@ -23,6 +23,7 @@ type ChatCompletionMessageResult struct {
 }
 
 type ResponsesOutputItem struct {
+	ID        string
 	Type      string
 	CallID    string
 	Name      string
@@ -31,6 +32,7 @@ type ResponsesOutputItem struct {
 	Input     string
 	Execution string
 	Status    string
+	Action    json.RawMessage
 	Tools     []json.RawMessage
 }
 

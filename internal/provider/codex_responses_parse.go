@@ -201,6 +201,7 @@ func handleCodexEvent(data []byte, state *codexResponseParseState) (retErr error
 			Arguments json.RawMessage   `json:"arguments"`
 			Execution string            `json:"execution"`
 			Status    string            `json:"status"`
+			Action    json.RawMessage   `json:"action"`
 			Input     string            `json:"input"`
 			Tools     []json.RawMessage `json:"tools"`
 			Content   []struct {
@@ -275,9 +276,9 @@ func handleCodexEvent(data []byte, state *codexResponseParseState) (retErr error
 			}
 			return state.emitCodexFunctionCall(codexToolCallKey(event.Item.ID, event.Item.CallID))
 		case "tool_search_call":
-			return state.addCodexToolSearchCall(codexToolCallKey(event.Item.ID, event.Item.CallID), event.Item.Execution, event.Item.Arguments, event.Item.Tools)
+			return state.addCodexToolSearchCall(event.Item.ID, codexToolCallKey(event.Item.ID, event.Item.CallID), event.Item.Execution, event.Item.Arguments, event.Item.Tools)
 		case "web_search_call":
-			return state.addCodexWebSearchCall(codexToolCallKey(event.Item.ID, event.Item.CallID), event.Item.Status)
+			return state.addCodexWebSearchCall(event.Item.ID, event.Item.Status, event.Item.Action)
 		case "custom_tool_call":
 			return state.finishCodexCustomToolCall(event.Item.ID, event.Item.CallID, event.Item.Name, event.Item.Input)
 		case "message":
@@ -347,6 +348,7 @@ func eventItemType(item *struct {
 	Arguments json.RawMessage   `json:"arguments"`
 	Execution string            `json:"execution"`
 	Status    string            `json:"status"`
+	Action    json.RawMessage   `json:"action"`
 	Input     string            `json:"input"`
 	Tools     []json.RawMessage `json:"tools"`
 	Content   []struct {
@@ -499,19 +501,21 @@ func (state *codexResponseParseState) outputItem(item openai.ResponsesOutputItem
 	state.outputItems = append(state.outputItems, item)
 }
 
-func (state *codexResponseParseState) addCodexWebSearchCall(callID, status string) error {
-	if callID == "" {
+func (state *codexResponseParseState) addCodexWebSearchCall(id, status string, action json.RawMessage) error {
+	if id == "" {
 		return codexEventFailure{class: "upstream_invalid_response"}
 	}
+	action = json.RawMessage(bytes.TrimSpace(action))
 	state.outputItem(openai.ResponsesOutputItem{
 		Type:   "web_search_call",
-		CallID: callID,
+		ID:     id,
 		Status: status,
+		Action: action,
 	})
 	return nil
 }
 
-func (state *codexResponseParseState) addCodexToolSearchCall(callID, execution string, arguments json.RawMessage, tools []json.RawMessage) error {
+func (state *codexResponseParseState) addCodexToolSearchCall(id, callID, execution string, arguments json.RawMessage, tools []json.RawMessage) error {
 	if callID == "" {
 		return codexEventFailure{class: "upstream_invalid_response"}
 	}
@@ -526,6 +530,7 @@ func (state *codexResponseParseState) addCodexToolSearchCall(callID, execution s
 	}
 	state.outputItem(openai.ResponsesOutputItem{
 		Type:      "tool_search_call",
+		ID:        id,
 		CallID:    callID,
 		Arguments: json.RawMessage(bytes.TrimSpace(arguments)),
 		Execution: execution,

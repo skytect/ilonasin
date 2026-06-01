@@ -103,17 +103,3 @@ func finalizeChatRequestMetadata(out *metadata.Request, final chatMetadataFinali
 	out.OutputTokensPerSecondTotal = outputTPS(out.CompletionTokens, out.TotalLatencyMS)
 	out.OutputTokensPerSecond = out.OutputTokensPerSecondTotal
 }
-
-func safeMetadataToken(value string) string {
-	for _, r := range value {
-		switch {
-		case r >= 'a' && r <= 'z':
-		case r >= 'A' && r <= 'Z':
-		case r >= '0' && r <= '9':
-		case r == '_' || r == '-' || r == '.' || r == '/':
-		default:
-			return ""
-		}
-	}
-	return value
-}

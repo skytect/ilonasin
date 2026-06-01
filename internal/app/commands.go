@@ -21,7 +21,7 @@ func Serve(opts Options) error {
 	}
 	defer rt.cleanup()
 	defer rt.Store.Close()
-	mgmt, err := startManagementServer(context.Background(), rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database, rt.Registry, rt.Store, rt.Logger)
+	mgmt, err := startManagementServer(context.Background(), rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database, rt.Registry, rt.Store, rt.Config.SubscriptionKeepalive, rt.Logger)
 	if err != nil {
 		return err
 	}

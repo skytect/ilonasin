@@ -279,6 +279,30 @@ var migrations = []migration{
 		sqlStep(`UPDATE request_metadata SET stream = 1 WHERE id IN (SELECT DISTINCT request_metadata_id FROM stream_metrics)`),
 		sqlStep(`UPDATE request_metadata SET output_tokens_per_second_total = output_tokens_per_second WHERE output_tokens_per_second_total = 0 AND output_tokens_per_second != 0`),
 	}},
+	{version: 8, name: "subscription_usage_snapshots", steps: []migrationStep{
+		sqlStep(`CREATE TABLE IF NOT EXISTS subscription_usage_snapshots (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			observed_at TEXT NOT NULL,
+			provider_instance_id TEXT NOT NULL,
+			credential_id INTEGER REFERENCES provider_credentials(id) ON DELETE SET NULL,
+			account_display_label TEXT NOT NULL DEFAULT '',
+			plan_label TEXT NOT NULL DEFAULT '',
+			limit_id TEXT NOT NULL DEFAULT '',
+			limit_name TEXT NOT NULL DEFAULT '',
+			plan_type TEXT NOT NULL DEFAULT '',
+			reached_type TEXT NOT NULL DEFAULT '',
+			primary_used_percent REAL NOT NULL DEFAULT 0,
+			primary_window_minutes INTEGER NOT NULL DEFAULT 0,
+			primary_reset_at TEXT,
+			secondary_used_percent REAL NOT NULL DEFAULT 0,
+			secondary_window_minutes INTEGER NOT NULL DEFAULT 0,
+			secondary_reset_at TEXT,
+			source TEXT NOT NULL DEFAULT '',
+			error_class TEXT NOT NULL DEFAULT '',
+			stale INTEGER NOT NULL DEFAULT 0,
+			UNIQUE(provider_instance_id, credential_id, limit_id)
+		)`),
+	}},
 }
 
 func sqlSteps(stmts []string) []migrationStep {

@@ -20,21 +20,22 @@ type SnapshotClient interface {
 }
 
 type ManagementSnapshotResponse struct {
-	Providers           []ProviderInstance   `json:"providers"`
-	LocalTokens         []LocalToken         `json:"local_tokens"`
-	UpstreamCredentials []UpstreamCredential `json:"upstream_credentials"`
-	FallbackPolicies    []FallbackPolicy     `json:"fallback_policies"`
-	OAuthCredentials    []OAuthCredential    `json:"oauth_credentials"`
-	ProviderAccounts    []ProviderAccount    `json:"provider_accounts"`
-	ModelCache          []ModelMetadata      `json:"model_cache"`
-	RecentRequests      []RequestSummary     `json:"recent_requests"`
-	Usage               []UsageSummary       `json:"usage"`
-	Latency             []LatencySummary     `json:"latency"`
-	Streams             []StreamSummary      `json:"streams"`
-	Health              []HealthSummary      `json:"health"`
-	Fallbacks           []FallbackSummary    `json:"fallbacks"`
-	Quotas              []QuotaSummary       `json:"quotas"`
-	PruningAvailable    bool                 `json:"pruning_available"`
+	Providers           []ProviderInstance        `json:"providers"`
+	LocalTokens         []LocalToken              `json:"local_tokens"`
+	UpstreamCredentials []UpstreamCredential      `json:"upstream_credentials"`
+	FallbackPolicies    []FallbackPolicy          `json:"fallback_policies"`
+	OAuthCredentials    []OAuthCredential         `json:"oauth_credentials"`
+	ProviderAccounts    []ProviderAccount         `json:"provider_accounts"`
+	ModelCache          []ModelMetadata           `json:"model_cache"`
+	RecentRequests      []RequestSummary          `json:"recent_requests"`
+	Usage               []UsageSummary            `json:"usage"`
+	Latency             []LatencySummary          `json:"latency"`
+	Streams             []StreamSummary           `json:"streams"`
+	Health              []HealthSummary           `json:"health"`
+	Fallbacks           []FallbackSummary         `json:"fallbacks"`
+	Quotas              []QuotaSummary            `json:"quotas"`
+	SubscriptionUsage   SubscriptionUsageResponse `json:"subscription_usage"`
+	PruningAvailable    bool                      `json:"pruning_available"`
 }
 
 type ProviderInstance struct {
@@ -233,6 +234,59 @@ type QuotaSummary struct {
 	Count              int        `json:"count"`
 }
 
+type SubscriptionUsageRow struct {
+	ObservedAt                time.Time  `json:"observed_at"`
+	ProviderInstanceID        string     `json:"provider_instance_id"`
+	CredentialID              int64      `json:"credential_id"`
+	AccountDisplayLabel       string     `json:"account_display_label"`
+	PlanLabel                 string     `json:"plan_label"`
+	LimitID                   string     `json:"limit_id"`
+	LimitName                 string     `json:"limit_name"`
+	PlanType                  string     `json:"plan_type"`
+	ReachedType               string     `json:"reached_type"`
+	PrimaryLabel              string     `json:"primary_label"`
+	PrimaryUsedPercent        float64    `json:"primary_used_percent"`
+	PrimaryRemainingPercent   float64    `json:"primary_remaining_percent"`
+	PrimaryWindowMinutes      int        `json:"primary_window_minutes"`
+	PrimaryResetAt            *time.Time `json:"primary_reset_at,omitempty"`
+	SecondaryLabel            string     `json:"secondary_label"`
+	SecondaryUsedPercent      float64    `json:"secondary_used_percent"`
+	SecondaryRemainingPercent float64    `json:"secondary_remaining_percent"`
+	SecondaryWindowMinutes    int        `json:"secondary_window_minutes"`
+	SecondaryResetAt          *time.Time `json:"secondary_reset_at,omitempty"`
+	Source                    string     `json:"source"`
+	ErrorClass                string     `json:"error_class"`
+	Stale                     bool       `json:"stale"`
+}
+
+type SubscriptionUsageAggregate struct {
+	ProviderInstanceID               string     `json:"provider_instance_id"`
+	LimitID                          string     `json:"limit_id"`
+	LimitName                        string     `json:"limit_name"`
+	AccountCount                     int        `json:"account_count"`
+	StaleCount                       int        `json:"stale_count"`
+	AveragePrimaryUsedPercent        float64    `json:"average_primary_used_percent"`
+	MinimumPrimaryRemainingPercent   float64    `json:"minimum_primary_remaining_percent"`
+	EarliestPrimaryResetAt           *time.Time `json:"earliest_primary_reset_at,omitempty"`
+	AverageSecondaryUsedPercent      float64    `json:"average_secondary_used_percent"`
+	MinimumSecondaryRemainingPercent float64    `json:"minimum_secondary_remaining_percent"`
+	EarliestSecondaryResetAt         *time.Time `json:"earliest_secondary_reset_at,omitempty"`
+}
+
+type KeepaliveStatus struct {
+	Enabled           bool     `json:"enabled"`
+	Status            string   `json:"status"`
+	OutputCapVerified bool     `json:"output_cap_verified"`
+	ScheduleTimes     []string `json:"schedule_times"`
+}
+
+type SubscriptionUsageResponse struct {
+	ObservedAt time.Time                    `json:"observed_at"`
+	Accounts   []SubscriptionUsageRow       `json:"accounts"`
+	Pools      []SubscriptionUsageAggregate `json:"pools"`
+	Keepalive  KeepaliveStatus              `json:"keepalive"`
+}
+
 func (s Service) LoadManagementSnapshot(ctx context.Context) (ManagementSnapshotResponse, error) {
 	var out ManagementSnapshotResponse
 	for _, row := range s.Registry.List() {
@@ -284,6 +338,13 @@ func (s Service) LoadManagementSnapshot(ctx context.Context) (ManagementSnapshot
 		if err := loadObservabilitySnapshot(ctx, s.Observability, &out); err != nil {
 			return ManagementSnapshotResponse{}, err
 		}
+	}
+	if s.SubscriptionUsage != nil {
+		usage, err := s.GetSubscriptionUsage(ctx)
+		if err != nil {
+			return ManagementSnapshotResponse{}, err
+		}
+		out.SubscriptionUsage = usage
 	}
 	out.PruningAvailable = true
 	sanitizeSnapshot(&out)
@@ -381,6 +442,28 @@ func sanitizeSnapshot(out *ManagementSnapshotResponse) {
 		out.Quotas[i].CredentialLabel = safeSnapshotString(out.Quotas[i].CredentialLabel)
 		out.Quotas[i].Source = safeSnapshotString(out.Quotas[i].Source)
 		out.Quotas[i].ErrorClass = safeSnapshotString(out.Quotas[i].ErrorClass)
+	}
+	for i := range out.SubscriptionUsage.Accounts {
+		out.SubscriptionUsage.Accounts[i].ProviderInstanceID = safeMachineString(out.SubscriptionUsage.Accounts[i].ProviderInstanceID)
+		out.SubscriptionUsage.Accounts[i].AccountDisplayLabel = safeSnapshotString(out.SubscriptionUsage.Accounts[i].AccountDisplayLabel)
+		out.SubscriptionUsage.Accounts[i].PlanLabel = safeSnapshotString(out.SubscriptionUsage.Accounts[i].PlanLabel)
+		out.SubscriptionUsage.Accounts[i].LimitID = safeSnapshotString(out.SubscriptionUsage.Accounts[i].LimitID)
+		out.SubscriptionUsage.Accounts[i].LimitName = safeSnapshotString(out.SubscriptionUsage.Accounts[i].LimitName)
+		out.SubscriptionUsage.Accounts[i].PlanType = safeSnapshotString(out.SubscriptionUsage.Accounts[i].PlanType)
+		out.SubscriptionUsage.Accounts[i].ReachedType = safeSnapshotString(out.SubscriptionUsage.Accounts[i].ReachedType)
+		out.SubscriptionUsage.Accounts[i].PrimaryLabel = safeSnapshotString(out.SubscriptionUsage.Accounts[i].PrimaryLabel)
+		out.SubscriptionUsage.Accounts[i].SecondaryLabel = safeSnapshotString(out.SubscriptionUsage.Accounts[i].SecondaryLabel)
+		out.SubscriptionUsage.Accounts[i].Source = safeSnapshotString(out.SubscriptionUsage.Accounts[i].Source)
+		out.SubscriptionUsage.Accounts[i].ErrorClass = safeSnapshotString(out.SubscriptionUsage.Accounts[i].ErrorClass)
+	}
+	for i := range out.SubscriptionUsage.Pools {
+		out.SubscriptionUsage.Pools[i].ProviderInstanceID = safeMachineString(out.SubscriptionUsage.Pools[i].ProviderInstanceID)
+		out.SubscriptionUsage.Pools[i].LimitID = safeSnapshotString(out.SubscriptionUsage.Pools[i].LimitID)
+		out.SubscriptionUsage.Pools[i].LimitName = safeSnapshotString(out.SubscriptionUsage.Pools[i].LimitName)
+	}
+	out.SubscriptionUsage.Keepalive.Status = safeSnapshotString(out.SubscriptionUsage.Keepalive.Status)
+	for i := range out.SubscriptionUsage.Keepalive.ScheduleTimes {
+		out.SubscriptionUsage.Keepalive.ScheduleTimes[i] = safeSnapshotString(out.SubscriptionUsage.Keepalive.ScheduleTimes[i])
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"ilonasin/internal/config"
 	"ilonasin/internal/credentials"
 	"ilonasin/internal/metadata"
 	"ilonasin/internal/provider"
@@ -53,6 +54,10 @@ type Service struct {
 	UpstreamMutations UpstreamMutationManager
 	OAuth             OAuthMetadataReader
 	OAuthMutations    OAuthMutationManager
+	OAuthResolver     OAuthBearerRefreshResolver
+	SubscriptionUsage SubscriptionUsageStore
+	UsageClient       provider.CodexSubscriptionUsageClient
+	Keepalive         config.SubscriptionKeepaliveConfig
 	ModelCache        ModelCacheReader
 	Observability     ObservabilityReader
 	Pruner            TelemetryPruner
@@ -80,6 +85,16 @@ type ObservabilityReader interface {
 	LatestHealth(ctx context.Context) ([]metadata.HealthSummary, error)
 	RecentFallbacks(ctx context.Context, limit int) ([]metadata.FallbackSummary, error)
 	QuotaByProvider(ctx context.Context) ([]metadata.QuotaSummary, error)
+}
+
+type SubscriptionUsageStore interface {
+	LatestSubscriptionUsageSnapshots(ctx context.Context) ([]metadata.SubscriptionUsageSnapshot, error)
+	UpsertSubscriptionUsageSnapshot(ctx context.Context, snapshot metadata.SubscriptionUsageSnapshot) error
+}
+
+type OAuthBearerRefreshResolver interface {
+	ResolveOAuthBearerByID(ctx context.Context, credentialID int64, now time.Time) (credentials.ResolvedOAuthBearerCredential, error)
+	RefreshOAuthCredentialIfBearer(ctx context.Context, credentialID int64, staleBearerToken string) error
 }
 
 func (s Service) ListLocalTokens(ctx context.Context) (ListLocalTokensResponse, error) {

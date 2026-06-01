@@ -30,6 +30,7 @@ type Model struct {
 	upstreams         management.UpstreamCredentialClient
 	oauth             management.OAuthClient
 	pruner            management.TelemetryPruneClient
+	subscriptionUsage management.SubscriptionUsageClient
 	logger            *slog.Logger
 	now               func() time.Time
 	tokenRows         []management.LocalToken
@@ -46,6 +47,9 @@ type Model struct {
 	healthRows        []management.HealthSummary
 	fallbackRows      []management.FallbackSummary
 	quotaRows         []management.QuotaSummary
+	subscriptionRows  []management.SubscriptionUsageRow
+	subscriptionPools []management.SubscriptionUsageAggregate
+	keepaliveStatus   management.KeepaliveStatus
 	pruneResult       *management.PruneResult
 	pruningAvailable  bool
 	width             int
@@ -86,8 +90,8 @@ var tuiTabs = []struct {
 	{tabHelp, "help"},
 }
 
-func NewModel(cfg config.Config, registry provider.Registry, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, oauth management.OAuthClient, pruner management.TelemetryPruneClient, now func() time.Time, loggers ...*slog.Logger) Model {
-	return Model{cfg: cfg, registry: registry, tokens: tokens, upstreams: upstreams, oauth: oauth, pruner: pruner, now: now, logger: firstLogger(loggers)}
+func NewModel(cfg config.Config, registry provider.Registry, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, oauth management.OAuthClient, pruner management.TelemetryPruneClient, subscriptionUsage management.SubscriptionUsageClient, now func() time.Time, loggers ...*slog.Logger) Model {
+	return Model{cfg: cfg, registry: registry, tokens: tokens, upstreams: upstreams, oauth: oauth, pruner: pruner, subscriptionUsage: subscriptionUsage, now: now, logger: firstLogger(loggers)}
 }
 
 func (m Model) Init() tea.Cmd {
@@ -244,6 +248,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.err = "telemetry prune failed"
 				return m, nil
 			}
+			_ = m.reload()
+		case "u":
+			if m.activeTab != tabObservability {
+				return m, nil
+			}
+			m.clearReveal()
+			if m.subscriptionUsage == nil {
+				return m, nil
+			}
+			resp, err := m.subscriptionUsage.RefreshSubscriptionUsage(context.Background())
+			if err != nil {
+				m.logError(context.Background(), "tui_subscription_usage_refresh_failed", err)
+				m.err = "subscription usage refresh failed"
+				return m, nil
+			}
+			m.applySubscriptionUsage(resp)
 			_ = m.reload()
 		case "l":
 			if m.activeTab != tabAccounts {
@@ -512,7 +532,7 @@ func (m Model) footerLine() string {
 	case tabAccounts:
 		return "tab switch  up/down select  pgup/pgdown scroll  n new token  a add key  d disable token  x disable key  l login  o/r OAuth  f/F fallback  q quit"
 	case tabObservability:
-		return "tab switch  up/down scroll  pgup/pgdown page  home/end jump  p prune  q quit"
+		return "tab switch  up/down scroll  pgup/pgdown page  home/end jump  u usage  p prune  q quit"
 	case tabHelp:
 		return "tab switch  up/down scroll  q quit"
 	default:
@@ -656,7 +676,11 @@ func Run(cfg config.Config, registry provider.Registry, snapshot management.Snap
 	if snapshot == nil {
 		return fmt.Errorf("management snapshot client is required")
 	}
-	model := NewModel(cfg, registry, tokens, upstreams, oauth, pruner, nil, loggers...)
+	var subscriptionUsage management.SubscriptionUsageClient
+	if client, ok := snapshot.(management.SubscriptionUsageClient); ok {
+		subscriptionUsage = client
+	}
+	model := NewModel(cfg, registry, tokens, upstreams, oauth, pruner, subscriptionUsage, nil, loggers...)
 	model.snapshot = snapshot
 	if err := model.reload(); err != nil {
 		return err
@@ -695,6 +719,7 @@ func (m *Model) applySnapshot(snapshot management.ManagementSnapshotResponse) {
 	m.healthRows = append([]management.HealthSummary(nil), snapshot.Health...)
 	m.fallbackRows = append([]management.FallbackSummary(nil), snapshot.Fallbacks...)
 	m.quotaRows = append([]management.QuotaSummary(nil), snapshot.Quotas...)
+	m.applySubscriptionUsage(snapshot.SubscriptionUsage)
 	m.pruningAvailable = snapshot.PruningAvailable
 	if m.selected >= len(m.tokenRows) {
 		m.selected = len(m.tokenRows) - 1
@@ -709,6 +734,12 @@ func (m *Model) applySnapshot(snapshot management.ManagementSnapshotResponse) {
 		m.oauthSelected = 0
 	}
 	m.clampScrolls()
+}
+
+func (m *Model) applySubscriptionUsage(resp management.SubscriptionUsageResponse) {
+	m.subscriptionRows = append([]management.SubscriptionUsageRow(nil), resp.Accounts...)
+	m.subscriptionPools = append([]management.SubscriptionUsageAggregate(nil), resp.Pools...)
+	m.keepaliveStatus = resp.Keepalive
 }
 
 func providersFromSnapshot(rows []management.ProviderInstance) []provider.Instance {
@@ -915,6 +946,70 @@ func (m Model) writeObservability(b *strings.Builder) {
 			credentialDisplay(row.CredentialID, row.CredentialLabel), row.Count,
 			formatTime(row.ObservedAt), retryAfter, resetAt)
 	}
+	b.WriteString("\nSubscription usage\n")
+	if len(m.subscriptionRows) == 0 {
+		b.WriteString("No subscription usage snapshots.\n")
+	}
+	for _, row := range m.subscriptionRows {
+		primaryReset := ""
+		if row.PrimaryResetAt != nil {
+			primaryReset = " reset " + formatTime(*row.PrimaryResetAt)
+		}
+		secondaryReset := ""
+		if row.SecondaryResetAt != nil {
+			secondaryReset = " reset " + formatTime(*row.SecondaryResetAt)
+		}
+		state := "fresh"
+		if row.Stale || row.ErrorClass != "" {
+			state = "stale"
+		}
+		account := safeDisplay(row.AccountDisplayLabel)
+		if account == "" {
+			account = "subscription"
+		}
+		fmt.Fprintf(b, "- %s credential %d %s plan %s limit %s %s at %s\n",
+			safeDisplay(row.ProviderInstanceID), row.CredentialID,
+			account, safeDisplay(row.PlanLabel),
+			safeDisplay(row.LimitID), state, formatTime(row.ObservedAt))
+		if row.ErrorClass != "" {
+			fmt.Fprintf(b, "  error %s\n", safeDisplay(row.ErrorClass))
+			continue
+		}
+		fmt.Fprintf(b, "  %s used %.1f%% left %.1f%%%s\n",
+			safeDisplay(row.PrimaryLabel), row.PrimaryUsedPercent,
+			row.PrimaryRemainingPercent, primaryReset)
+		fmt.Fprintf(b, "  %s used %.1f%% left %.1f%%%s\n",
+			safeDisplay(row.SecondaryLabel), row.SecondaryUsedPercent,
+			row.SecondaryRemainingPercent, secondaryReset)
+	}
+	if len(m.subscriptionPools) > 0 {
+		b.WriteString("\nSubscription pools\n")
+	}
+	for _, row := range m.subscriptionPools {
+		primaryReset := ""
+		if row.EarliestPrimaryResetAt != nil {
+			primaryReset = " earliest_5h_reset " + formatTime(*row.EarliestPrimaryResetAt)
+		}
+		secondaryReset := ""
+		if row.EarliestSecondaryResetAt != nil {
+			secondaryReset = " earliest_weekly_reset " + formatTime(*row.EarliestSecondaryResetAt)
+		}
+		fmt.Fprintf(b, "- %s limit %s accounts %d stale %d\n",
+			safeDisplay(row.ProviderInstanceID), safeDisplay(row.LimitID),
+			row.AccountCount, row.StaleCount)
+		fmt.Fprintf(b, "  5h avg_used %.1f%% min_left %.1f%%%s\n",
+			row.AveragePrimaryUsedPercent, row.MinimumPrimaryRemainingPercent, primaryReset)
+		fmt.Fprintf(b, "  weekly avg_used %.1f%% min_left %.1f%%%s\n",
+			row.AverageSecondaryUsedPercent, row.MinimumSecondaryRemainingPercent, secondaryReset)
+	}
+	b.WriteString("\nSubscription keepalive\n")
+	schedule := strings.Join(m.keepaliveStatus.ScheduleTimes, ",")
+	if schedule == "" {
+		schedule = "none"
+	}
+	fmt.Fprintf(b, "- enabled %t status %s output_cap_verified %t schedule %s\n",
+		m.keepaliveStatus.Enabled, safeDisplay(m.keepaliveStatus.Status),
+		m.keepaliveStatus.OutputCapVerified, safeDisplay(schedule))
 	b.WriteString("\nFallbacks\n")
 	if len(m.fallbackRows) == 0 {
 		b.WriteString("No fallback metadata.\n")

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"ilonasin/internal/config"
 	"ilonasin/internal/credentials"
 	"ilonasin/internal/management"
 	"ilonasin/internal/provider"
@@ -19,12 +20,14 @@ type managementRuntime struct {
 	server     *http.Server
 }
 
-func startManagementServer(ctx context.Context, homeDir, configPath, databasePath string, registry provider.Registry, store *sqlite.Store, loggers ...*slog.Logger) (managementRuntime, error) {
+func startManagementServer(ctx context.Context, homeDir, configPath, databasePath string, registry provider.Registry, store *sqlite.Store, keepalive config.SubscriptionKeepaliveConfig, loggers ...*slog.Logger) (managementRuntime, error) {
 	logger := firstSlogLogger(loggers)
 	refresher := provider.NewHTTPOAuthRefresher(nil)
 	refresher.Logger = logger
 	login := provider.NewHTTPOAuthDeviceLogin(nil)
 	login.Logger = logger
+	usageClient := provider.NewHTTPChatAdapter(nil)
+	usageClient.Logger = logger
 	upstreams := &credentials.UpstreamService{
 		Registry:       registry,
 		Repo:           store,
@@ -39,6 +42,10 @@ func startManagementServer(ctx context.Context, homeDir, configPath, databasePat
 		UpstreamMutations: upstreams,
 		OAuth:             upstreams,
 		OAuthMutations:    upstreams,
+		OAuthResolver:     upstreams,
+		SubscriptionUsage: store,
+		UsageClient:       usageClient,
+		Keepalive:         keepalive,
 		ModelCache:        store,
 		Observability:     store,
 		Pruner:            store,

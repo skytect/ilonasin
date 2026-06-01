@@ -118,6 +118,22 @@ func (c HTTPTokenClient) PruneTelemetry(ctx context.Context, req PruneTelemetryR
 	return out, nil
 }
 
+func (c HTTPTokenClient) GetSubscriptionUsage(ctx context.Context) (SubscriptionUsageResponse, error) {
+	var out SubscriptionUsageResponse
+	if err := c.do(ctx, http.MethodGet, PathSubscriptionUsage, nil, &out); err != nil {
+		return SubscriptionUsageResponse{}, err
+	}
+	return out, nil
+}
+
+func (c HTTPTokenClient) RefreshSubscriptionUsage(ctx context.Context) (SubscriptionUsageResponse, error) {
+	var out SubscriptionUsageResponse
+	if err := c.doWithClient(ctx, c.longPollClient(), http.MethodPost, PathSubscriptionUsage+"/refresh", nil, &out); err != nil {
+		return SubscriptionUsageResponse{}, err
+	}
+	return out, nil
+}
+
 func (c HTTPTokenClient) do(ctx context.Context, method, path string, body any, out any) error {
 	client := c.Client
 	if client == nil {

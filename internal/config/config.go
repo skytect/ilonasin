@@ -12,10 +12,11 @@ import (
 )
 
 type Config struct {
-	Server    ServerConfig              `toml:"server"`
-	Paths     PathsConfig               `toml:"paths"`
-	Logging   LoggingConfig             `toml:"logging"`
-	Providers map[string]ProviderConfig `toml:"providers"`
+	Server                ServerConfig                `toml:"server"`
+	Paths                 PathsConfig                 `toml:"paths"`
+	Logging               LoggingConfig               `toml:"logging"`
+	SubscriptionKeepalive SubscriptionKeepaliveConfig `toml:"subscription_keepalive"`
+	Providers             map[string]ProviderConfig   `toml:"providers"`
 }
 
 type ServerConfig struct {
@@ -34,6 +35,14 @@ type LoggingConfig struct {
 	Format    string   `toml:"format"`
 	Outputs   []string `toml:"outputs"`
 	CaptureIO bool     `toml:"capture_io"`
+}
+
+type SubscriptionKeepaliveConfig struct {
+	Enabled         bool     `toml:"enabled"`
+	Timezone        string   `toml:"timezone"`
+	ScheduleTimes   []string `toml:"schedule_times"`
+	Model           string   `toml:"model"`
+	MaxOutputTokens int      `toml:"max_output_tokens"`
 }
 
 type ProviderConfig struct {
@@ -56,6 +65,11 @@ func Default(homeDir string) Config {
 			Level:   "info",
 			Format:  "json",
 			Outputs: []string{"file"},
+		},
+		SubscriptionKeepalive: SubscriptionKeepaliveConfig{
+			Timezone:        "local",
+			ScheduleTimes:   []string{"07:00", "12:00", "17:00", "22:00"},
+			MaxOutputTokens: 1,
 		},
 		Providers: map[string]ProviderConfig{
 			"deepseek":   {Type: "deepseek"},
@@ -126,6 +140,15 @@ func (c *Config) applyDefaults(homeDir string) {
 	}
 	if len(c.Logging.Outputs) == 0 {
 		c.Logging.Outputs = append([]string(nil), def.Logging.Outputs...)
+	}
+	if c.SubscriptionKeepalive.Timezone == "" {
+		c.SubscriptionKeepalive.Timezone = def.SubscriptionKeepalive.Timezone
+	}
+	if len(c.SubscriptionKeepalive.ScheduleTimes) == 0 {
+		c.SubscriptionKeepalive.ScheduleTimes = append([]string(nil), def.SubscriptionKeepalive.ScheduleTimes...)
+	}
+	if c.SubscriptionKeepalive.MaxOutputTokens == 0 {
+		c.SubscriptionKeepalive.MaxOutputTokens = def.SubscriptionKeepalive.MaxOutputTokens
 	}
 	if c.Providers == nil {
 		c.Providers = map[string]ProviderConfig{}

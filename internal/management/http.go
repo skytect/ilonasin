@@ -25,6 +25,7 @@ type HandlerService interface {
 	UpstreamCredentialClient
 	OAuthClient
 	TelemetryPruneClient
+	SubscriptionUsageClient
 }
 
 func Handler(service HandlerService) http.Handler {
@@ -176,6 +177,22 @@ func Handler(service HandlerService) http.Handler {
 			return
 		}
 		resp, err := service.PruneTelemetry(r.Context(), req)
+		if err != nil {
+			writeError(w, http.StatusBadGateway)
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+	})
+	mux.HandleFunc("GET "+PathSubscriptionUsage, func(w http.ResponseWriter, r *http.Request) {
+		resp, err := service.GetSubscriptionUsage(r.Context())
+		if err != nil {
+			writeError(w, http.StatusBadGateway)
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+	})
+	mux.HandleFunc("POST "+PathSubscriptionUsage+"/refresh", func(w http.ResponseWriter, r *http.Request) {
+		resp, err := service.RefreshSubscriptionUsage(r.Context())
 		if err != nil {
 			writeError(w, http.StatusBadGateway)
 			return

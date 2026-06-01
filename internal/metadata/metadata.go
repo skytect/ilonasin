@@ -228,6 +228,27 @@ type ActiveQuotaBlock struct {
 	ActiveUntil  time.Time
 }
 
+type SubscriptionUsageSnapshot struct {
+	ObservedAt             time.Time
+	ProviderInstanceID     string
+	CredentialID           int64
+	AccountDisplayLabel    string
+	PlanLabel              string
+	LimitID                string
+	LimitName              string
+	PlanType               string
+	ReachedType            string
+	PrimaryUsedPercent     float64
+	PrimaryWindowMinutes   int
+	PrimaryResetAt         *time.Time
+	SecondaryUsedPercent   float64
+	SecondaryWindowMinutes int
+	SecondaryResetAt       *time.Time
+	Source                 string
+	ErrorClass             string
+	Stale                  bool
+}
+
 type PruneResult struct {
 	Cutoff    time.Time
 	Requests  int

@@ -144,6 +144,7 @@ func (state *codexResponseParseState) aggregateBytes() int {
 	}
 	for _, item := range state.outputItems {
 		total += len(item.Arguments)
+		total += len(item.Action)
 		for _, tool := range item.Tools {
 			total += len(tool)
 		}
@@ -276,7 +277,7 @@ func handleCodexEvent(data []byte, state *codexResponseParseState) (retErr error
 			}
 			return state.emitCodexFunctionCall(codexToolCallKey(event.Item.ID, event.Item.CallID))
 		case "tool_search_call":
-			return state.addCodexToolSearchCall(event.Item.ID, codexToolCallKey(event.Item.ID, event.Item.CallID), event.Item.Execution, event.Item.Arguments, event.Item.Tools)
+			return state.addCodexToolSearchCall(event.Item.ID, event.Item.CallID, event.Item.Execution, event.Item.Arguments, event.Item.Tools)
 		case "web_search_call":
 			return state.addCodexWebSearchCall(event.Item.ID, event.Item.Status, event.Item.Action)
 		case "custom_tool_call":

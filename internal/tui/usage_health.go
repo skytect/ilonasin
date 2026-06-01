@@ -8,9 +8,10 @@ import (
 )
 
 func (m Model) writeHealthAndQuota(b *strings.Builder) {
-	b.WriteString("\nHealth\n")
 	width := m.viewWidth()
 	now := m.nowTime()
+	b.WriteString(renderSectionBanner(width, "Health", fmt.Sprintf("events %d", len(m.healthRows))))
+	b.WriteByte('\n')
 	if len(m.healthRows) == 0 {
 		b.WriteString("No health metadata.\n")
 	}
@@ -45,7 +46,9 @@ func (m Model) writeHealthAndQuota(b *strings.Builder) {
 		b.WriteString(renderMetricCardGrid(width, healthCards))
 		b.WriteByte('\n')
 	}
-	b.WriteString("\nQuota\n")
+	b.WriteString("\n")
+	b.WriteString(renderSectionBanner(width, "Quota", fmt.Sprintf("blocks %d", len(m.quotaRows))))
+	b.WriteByte('\n')
 	if len(m.quotaRows) == 0 {
 		b.WriteString("No quota metadata.\n")
 	}

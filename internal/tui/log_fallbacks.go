@@ -1,15 +1,17 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
 
 func (m Model) writeFallbacks(b *strings.Builder) {
-	b.WriteString("\nFallbacks\n")
 	width := m.viewWidth()
 	now := m.nowTime()
+	b.WriteString(renderSectionBanner(width, "Fallback metadata", fmt.Sprintf("events %d", len(m.fallbackRows))))
+	b.WriteByte('\n')
 	if len(m.fallbackRows) == 0 {
 		b.WriteString("No fallback metadata.\n")
 	}

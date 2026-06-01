@@ -13,7 +13,6 @@ const maxDashboardPanes = 4
 const (
 	apiPaneSummary = iota
 	apiPaneTokens
-	apiPaneGuidance
 )
 
 const (

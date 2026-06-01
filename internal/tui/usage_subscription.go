@@ -11,7 +11,6 @@ import (
 )
 
 func (m Model) writeSubscriptionUsage(b *strings.Builder) {
-	b.WriteString("\nSubscription usage\n")
 	width := m.viewWidth()
 	now := m.nowTime()
 	b.WriteString(subscriptionUsageSummary(width, m.subscriptionRows, m.subscriptionPools))
@@ -64,9 +63,9 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 		b.WriteString(renderCardGrid(width, accountCards))
 		b.WriteByte('\n')
 	}
-	if len(m.subscriptionPools) > 0 {
-		b.WriteString("\nSubscription pools\n")
-	}
+	b.WriteString("\n")
+	b.WriteString(renderSectionBanner(width, "Subscription pools", fmt.Sprintf("pools %d", len(m.subscriptionPools))))
+	b.WriteByte('\n')
 	poolCards := make([]string, 0, len(m.subscriptionPools))
 	for _, row := range m.subscriptionPools {
 		accent := lipgloss.Color("42")
@@ -92,7 +91,9 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 		b.WriteString(renderCardGrid(width, poolCards))
 		b.WriteByte('\n')
 	}
-	b.WriteString("\nSubscription keepalive\n")
+	b.WriteString("\n")
+	b.WriteString(renderSectionBanner(width, "Subscription keepalive"))
+	b.WriteByte('\n')
 	schedule := strings.Join(m.keepaliveStatus.ScheduleTimes, ", ")
 	if schedule == "" {
 		schedule = "none"

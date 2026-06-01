@@ -8,9 +8,10 @@ import (
 )
 
 func (m Model) writeRecentRequests(b *strings.Builder) {
-	b.WriteString("\nRecent requests\n")
 	width := m.viewWidth()
 	now := m.nowTime()
+	b.WriteString(renderSectionBanner(width, "Request metadata", fmt.Sprintf("recent %d", len(m.requestRows))))
+	b.WriteByte('\n')
 	if len(m.requestRows) == 0 {
 		b.WriteString("No request metadata.\n")
 	}

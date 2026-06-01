@@ -8,8 +8,9 @@ import (
 )
 
 func (m Model) writeUsageMetrics(b *strings.Builder) {
-	b.WriteString("\nUsage totals\n")
 	width := m.viewWidth()
+	b.WriteString(renderSectionBanner(width, "Token usage", fmt.Sprintf("providers %d", len(m.usageRows))))
+	b.WriteByte('\n')
 	if len(m.usageRows) == 0 {
 		b.WriteString("No usage metadata.\n")
 	}
@@ -17,27 +18,35 @@ func (m Model) writeUsageMetrics(b *strings.Builder) {
 	for _, row := range m.usageRows {
 		lines := []string{
 			cardTitleStyle.Render(safeDisplay(row.ProviderInstanceID)) + " " + statusBadge("fresh"),
-			metricLine(
-				metricChip("requests", fmt.Sprintf("%d", row.RequestCount)),
-				metricChip("cost", compactInt64(row.CostMicrounits)+"u"),
-			),
+			tokenMixLine(row.PromptTokens, row.CompletionTokens, row.ReasoningTokens, row.CacheHitTokens, row.CacheMissTokens, row.CacheWriteTokens, width),
 			metricLine(
 				metricChip("in", compactInt(row.PromptTokens)),
 				metricChip("out", compactInt(row.CompletionTokens)),
-				metricChip("total", compactInt(row.TotalTokens)),
 				metricChip("reason", compactInt(row.ReasoningTokens)),
+			),
+			metricLine(
+				metricChip("cache-hit", compactInt(row.CacheHitTokens)),
+				metricChip("cache-miss", compactInt(row.CacheMissTokens)),
+				metricChip("cache-write", compactInt(row.CacheWriteTokens)),
+			),
+			metricLine(
+				metricChip("requests", fmt.Sprintf("%d", row.RequestCount)),
+				metricChip("total", compactInt(row.TotalTokens)),
+				metricChip("cost", compactInt64(row.CostMicrounits)+"u"),
 			),
 		}
 		if narrowMetrics(width) {
 			lines = append(lines, metricLine(
 				compactPercentMetric("hit", row.CacheHitRate*100),
 				compactPercentMetric("miss", row.CacheMissRate*100),
+				compactPercentMetric("write", row.CacheWriteRate*100),
 				compactPercentMetric("reason", row.ReasoningTokenRate*100),
 			))
 		} else {
 			lines = append(lines,
 				percentGaugeLine("cache hit", row.CacheHitRate*100, width),
 				percentGaugeLine("cache miss", row.CacheMissRate*100, width),
+				percentGaugeLine("cache write", row.CacheWriteRate*100, width),
 				percentGaugeLine("reason", row.ReasoningTokenRate*100, width),
 			)
 		}
@@ -47,7 +56,9 @@ func (m Model) writeUsageMetrics(b *strings.Builder) {
 		b.WriteString(renderMetricCardGrid(width, usageCards))
 		b.WriteByte('\n')
 	}
-	b.WriteString("\nLatency\n")
+	b.WriteString("\n")
+	b.WriteString(renderSectionBanner(width, "Performance", fmt.Sprintf("providers %d", len(m.latencyRows))))
+	b.WriteByte('\n')
 	if len(m.latencyRows) == 0 {
 		b.WriteString("No latency metadata.\n")
 	}
@@ -81,7 +92,9 @@ func (m Model) writeUsageMetrics(b *strings.Builder) {
 		b.WriteString(renderMetricCardGrid(width, latencyCards))
 		b.WriteByte('\n')
 	}
-	b.WriteString("\nStreams\n")
+	b.WriteString("\n")
+	b.WriteString(renderSectionBanner(width, "Streams", fmt.Sprintf("states %d", len(m.streamRows))))
+	b.WriteByte('\n')
 	if len(m.streamRows) == 0 {
 		b.WriteString("No stream metadata.\n")
 	}

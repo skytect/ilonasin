@@ -9,7 +9,6 @@ func (m Model) apiPanes() []dashboardPane {
 	return []dashboardPane{
 		{id: apiPaneSummary, title: "surfaces", content: m.apiSummaryBody},
 		{id: apiPaneTokens, title: "local tokens", content: m.localTokensBody},
-		{id: apiPaneGuidance, title: "keys", content: m.helpBody},
 	}
 }
 
@@ -40,21 +39,44 @@ func (m Model) logPanes() []dashboardPane {
 func (m Model) apiSummaryBody(width int) string {
 	var b strings.Builder
 	b.WriteString(renderSectionBanner(width, "API",
-		"/v1/chat/completions",
-		"/v1/responses",
-		"/v1/messages",
+		"Chat Completions",
+		"Responses",
+		"Anthropic",
 	))
 	b.WriteByte('\n')
-	fmt.Fprintf(&b, "bind %s\n", safeDisplay(m.cfg.Server.Bind))
-	fmt.Fprintf(&b, "providers %d\n", len(m.cfg.Providers))
-	fmt.Fprintf(&b, "local tokens %d\n", len(m.tokenRows))
-	b.WriteString("\nDownstream client keys are ilonasin local tokens.\n")
-	b.WriteString("Upstream provider credentials are managed separately on providers.\n")
+	enabledTokens, disabledTokens := localTokenStateCounts(m.tokenRows)
+	cards := []string{
+		renderCompactCard(metricCardWidth(width),
+			cardTitleStyle.Render("local surfaces"),
+			metricLine(endpointMetricChip("chat", "chat_completions")),
+			metricLine(endpointMetricChip("responses", "responses")),
+			metricLine(endpointMetricChip("anthropic", "anthropic_messages")),
+		),
+		renderCompactCard(metricCardWidth(width),
+			cardTitleStyle.Render("downstream keys"),
+			metricLine(metricChip("enabled", fmt.Sprintf("%d", enabledTokens)), metricChip("disabled", fmt.Sprintf("%d", disabledTokens))),
+			metricLine(metricChip("total", fmt.Sprintf("%d", len(m.tokenRows))), metricChip("bind", m.cfg.Server.Bind)),
+		),
+		renderCompactCard(metricCardWidth(width),
+			cardTitleStyle.Render("upstream boundary"),
+			metricLine(metricChip("providers", fmt.Sprintf("%d", len(m.cfg.Providers)))),
+			mutedStyle.Render("provider API keys and OAuth live on providers"),
+		),
+	}
+	b.WriteString(renderMetricCardGrid(width, cards))
+	b.WriteByte('\n')
+	b.WriteString(renderKeyMap(width, []keyHint{
+		{"n", "new local token"},
+		{"d", "disable selected token"},
+		{"[/]", "focus pane"},
+		{"1-4", "jump section"},
+	}))
 	return strings.TrimRight(b.String(), "\n")
 }
 
 func (m Model) localTokensBody(width int) string {
 	var b strings.Builder
+	m = m.withRenderWidth(width)
 	m.writeLocalTokens(&b)
 	return strings.TrimRight(b.String(), "\n")
 }
@@ -68,7 +90,6 @@ func (m Model) helpBody(width int) string {
 func (m Model) providerInstancesBody(width int) string {
 	var b strings.Builder
 	m = m.withRenderWidth(width)
-	fmt.Fprintf(&b, "Providers: %d\n", len(m.cfg.Providers))
 	m.writeProviderInstances(&b)
 	m.writeModelCache(&b)
 	return strings.TrimRight(b.String(), "\n")

@@ -60,11 +60,59 @@ func metricChip(label, value string) string {
 	return chipStyle.Render(label + " " + value)
 }
 
+func machineChip(label, value string) string {
+	label = safeMetricLabel(label)
+	value = safeMetricLabel(value)
+	if label == "" {
+		label = "metric"
+	}
+	if value == "" {
+		value = "none"
+	}
+	return chipStyle.Render(label + " " + value)
+}
+
+func fragmentChip(label, prefix, last4 string) string {
+	label = safeMetricLabel(label)
+	if label == "" {
+		label = "fragment"
+	}
+	prefix = safeTokenFragmentDisplay(prefix, 8)
+	last4 = safeTokenFragmentDisplay(last4, 4)
+	value := strings.Trim(prefix+"..."+last4, ".")
+	if value == "" {
+		value = "none"
+	}
+	return chipStyle.Render(label + " " + value)
+}
+
 func streamChip(stream bool) string {
 	if stream {
 		return chipStyle.Render("stream on")
 	}
 	return chipStyle.Render("stream off")
+}
+
+type keyHint struct {
+	key   string
+	label string
+}
+
+func renderKeyMap(width int, hints []keyHint) string {
+	parts := make([]string, 0, len(hints))
+	for _, hint := range hints {
+		key := safeChromeDisplay(hint.key)
+		label := safeChromeDisplay(hint.label)
+		if key == "" || label == "" {
+			continue
+		}
+		parts = append(parts, chipStyle.Render(key)+" "+mutedStyle.Render(label))
+	}
+	line := strings.Join(parts, "  ")
+	if width > 0 && len(line) > width {
+		return mutedStyle.Render("keys") + " " + strings.Join(parts, " ")
+	}
+	return line
 }
 
 func safeMetricLabel(value string) string {

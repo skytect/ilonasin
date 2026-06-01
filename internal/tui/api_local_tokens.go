@@ -4,10 +4,19 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"ilonasin/internal/management"
 )
 
 func (m Model) writeLocalTokens(b *strings.Builder) {
-	b.WriteString("Local API tokens\n")
+	now := m.nowTime()
+	width := m.viewWidth()
+	enabled, disabled := localTokenStateCounts(m.tokenRows)
+	b.WriteString(renderSectionBanner(width, "Local API tokens",
+		fmt.Sprintf("enabled %d", enabled),
+		fmt.Sprintf("disabled %d", disabled),
+	))
+	b.WriteByte('\n')
 	if len(m.tokenRows) == 0 {
 		b.WriteString("No local API tokens.\n")
 	}
@@ -20,12 +29,35 @@ func (m Model) writeLocalTokens(b *strings.Builder) {
 		if token.Disabled {
 			state = "disabled"
 		}
-		fmt.Fprintf(b, "%s %d %s %s...%s %s\n", cursor, token.ID, safeDisplay(token.Label),
-			safeTokenFragmentDisplay(token.TokenPrefix, 8), safeTokenFragmentDisplay(token.TokenLast4, 4), state)
+		line := metricLine(
+			cardTitleStyle.Render(cursor+" "+strconv.FormatInt(token.ID, 10)+" "+safeDisplay(token.Label)),
+			statusBadge(state),
+			fragmentChip("token", token.TokenPrefix, token.TokenLast4),
+			timeChip("created", now, token.CreatedAt),
+		)
+		if token.DisabledAt != nil {
+			line = metricLine(line, optionalTimeChip("disabled", now, token.DisabledAt))
+		}
+		b.WriteString(line)
+		b.WriteByte('\n')
 	}
 	if m.revealTokenID != 0 {
-		fmt.Fprintf(b, "\nNew token %s created: %s...%s\n",
+		fmt.Fprintf(b, "\n%s %s %s\n",
+			goodBadgeStyle.Render("created"),
 			strconv.FormatInt(m.revealTokenID, 10),
-			safeTokenFragmentDisplay(m.revealTokenPrefix, 8), safeTokenFragmentDisplay(m.revealTokenLast4, 4))
+			fragmentChip("token", m.revealTokenPrefix, m.revealTokenLast4))
 	}
+}
+
+func localTokenStateCounts(rows []management.LocalToken) (int, int) {
+	enabled := 0
+	disabled := 0
+	for _, row := range rows {
+		if row.Disabled {
+			disabled++
+		} else {
+			enabled++
+		}
+	}
+	return enabled, disabled
 }

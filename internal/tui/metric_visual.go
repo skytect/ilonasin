@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -174,4 +175,71 @@ func endpointMetricChip(label, value string) string {
 		value = "none"
 	}
 	return chipStyle.Render(label + " " + value)
+}
+
+func tokenMixLine(prompt, completion, reasoning, cacheHit, cacheMiss, cacheWrite, width int) string {
+	total := prompt + completion + reasoning + cacheHit + cacheMiss + cacheWrite
+	barWidth := metricBarWidth(width)
+	if width >= 90 {
+		barWidth += 8
+	}
+	return metricLine(
+		mutedStyle.Render("token mix"),
+		stackedTokenBar([]tokenSegment{
+			{value: prompt, style: goodBarStyle, glyph: "█"},
+			{value: completion, style: labelStyle, glyph: "█"},
+			{value: reasoning, style: warnBarStyle, glyph: "█"},
+			{value: cacheHit, style: goodBarStyle, glyph: "░"},
+			{value: cacheMiss, style: badBarStyle, glyph: "░"},
+			{value: cacheWrite, style: emptyBarStyle, glyph: "░"},
+		}, total, barWidth),
+	)
+}
+
+type tokenSegment struct {
+	value int
+	style lipgloss.Style
+	glyph string
+}
+
+func stackedTokenBar(segments []tokenSegment, total, width int) string {
+	if width <= 0 {
+		width = 16
+	}
+	if total <= 0 {
+		return emptyBarStyle.Render(strings.Repeat("░", width))
+	}
+	remaining := width
+	remainingValue := total
+	var b strings.Builder
+	for i, segment := range segments {
+		cells := 0
+		if i == len(segments)-1 {
+			cells = remaining
+		} else if segment.value > 0 && remainingValue > 0 {
+			cells = int(math.Round(float64(segment.value) / float64(remainingValue) * float64(remaining)))
+			if cells == 0 {
+				cells = 1
+			}
+			if cells > remaining {
+				cells = remaining
+			}
+		}
+		if cells > 0 {
+			glyph := segment.glyph
+			if glyph == "" {
+				glyph = "█"
+			}
+			b.WriteString(segment.style.Render(strings.Repeat(glyph, cells)))
+		}
+		remaining -= cells
+		remainingValue -= segment.value
+		if remaining <= 0 {
+			break
+		}
+	}
+	if remaining > 0 {
+		b.WriteString(emptyBarStyle.Render(strings.Repeat("░", remaining)))
+	}
+	return b.String()
 }

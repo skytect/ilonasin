@@ -14,6 +14,24 @@ func safeDisplay(value string) string {
 	return safeDisplayWithPattern(value, unsafeDisplayPattern)
 }
 
+func safeChromeDisplay(value string) string {
+	value = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, strings.TrimSpace(value))
+	if value == "" {
+		return ""
+	}
+	const maxDisplayRunes = 64
+	runes := []rune(value)
+	if len(runes) > maxDisplayRunes {
+		return string(runes[:maxDisplayRunes]) + "..."
+	}
+	return value
+}
+
 func safeAccountDisplay(value string) string {
 	return safeDisplayWithPattern(value, unsafeAccountDisplayPattern)
 }

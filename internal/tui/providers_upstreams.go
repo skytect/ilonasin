@@ -3,23 +3,65 @@ package tui
 import (
 	"fmt"
 	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+
+	"ilonasin/internal/management"
 )
 
 func (m Model) writeUpstreamCredentials(b *strings.Builder) {
+	width := m.viewWidth()
 	if m.apiKeyMode {
-		fmt.Fprintf(b, "\nAdding API key for %s: %s\n", m.apiKeyProvider, strings.Repeat("*", len(m.apiKeyInput)))
+		fmt.Fprintf(b, "%s %s %s\n", warnBadgeStyle.Render("adding"), metricChip("provider", m.apiKeyProvider), strings.Repeat("*", len(m.apiKeyInput)))
 	}
-	b.WriteString("\nUpstream credentials\n")
+	enabled, disabled := upstreamCredentialStateCounts(m.credentials)
+	b.WriteString(renderSectionBanner(width, "Upstream API keys",
+		fmt.Sprintf("enabled %d", enabled),
+		fmt.Sprintf("disabled %d", disabled),
+	))
+	b.WriteByte('\n')
 	if len(m.credentials) == 0 {
 		b.WriteString("No upstream credentials.\n")
+		return
 	}
+	cards := make([]string, 0, len(m.credentials))
 	for _, cred := range m.credentials {
 		state := "enabled"
+		accent := lipgloss.Color("42")
 		if cred.Disabled {
 			state = "disabled"
+			accent = lipgloss.Color("160")
 		}
-		fmt.Fprintf(b, "- %d %s %s %s...%s group %s %s\n", cred.ID, safeDisplay(cred.ProviderInstanceID),
-			safeDisplay(cred.Label), safeDisplay(cred.SecretPrefix), safeDisplay(cred.SecretLast4),
-			safeDisplay(cred.FallbackGroup), state)
+		lines := []string{
+			cardTitleStyle.Render(fmt.Sprintf("%d %s", cred.ID, safeDisplay(cred.Label))) + " " + statusBadge(state),
+			metricLine(
+				metricChip("provider", cred.ProviderInstanceID),
+				metricChip("kind", cred.Kind),
+				metricChip("group", cred.FallbackGroup),
+			),
+			metricLine(
+				fragmentChip("key", cred.SecretPrefix, cred.SecretLast4),
+				timeChip("created", m.nowTime(), cred.CreatedAt),
+			),
+		}
+		if cred.DisabledAt != nil {
+			lines = append(lines, optionalTimeChip("disabled", m.nowTime(), cred.DisabledAt))
+		}
+		cards = append(cards, renderMetricAccentCard(metricCardWidth(width), accent, lines...))
 	}
+	b.WriteString(renderMetricCardGrid(width, cards))
+	b.WriteByte('\n')
+}
+
+func upstreamCredentialStateCounts(rows []management.UpstreamCredential) (int, int) {
+	enabled := 0
+	disabled := 0
+	for _, row := range rows {
+		if row.Disabled {
+			disabled++
+		} else {
+			enabled++
+		}
+	}
+	return enabled, disabled
 }

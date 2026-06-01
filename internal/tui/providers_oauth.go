@@ -3,22 +3,26 @@ package tui
 import (
 	"fmt"
 	"strings"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 func (m Model) writeOAuth(b *strings.Builder) {
 	if m.oauth == nil && m.snapshot == nil {
 		return
 	}
-	b.WriteString("\nOAuth accounts\n")
+	width := m.viewWidth()
+	now := m.nowTime()
+	b.WriteString(renderSectionBanner(width, "OAuth accounts", fmt.Sprintf("oauth %d", len(m.oauthRows)), fmt.Sprintf("accounts %d", len(m.accountRows))))
+	b.WriteByte('\n')
 	if m.oauthChallenge != nil {
-		fmt.Fprintf(b, "Login %s at %s code %s\n", safeDisplay(m.oauthChallenge.ProviderInstanceID),
-			safeDisplay(m.oauthChallenge.VerificationURL), safeDisplay(m.oauthChallenge.UserCode))
+		fmt.Fprintf(b, "%s %s %s %s\n", warnBadgeStyle.Render("login"), metricChip("provider", m.oauthChallenge.ProviderInstanceID),
+			metricChip("code", m.oauthChallenge.UserCode), safeDisplay(m.oauthChallenge.VerificationURL))
 	}
 	if len(m.oauthRows) == 0 {
 		b.WriteString("No OAuth accounts.\n")
 	}
-	width := m.viewWidth()
-	now := m.nowTime()
+	cards := make([]string, 0, len(m.oauthRows))
 	for i, row := range m.oauthRows {
 		cursor := " "
 		if i == m.oauthSelected {
@@ -52,13 +56,19 @@ func (m Model) writeOAuth(b *strings.Builder) {
 		if refreshDescription != "" {
 			lines = append(lines, mutedStyle.Render(refreshDescription))
 		}
-		b.WriteString(renderCard(width, lines...))
+		cards = append(cards, renderMetricAccentCard(metricCardWidth(width), lipgloss.Color("110"), lines...))
+	}
+	if len(cards) > 0 {
+		b.WriteString(renderMetricCardGrid(width, cards))
 		b.WriteByte('\n')
 	}
-	b.WriteString("\nProvider accounts\n")
+	b.WriteString("\n")
+	b.WriteString(renderSectionBanner(width, "Provider accounts", fmt.Sprintf("accounts %d", len(m.accountRows))))
+	b.WriteByte('\n')
 	if len(m.accountRows) == 0 {
 		b.WriteString("No provider accounts.\n")
 	}
+	accountCards := make([]string, 0, len(m.accountRows))
 	for _, row := range m.accountRows {
 		lines := []string{
 			cardTitleStyle.Render(accountIdentity(row.DisplayLabel, "provider account")),
@@ -69,7 +79,10 @@ func (m Model) writeOAuth(b *strings.Builder) {
 				accountMetaField("plan", row.PlanLabel),
 			),
 		}
-		b.WriteString(renderCard(width, lines...))
+		accountCards = append(accountCards, renderMetricAccentCard(metricCardWidth(width), lipgloss.Color("24"), lines...))
+	}
+	if len(accountCards) > 0 {
+		b.WriteString(renderMetricCardGrid(width, accountCards))
 		b.WriteByte('\n')
 	}
 }

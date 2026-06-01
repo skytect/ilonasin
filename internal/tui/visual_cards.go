@@ -11,14 +11,19 @@ func renderCard(width int, lines ...string) string {
 	return renderAccentCard(width, lipgloss.Color("238"), lines...)
 }
 
+func renderCompactCard(width int, lines ...string) string {
+	style := cardStyle.MarginBottom(0)
+	return renderCardWithStyle(style, width, lines...)
+}
+
 func renderSectionBanner(width int, title string, chips ...string) string {
-	title = safeDisplay(title)
+	title = safeChromeDisplay(title)
 	if title == "" {
 		title = "section"
 	}
 	parts := []string{heroStyle.Render(title)}
 	for _, chip := range chips {
-		chip = strings.TrimSpace(chip)
+		chip = safeChromeDisplay(chip)
 		if chip != "" {
 			parts = append(parts, chipStyle.Render(chip))
 		}
@@ -62,6 +67,10 @@ func renderCardGrid(width int, cards []string) string {
 
 func renderAccentCard(width int, accent lipgloss.Color, lines ...string) string {
 	style := cardStyle.BorderForeground(accent)
+	return renderCardWithStyle(style, width, lines...)
+}
+
+func renderCardWithStyle(style lipgloss.Style, width int, lines ...string) string {
 	innerWidth := width - style.GetHorizontalFrameSize()
 	if innerWidth < 8 {
 		innerWidth = 8

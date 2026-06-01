@@ -221,6 +221,12 @@ func (r Request) ToChatCompletion(providerType string) (openai.ChatCompletionReq
 	seenToolResults := map[string]bool{}
 	for i, msg := range r.Messages {
 		switch msg.Role {
+		case "system":
+			system, err := blocksText(msg.Content, fmt.Sprintf("messages[%d].content", i))
+			if err != nil {
+				return openai.ChatCompletionRequest{}, err
+			}
+			messages = append(messages, openai.Message{Role: "system", Content: rawJSONString(system)})
 		case "user":
 			toolMessages, userMessage, hasUserContent, err := userMessageToChat(msg.Content, i, pendingToolIDs, seenToolResults)
 			if err != nil {
@@ -354,12 +360,19 @@ func decodeMessages(raw json.RawMessage, out *[]Message) error {
 		if err := decodeRequiredRawString(rawMessage["role"], fmt.Sprintf("messages[%d].role", i), &role); err != nil {
 			return err
 		}
-		if role != "user" && role != "assistant" {
+		if role != "user" && role != "assistant" && role != "system" {
 			return fmt.Errorf("messages[%d].role is unsupported", i)
 		}
 		content, err := decodeContent(rawMessage["content"], fmt.Sprintf("messages[%d].content", i))
 		if err != nil {
 			return err
+		}
+		if role == "system" {
+			for j, block := range content {
+				if block.Type != "text" {
+					return fmt.Errorf("messages[%d].content[%d].type is unsupported", i, j)
+				}
+			}
 		}
 		*out = append(*out, Message{Role: role, Content: content})
 	}

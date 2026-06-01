@@ -1,10 +1,6 @@
 package tui
 
-import (
-	"context"
-
-	tea "github.com/charmbracelet/bubbletea"
-)
+import tea "github.com/charmbracelet/bubbletea"
 
 func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.apiKeyMode {
@@ -65,29 +61,12 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.activeTab != tabObservability {
 			return m, nil
 		}
-		m.clearReveal()
-		if err := m.pruneTelemetry(); err != nil {
-			m.logError(context.Background(), "tui_telemetry_prune_failed", err)
-			m.err = "telemetry prune failed"
-			return m, nil
-		}
-		_ = m.reload()
+		return m.pruneTelemetryAction()
 	case "u":
 		if m.activeTab != tabObservability {
 			return m, nil
 		}
-		m.clearReveal()
-		if m.subscriptionUsage == nil {
-			return m, nil
-		}
-		resp, err := m.subscriptionUsage.RefreshSubscriptionUsage(context.Background())
-		if err != nil {
-			m.logError(context.Background(), "tui_subscription_usage_refresh_failed", err)
-			m.err = "subscription usage refresh failed"
-			return m, nil
-		}
-		m.applySubscriptionUsage(resp)
-		_ = m.reload()
+		return m.refreshSubscriptionUsageAction()
 	case "l":
 		if m.activeTab != tabAccounts {
 			return m, nil

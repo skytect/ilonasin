@@ -63,7 +63,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 		requestMeta.TotalLatencyMS = time.Since(start).Milliseconds()
 		_ = s.record(r.Context(), requestMeta)
 		s.logHTTP(r, http.StatusNotImplemented, "chat_route", "provider_unimplemented")
-		writeError(w, http.StatusNotImplemented, "provider adapter is not implemented", "invalid_request_error", "provider_unimplemented")
+		writeError(w, http.StatusNotImplemented, providerUnavailableMessage, "invalid_request_error", "provider_unimplemented")
 		return
 	}
 	adapter, ok := s.adapters.ForProvider(instance.Type)
@@ -74,7 +74,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 		requestMeta.TotalLatencyMS = time.Since(start).Milliseconds()
 		_ = s.record(r.Context(), requestMeta)
 		s.logHTTP(r, http.StatusNotImplemented, "chat_route", "provider_unimplemented")
-		writeError(w, http.StatusNotImplemented, "provider adapter is not implemented", "invalid_request_error", "provider_unimplemented")
+		writeError(w, http.StatusNotImplemented, providerUnavailableMessage, "invalid_request_error", "provider_unimplemented")
 		return
 	}
 	if err := adapter.ValidateChatRequest(instance, req); err != nil {

@@ -51,14 +51,14 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request, token c
 	if s.adapters == nil {
 		s.recordResponsesEarly(r, start, token, addr, instance, responsesReq, http.StatusNotImplemented, "provider_unimplemented")
 		s.logHTTP(r, http.StatusNotImplemented, "responses_route", "provider_unimplemented")
-		writeError(w, http.StatusNotImplemented, "provider adapter is not implemented", "invalid_request_error", "provider_unimplemented")
+		writeError(w, http.StatusNotImplemented, providerUnavailableMessage, "invalid_request_error", "provider_unimplemented")
 		return
 	}
 	adapter, ok := s.adapters.ForProvider(instance.Type)
 	if !ok {
 		s.recordResponsesEarly(r, start, token, addr, instance, responsesReq, http.StatusNotImplemented, "provider_unimplemented")
 		s.logHTTP(r, http.StatusNotImplemented, "responses_route", "provider_unimplemented")
-		writeError(w, http.StatusNotImplemented, "provider adapter is not implemented", "invalid_request_error", "provider_unimplemented")
+		writeError(w, http.StatusNotImplemented, providerUnavailableMessage, "invalid_request_error", "provider_unimplemented")
 		return
 	}
 	chatReq, err := responsesReq.ToChatCompletionRequest(instance.Type)

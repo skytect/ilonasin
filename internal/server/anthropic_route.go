@@ -71,14 +71,14 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request,
 	if s.adapters == nil {
 		s.recordAnthropicEarly(r, start, token, addr, instance, chatReq, req, http.StatusNotImplemented, "provider_unimplemented")
 		s.logHTTP(r, http.StatusNotImplemented, "anthropic_route", "provider_unimplemented")
-		writeAnthropicError(w, http.StatusNotImplemented, "provider adapter is not implemented")
+		writeAnthropicError(w, http.StatusNotImplemented, providerUnavailableMessage)
 		return
 	}
 	adapter, ok := s.adapters.ForProvider(instance.Type)
 	if !ok {
 		s.recordAnthropicEarly(r, start, token, addr, instance, chatReq, req, http.StatusNotImplemented, "provider_unimplemented")
 		s.logHTTP(r, http.StatusNotImplemented, "anthropic_route", "provider_unimplemented")
-		writeAnthropicError(w, http.StatusNotImplemented, "provider adapter is not implemented")
+		writeAnthropicError(w, http.StatusNotImplemented, providerUnavailableMessage)
 		return
 	}
 	if err := adapter.ValidateChatRequest(instance, chatReq); err != nil {

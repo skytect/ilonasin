@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"fmt"
 	"sort"
+	"strings"
 
 	"ilonasin/internal/management"
 )
@@ -32,4 +34,15 @@ func modelCacheSummaries(rows []management.ModelMetadata) []modelCacheSummary {
 		return out[i].ProviderInstanceID < out[j].ProviderInstanceID
 	})
 	return out
+}
+
+func (m Model) writeOverviewModelCache(b *strings.Builder) {
+	b.WriteString("\nModel cache\n")
+	summaries := modelCacheSummaries(m.modelRows)
+	if len(summaries) == 0 {
+		b.WriteString("No cached models.\n")
+	}
+	for _, summary := range summaries {
+		fmt.Fprintf(b, "- %s %d models updated %s\n", summary.ProviderInstanceID, summary.Count, summary.UpdatedAt)
+	}
 }

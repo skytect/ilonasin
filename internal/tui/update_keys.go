@@ -12,13 +12,13 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "shift+tab", "left":
 		return m.previousTabAction()
 	case "1":
-		return m.selectTabAction(tabOverview)
+		return m.selectTabAction(tabAPI)
 	case "2":
-		return m.selectTabAction(tabAccounts)
+		return m.selectTabAction(tabProviders)
 	case "3":
-		return m.selectTabAction(tabObservability)
+		return m.selectTabAction(tabUsage)
 	case "4":
-		return m.selectTabAction(tabHelp)
+		return m.selectTabAction(tabLogs)
 	case "pgdown", "ctrl+d":
 		return m.pageDownAction()
 	case "pgup", "ctrl+u":

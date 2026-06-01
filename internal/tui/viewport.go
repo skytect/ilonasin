@@ -74,7 +74,7 @@ func (m Model) viewportHeight() int {
 
 func (m Model) validActiveTab() tuiTab {
 	if m.activeTab < 0 || m.activeTab >= tuiTabCount {
-		return tabOverview
+		return tabAPI
 	}
 	return m.activeTab
 }
@@ -106,7 +106,7 @@ func (m *Model) setActiveScroll(offset int) {
 
 func (m *Model) clampScrolls() {
 	if m.activeTab < 0 || m.activeTab >= tuiTabCount {
-		m.activeTab = tabOverview
+		m.activeTab = tabAPI
 	}
 	for _, tab := range tuiTabs {
 		maxOffset := m.scrollMax(tab.id)

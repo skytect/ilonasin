@@ -64,10 +64,10 @@ type Model struct {
 type tuiTab int
 
 const (
-	tabOverview tuiTab = iota
-	tabAccounts
-	tabObservability
-	tabHelp
+	tabAPI tuiTab = iota
+	tabProviders
+	tabUsage
+	tabLogs
 	tuiTabCount
 )
 
@@ -75,10 +75,10 @@ var tuiTabs = []struct {
 	id    tuiTab
 	label string
 }{
-	{tabOverview, "overview"},
-	{tabAccounts, "accounts"},
-	{tabObservability, "observability"},
-	{tabHelp, "help"},
+	{tabAPI, "api"},
+	{tabProviders, "providers"},
+	{tabUsage, "usage"},
+	{tabLogs, "logs"},
 }
 
 func NewModel(cfg config.Config, registry provider.Registry, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, oauth management.OAuthClient, pruner management.TelemetryPruneClient, subscriptionUsage management.SubscriptionUsageClient, now func() time.Time, loggers ...*slog.Logger) Model {

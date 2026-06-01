@@ -36,16 +36,16 @@ func (m Model) activeTabBody() string {
 func (m Model) tabBody(tab tuiTab) string {
 	var b strings.Builder
 	switch tab {
-	case tabOverview:
-		m.writeOverview(&b)
-	case tabAccounts:
-		m.writeAccounts(&b)
-	case tabObservability:
-		m.writeObservability(&b)
-	case tabHelp:
-		m.writeHelp(&b)
+	case tabAPI:
+		m.writeAPI(&b)
+	case tabProviders:
+		m.writeProviders(&b)
+	case tabUsage:
+		m.writeUsage(&b)
+	case tabLogs:
+		m.writeLogs(&b)
 	default:
-		m.writeOverview(&b)
+		m.writeAPI(&b)
 	}
 	return b.String()
 }
@@ -74,25 +74,27 @@ func (m Model) statusLine() string {
 		return "Error: " + safeErrorMessage(m.err)
 	}
 	if m.revealTokenID != 0 {
-		return "New token " + strconv.FormatInt(m.revealTokenID, 10) + " metadata is visible on accounts."
+		return "New token " + strconv.FormatInt(m.revealTokenID, 10) + " metadata is visible on api."
 	}
 	if m.apiKeyMode {
 		return "Adding API key for " + safeDisplay(m.apiKeyProvider) + ": " + strings.Repeat("*", len(m.apiKeyInput))
 	}
 	if m.oauthChallenge != nil {
-		return "OAuth login for " + safeDisplay(m.oauthChallenge.ProviderInstanceID) + " is visible on accounts."
+		return "OAuth login for " + safeDisplay(m.oauthChallenge.ProviderInstanceID) + " is visible on providers."
 	}
 	return ""
 }
 
 func (m Model) footerLine() string {
 	switch m.activeTab {
-	case tabAccounts:
-		return "tab switch  up/down select  pgup/pgdown scroll  n new token  a add key  d disable token  x disable key  l login  o/r OAuth  f/F fallback  q quit"
-	case tabObservability:
-		return "tab switch  up/down scroll  pgup/pgdown page  home/end jump  u usage  p prune  q quit"
-	case tabHelp:
-		return "tab switch  up/down scroll  q quit"
+	case tabAPI:
+		return "tab switch  up/down select token  pgup/pgdown scroll  n new token  d disable token  q quit"
+	case tabProviders:
+		return "tab switch  up/down scroll  pgup/pgdown page  a add key  x disable key  l login  o/r OAuth  f/F fallback  q quit"
+	case tabUsage:
+		return "tab switch  up/down scroll  pgup/pgdown page  home/end jump  u refresh usage  q quit"
+	case tabLogs:
+		return "tab switch  up/down scroll  pgup/pgdown page  home/end jump  p prune  q quit"
 	default:
 		return "tab switch  up/down scroll  q quit"
 	}

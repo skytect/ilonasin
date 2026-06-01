@@ -13,13 +13,13 @@ import (
 func (m Model) updateObservabilityKey(key tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	switch key.String() {
 	case "p":
-		if m.activeTab != tabObservability {
+		if m.activeTab != tabLogs {
 			return m, nil, true
 		}
 		next, cmd := m.pruneTelemetryAction()
 		return next, cmd, true
 	case "u":
-		if m.activeTab != tabObservability {
+		if m.activeTab != tabUsage {
 			return m, nil, true
 		}
 		next, cmd := m.refreshSubscriptionUsageAction()

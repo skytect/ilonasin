@@ -42,7 +42,7 @@ func (m Model) endAction() (tea.Model, tea.Cmd) {
 
 func (m Model) downAction() (tea.Model, tea.Cmd) {
 	m.clearReveal()
-	if m.activeTab == tabAccounts {
+	if m.activeTab == tabAPI {
 		m.selectNextLocalToken()
 	} else {
 		m.scrollActive(1)
@@ -52,7 +52,7 @@ func (m Model) downAction() (tea.Model, tea.Cmd) {
 
 func (m Model) upAction() (tea.Model, tea.Cmd) {
 	m.clearReveal()
-	if m.activeTab == tabAccounts {
+	if m.activeTab == tabAPI {
 		m.selectPreviousLocalToken()
 	} else {
 		m.scrollActive(-1)

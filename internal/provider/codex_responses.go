@@ -291,7 +291,7 @@ func unsupportedCodexToolEvent(typ string) bool {
 
 func unsupportedCodexOutputItem(typ string) bool {
 	typ = strings.ToLower(typ)
-	if typ == "custom_tool_call" || typ == "tool_search_call" {
+	if typ == "custom_tool_call" || typ == "tool_search_call" || typ == "web_search_call" {
 		return false
 	}
 	return codexToolEvent(typ)

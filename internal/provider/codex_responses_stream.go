@@ -291,7 +291,7 @@ func (a HTTPChatAdapter) handleCodexStreamEvent(ctx context.Context, data []byte
 		summary.CompletionStatus = "upstream_invalid"
 		return err
 	}
-	if codexToolEvent(event.Type) || (event.Item != nil && codexToolEvent(event.Item.Type)) {
+	if codexToolEvent(event.Type) || (event.Item != nil && unsupportedCodexOutputItem(event.Item.Type)) {
 		summary.ErrorClass = "upstream_invalid_response"
 		summary.CompletionStatus = "upstream_invalid"
 		return fmt.Errorf("codex stream contained unsupported tool event")
@@ -321,7 +321,7 @@ func (a HTTPChatAdapter) handleCodexStreamEvent(ctx context.Context, data []byte
 		}
 		if event.Item.Type != "function_call" {
 			switch event.Item.Type {
-			case "message", "reasoning":
+			case "message", "reasoning", "web_search_call":
 				return nil
 			default:
 				summary.ErrorClass = "upstream_invalid_response"
@@ -403,6 +403,9 @@ func (a HTTPChatAdapter) handleCodexStreamEvent(ctx context.Context, data []byte
 			return nil
 		}
 		if event.Item.Type == "reasoning" {
+			return nil
+		}
+		if event.Item.Type == "web_search_call" {
 			return nil
 		}
 		if event.Item.Type != "message" || event.Item.Role != "assistant" {

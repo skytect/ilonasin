@@ -30,6 +30,7 @@ type ResponsesOutputItem struct {
 	Arguments json.RawMessage
 	Input     string
 	Execution string
+	Status    string
 	Tools     []json.RawMessage
 }
 

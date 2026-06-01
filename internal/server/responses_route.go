@@ -304,6 +304,10 @@ func responseOutputItem(responseID string, index int, item openai.ResponsesOutpu
 		if len(item.Tools) > 0 {
 			out["tools"] = item.Tools
 		}
+	case "web_search_call":
+		if item.Status != "" {
+			out["status"] = item.Status
+		}
 	case "custom_tool_call":
 		out["name"] = item.Name
 		out["input"] = item.Input

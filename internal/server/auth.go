@@ -23,7 +23,7 @@ func (s *Server) withAuth(next func(http.ResponseWriter, *http.Request, credenti
 				s.ioLogCapturedOutput(r, status, w.Header().Get("Content-Type"), capture.bytes, capture.body.Bytes(), capture.bodyTruncated)
 			}()
 		}
-		rec, err := s.auth.VerifyBearer(r.Context(), localAuthorizationHeader(r))
+		rec, err := s.auth.VerifyBearer(r.Context(), r.Header.Get("Authorization"))
 		if err != nil {
 			s.logHTTP(r, http.StatusUnauthorized, "local_auth", "authentication_error")
 			writeError(w, http.StatusUnauthorized, "missing or invalid bearer token", "authentication_error", "unauthorized")
@@ -32,16 +32,6 @@ func (s *Server) withAuth(next func(http.ResponseWriter, *http.Request, credenti
 		s.logHTTP(r, http.StatusOK, "local_auth", "")
 		next(w, r, rec)
 	}
-}
-
-func localAuthorizationHeader(r *http.Request) string {
-	if authorization := r.Header.Get("Authorization"); authorization != "" {
-		return authorization
-	}
-	if apiKey := r.Header.Get("X-Api-Key"); apiKey != "" {
-		return "Bearer " + apiKey
-	}
-	return ""
 }
 
 func (s *Server) logHTTP(r *http.Request, status int, event, errorClass string) {
@@ -82,8 +72,6 @@ func routeLabel(r *http.Request) string {
 		return "v1_responses"
 	case r.Method == http.MethodPost && r.URL.Path == "/v1/chat/completions":
 		return "v1_chat_completions"
-	case r.Method == http.MethodPost && r.URL.Path == "/v1/messages":
-		return "v1_messages"
 	default:
 		return "unknown"
 	}

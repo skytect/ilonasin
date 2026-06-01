@@ -67,18 +67,17 @@ type Registry struct {
 }
 
 type Instance struct {
-	ID                  string
-	Type                string
-	BaseURL             string
-	AuthIssuer          string
-	AuthStyle           string
-	Placeholder         bool
-	APIKey              bool
-	OAuth               bool
-	OAuthRefresh        bool
-	Chat                bool
-	ModelDiscovery      bool
-	CodexAccountPooling bool
+	ID             string
+	Type           string
+	BaseURL        string
+	AuthIssuer     string
+	AuthStyle      string
+	Placeholder    bool
+	APIKey         bool
+	OAuth          bool
+	OAuthRefresh   bool
+	Chat           bool
+	ModelDiscovery bool
 }
 
 func NewRegistry(cfg config.Config) (Registry, error) {
@@ -115,18 +114,17 @@ func NewRegistry(cfg config.Config) (Registry, error) {
 			}
 		}
 		instance := Instance{
-			ID:                  id,
-			Type:                providerCfg.Type,
-			BaseURL:             baseURL,
-			AuthIssuer:          authIssuer,
-			AuthStyle:           def.AuthStyle,
-			Placeholder:         def.Placeholder,
-			APIKey:              def.APIKey,
-			OAuth:               def.OAuth,
-			OAuthRefresh:        def.OAuthRefresh,
-			Chat:                def.Chat,
-			ModelDiscovery:      def.ModelDiscovery,
-			CodexAccountPooling: providerCfg.Type == "codex" && providerCfg.CodexAccountPooling,
+			ID:             id,
+			Type:           providerCfg.Type,
+			BaseURL:        baseURL,
+			AuthIssuer:     authIssuer,
+			AuthStyle:      def.AuthStyle,
+			Placeholder:    def.Placeholder,
+			APIKey:         def.APIKey,
+			OAuth:          def.OAuth,
+			OAuthRefresh:   def.OAuthRefresh,
+			Chat:           def.Chat,
+			ModelDiscovery: def.ModelDiscovery,
 		}
 		reg.instances[id] = instance
 		reg.ordered = append(reg.ordered, instance)

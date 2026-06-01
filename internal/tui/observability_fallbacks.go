@@ -9,6 +9,7 @@ import (
 func (m Model) writeFallbacks(b *strings.Builder) {
 	b.WriteString("\nFallbacks\n")
 	width := m.viewWidth()
+	now := m.nowTime()
 	if len(m.fallbackRows) == 0 {
 		b.WriteString("No fallback metadata.\n")
 	}
@@ -17,7 +18,7 @@ func (m Model) writeFallbacks(b *strings.Builder) {
 		lines := []string{
 			cardTitleStyle.Render(safeDisplay(row.ProviderInstanceID)+"/"+safeDisplay(row.ModelID)) + " " + statusBadge("warning"),
 			metricLine(
-				metricChip("at", formatTime(row.OccurredAt)),
+				timeChip("at", now, row.OccurredAt),
 				metricChip("reason", row.Reason),
 			),
 			mutedStyle.Render(credentialDisplay(row.FromCredentialID, row.FromCredentialLabel)),

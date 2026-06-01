@@ -13,6 +13,7 @@ import (
 func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 	b.WriteString("\nSubscription usage\n")
 	width := m.viewWidth()
+	now := m.nowTime()
 	b.WriteString(subscriptionUsageSummary(width, m.subscriptionRows, m.subscriptionPools))
 	b.WriteByte('\n')
 	if len(m.subscriptionRows) == 0 {
@@ -45,7 +46,7 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 		if row.ErrorClass != "" {
 			lines = append(lines, badBadgeStyle.Render("error")+" "+safeDisplay(row.ErrorClass))
 		} else {
-			lines = append(lines, subscriptionAccountWindowLines(row, subscriptionCardWidth(width))...)
+			lines = append(lines, subscriptionAccountWindowLines(row, subscriptionCardWidth(width), now)...)
 		}
 		accountCards = append(accountCards, renderAccentCard(subscriptionCardWidth(width), accent, lines...))
 	}
@@ -74,7 +75,7 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 				metricChip("stale", fmt.Sprintf("%d", row.StaleCount)),
 			),
 		}
-		lines = append(lines, subscriptionPoolWindowLines(row, subscriptionCardWidth(width))...)
+		lines = append(lines, subscriptionPoolWindowLines(row, subscriptionCardWidth(width), now)...)
 		poolCards = append(poolCards, renderAccentCard(subscriptionCardWidth(width), accent, lines...))
 	}
 	if len(poolCards) > 0 {
@@ -122,7 +123,7 @@ func subscriptionUsageSummary(width int, rows []management.SubscriptionUsageRow,
 	)
 }
 
-func subscriptionAccountWindowLines(row management.SubscriptionUsageRow, width int) []string {
+func subscriptionAccountWindowLines(row management.SubscriptionUsageRow, width int, now time.Time) []string {
 	windows := row.Windows
 	if len(windows) == 0 {
 		windows = []management.SubscriptionUsageWindow{
@@ -144,12 +145,12 @@ func subscriptionAccountWindowLines(row management.SubscriptionUsageRow, width i
 	}
 	lines := make([]string, 0, len(windows))
 	for _, window := range windows {
-		lines = append(lines, usageGaugeBlock(windowLabel(window.Label, window.WindowMinutes), window.UsedPercent, window.RemainingPercent, resetText("reset", window.ResetAt), gaugeBarWidth(width)))
+		lines = append(lines, usageGaugeBlock(windowLabel(window.Label, window.WindowMinutes), window.UsedPercent, window.RemainingPercent, resetText("reset", window.ResetAt, now), gaugeBarWidth(width)))
 	}
 	return lines
 }
 
-func subscriptionPoolWindowLines(row management.SubscriptionUsageAggregate, width int) []string {
+func subscriptionPoolWindowLines(row management.SubscriptionUsageAggregate, width int, now time.Time) []string {
 	windows := row.Windows
 	lines := make([]string, 0, len(windows)+1)
 	for _, window := range windows {
@@ -157,7 +158,7 @@ func subscriptionPoolWindowLines(row management.SubscriptionUsageAggregate, widt
 			windowLabel(window.Label, 0),
 			window.TotalRemainingPercentPoints,
 			window.TotalCapacityPercentPoints,
-			resetText("reset", window.EarliestResetAt),
+			resetText("reset", window.EarliestResetAt, now),
 			gaugeBarWidth(width),
 		))
 	}
@@ -197,7 +198,7 @@ func windowLabel(label string, minutes int) string {
 	}
 }
 
-func resetText(prefix string, resetAt *time.Time) string {
+func resetText(prefix string, resetAt *time.Time, now time.Time) string {
 	prefix = strings.TrimSpace(prefix)
 	if prefix == "" {
 		prefix = "reset"
@@ -205,7 +206,7 @@ func resetText(prefix string, resetAt *time.Time) string {
 	if resetAt == nil {
 		return prefix + " none"
 	}
-	return prefix + " " + formatTime(*resetAt)
+	return prefix + " " + formatRelativeTime(now, *resetAt)
 }
 
 func subscriptionKeepaliveState(status management.KeepaliveStatus) string {

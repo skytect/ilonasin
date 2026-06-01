@@ -67,7 +67,7 @@ func safeTokenFragmentDisplay(value string, maxRunes int) string {
 func safeEndpointDisplay(value string) string {
 	value = strings.TrimSpace(value)
 	switch value {
-	case "chat_completions", "responses":
+	case "chat_completions", "responses", "anthropic_messages":
 		return value
 	default:
 		return ""

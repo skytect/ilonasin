@@ -18,6 +18,7 @@ func (m Model) writeOAuth(b *strings.Builder) {
 		b.WriteString("No OAuth accounts.\n")
 	}
 	width := m.viewWidth()
+	now := m.nowTime()
 	for i, row := range m.oauthRows {
 		cursor := " "
 		if i == m.oauthSelected {
@@ -27,18 +28,15 @@ func (m Model) writeOAuth(b *strings.Builder) {
 		if row.Disabled {
 			state = "disabled"
 		}
-		expires := "none"
-		if row.ExpiresAt != nil {
-			expires = formatTime(*row.ExpiresAt)
+		expires := optionalTimeChip("exp", now, row.ExpiresAt)
+		if expires == "" {
+			expires = metricChip("exp", "none")
 		}
 		refresh := safeRefreshFailureClass(row.RefreshFailureClass)
 		if refresh == "" {
 			refresh = "none"
 		}
 		refreshDescription := safeRefreshFailureDescriptionDisplay(row.RefreshFailureDescription)
-		if refreshDescription != "" {
-			refresh = refresh + " " + refreshDescription
-		}
 		title := cursor + " " + accountIdentity(row.AccountDisplayLabel, "OAuth account")
 		lines := []string{
 			cardTitleStyle.Render(title) + " " + statusBadge(state),
@@ -47,9 +45,12 @@ func (m Model) writeOAuth(b *strings.Builder) {
 				fmt.Sprintf("credential %d", row.ID),
 				safeDisplay(row.ProviderInstanceID),
 				accountMetaField("plan", row.PlanLabel),
-				"expires "+expires,
-				"refresh "+refresh,
+				expires,
+				metricChip("refresh", refresh),
 			),
+		}
+		if refreshDescription != "" {
+			lines = append(lines, mutedStyle.Render(refreshDescription))
 		}
 		b.WriteString(renderCard(width, lines...))
 		b.WriteByte('\n')

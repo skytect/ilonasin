@@ -132,6 +132,24 @@ func compactPercentText(value float64) string {
 
 func compactResetText(value string) string {
 	parts := strings.Fields(value)
+	for i, part := range parts {
+		if part == "in" && i+1 < len(parts) {
+			return strings.Join(parts[:i+2], " ")
+		}
+		if part == "ago" && i > 0 {
+			start := i - 1
+			if start > 0 {
+				start--
+			}
+			return strings.Join(parts[start:i+1], " ")
+		}
+		if part == "now" {
+			if i > 0 {
+				return strings.Join(parts[i-1:i+1], " ")
+			}
+			return part
+		}
+	}
 	if len(parts) >= 2 {
 		return parts[0] + " " + parts[len(parts)-1]
 	}

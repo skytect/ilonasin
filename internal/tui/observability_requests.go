@@ -10,6 +10,7 @@ import (
 func (m Model) writeRecentRequests(b *strings.Builder) {
 	b.WriteString("\nRecent requests\n")
 	width := m.viewWidth()
+	now := m.nowTime()
 	if len(m.requestRows) == 0 {
 		b.WriteString("No request metadata.\n")
 	}
@@ -42,7 +43,7 @@ func (m Model) writeRecentRequests(b *strings.Builder) {
 			metricLine(
 				endpointMetricChip("route", row.Endpoint),
 				metricChip("status", fmt.Sprintf("%d", row.HTTPStatus)),
-				metricChip("at", formatTime(row.StartedAt)),
+				timeChip("at", now, row.StartedAt),
 				streamChip(row.Stream),
 			),
 			metricLine(

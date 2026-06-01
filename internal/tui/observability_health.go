@@ -10,6 +10,7 @@ import (
 func (m Model) writeHealthAndQuota(b *strings.Builder) {
 	b.WriteString("\nHealth\n")
 	width := m.viewWidth()
+	now := m.nowTime()
 	if len(m.healthRows) == 0 {
 		b.WriteString("No health metadata.\n")
 	}
@@ -28,7 +29,7 @@ func (m Model) writeHealthAndQuota(b *strings.Builder) {
 			metricLine(
 				metricChip("event", row.EventClass),
 				metricChip("status", fmt.Sprintf("%d", row.HTTPStatus)),
-				metricChip("at", formatTime(row.OccurredAt)),
+				timeChip("at", now, row.OccurredAt),
 			),
 			mutedStyle.Render(credentialDisplay(row.CredentialID, row.CredentialLabel)),
 		}
@@ -36,7 +37,7 @@ func (m Model) writeHealthAndQuota(b *strings.Builder) {
 			lines = append(lines, badBadgeStyle.Render(safeDisplay(row.ErrorClass)))
 		}
 		if row.RetryAfter != nil {
-			lines = append(lines, metricChip("retry", formatTime(*row.RetryAfter)))
+			lines = append(lines, optionalTimeChip("retry", now, row.RetryAfter))
 		}
 		healthCards = append(healthCards, renderObservabilityAccentCard(observabilityCardWidth(width), accent, lines...))
 	}
@@ -66,16 +67,16 @@ func (m Model) writeHealthAndQuota(b *strings.Builder) {
 				metricChip("count", fmt.Sprintf("%d", row.Count)),
 			),
 			mutedStyle.Render(credentialDisplay(row.CredentialID, row.CredentialLabel)),
-			metricChip("at", formatTime(row.ObservedAt)),
+			timeChip("at", now, row.ObservedAt),
 		}
 		if row.ErrorClass != "" {
 			lines = append(lines, badBadgeStyle.Render(safeDisplay(row.ErrorClass)))
 		}
 		if row.RetryAfter != nil {
-			lines = append(lines, metricChip("retry", formatTime(*row.RetryAfter)))
+			lines = append(lines, optionalTimeChip("retry", now, row.RetryAfter))
 		}
 		if row.ResetAt != nil {
-			lines = append(lines, metricChip("reset", formatTime(*row.ResetAt)))
+			lines = append(lines, optionalTimeChip("reset", now, row.ResetAt))
 		}
 		quotaCards = append(quotaCards, renderObservabilityAccentCard(observabilityCardWidth(width), accent, lines...))
 	}

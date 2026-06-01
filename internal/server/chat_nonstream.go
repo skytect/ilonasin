@@ -57,13 +57,7 @@ func (s *Server) executeNonStreamingChat(r *http.Request, nc nonStreamContext) n
 	}
 	for i, credential := range plan.attempts {
 		exec.attemptCount++
-		result, err := nc.adapter.CompleteChat(r.Context(), provider.ChatRequest{
-			Instance:        nc.instance,
-			UpstreamModel:   nc.address.ProviderModelID,
-			Request:         nc.request,
-			Credential:      providerChatCredential(credential),
-			ModelCredential: modelCredential,
-		})
+		result, err := nc.adapter.CompleteChat(r.Context(), providerChatRequest(nc.instance, nc.address, nc.request, credential, modelCredential))
 		if s.shouldRefreshModelCredentialAfterChat401(nc.instance, result, modelCredential) {
 			refreshed, refreshErr := s.refreshOAuthCredentialForRetryIfBearer(r.Context(), modelCredential)
 			if refreshErr != nil {
@@ -77,13 +71,7 @@ func (s *Server) executeNonStreamingChat(r *http.Request, nc nonStreamContext) n
 				}
 				exec.authRetries++
 				exec.attemptCount++
-				result, err = nc.adapter.CompleteChat(r.Context(), provider.ChatRequest{
-					Instance:        nc.instance,
-					UpstreamModel:   nc.address.ProviderModelID,
-					Request:         nc.request,
-					Credential:      providerChatCredential(credential),
-					ModelCredential: modelCredential,
-				})
+				result, err = nc.adapter.CompleteChat(r.Context(), providerChatRequest(nc.instance, nc.address, nc.request, credential, modelCredential))
 				if s.shouldRefreshModelCredentialAfterChat401(nc.instance, result, modelCredential) || s.shouldRefreshOAuthAfterChat401(nc.instance, result) {
 					result.StatusCode = http.StatusBadGateway
 					result.ErrorClass = "upstream_auth_failed"
@@ -101,13 +89,7 @@ func (s *Server) executeNonStreamingChat(r *http.Request, nc nonStreamContext) n
 				}
 				exec.authRetries++
 				exec.attemptCount++
-				result, err = nc.adapter.CompleteChat(r.Context(), provider.ChatRequest{
-					Instance:        nc.instance,
-					UpstreamModel:   nc.address.ProviderModelID,
-					Request:         nc.request,
-					Credential:      providerChatCredential(credential),
-					ModelCredential: modelCredential,
-				})
+				result, err = nc.adapter.CompleteChat(r.Context(), providerChatRequest(nc.instance, nc.address, nc.request, credential, modelCredential))
 				if s.shouldRefreshOAuthAfterChat401(nc.instance, result) {
 					result.StatusCode = http.StatusBadGateway
 					result.ErrorClass = "upstream_auth_failed"

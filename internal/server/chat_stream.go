@@ -126,13 +126,7 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 	} else {
 		for i, credential := range plan.attempts {
 			attemptCount++
-			summary, err := sc.adapter.StreamChat(r.Context(), provider.ChatRequest{
-				Instance:        sc.instance,
-				UpstreamModel:   sc.address.ProviderModelID,
-				Request:         sc.request,
-				Credential:      providerChatCredential(credential),
-				ModelCredential: modelCredential,
-			}, sink)
+			summary, err := sc.adapter.StreamChat(r.Context(), providerChatRequest(sc.instance, sc.address, sc.request, credential, modelCredential), sink)
 			if s.shouldRefreshModelCredentialAfterStream401(sc.instance, summary, modelCredential) {
 				refreshed, refreshErr := s.refreshOAuthCredentialForRetryIfBearer(r.Context(), modelCredential)
 				if refreshErr != nil {
@@ -146,13 +140,7 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 					}
 					authRetries++
 					attemptCount++
-					summary, err = sc.adapter.StreamChat(r.Context(), provider.ChatRequest{
-						Instance:        sc.instance,
-						UpstreamModel:   sc.address.ProviderModelID,
-						Request:         sc.request,
-						Credential:      providerChatCredential(credential),
-						ModelCredential: modelCredential,
-					}, sink)
+					summary, err = sc.adapter.StreamChat(r.Context(), providerChatRequest(sc.instance, sc.address, sc.request, credential, modelCredential), sink)
 					if s.shouldRefreshModelCredentialAfterStream401(sc.instance, summary, modelCredential) || s.shouldRefreshOAuthAfterStream401(sc.instance, summary) {
 						summary.StatusCode = http.StatusBadGateway
 						summary.ErrorClass = "upstream_auth_failed"
@@ -170,13 +158,7 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 					}
 					authRetries++
 					attemptCount++
-					summary, err = sc.adapter.StreamChat(r.Context(), provider.ChatRequest{
-						Instance:        sc.instance,
-						UpstreamModel:   sc.address.ProviderModelID,
-						Request:         sc.request,
-						Credential:      providerChatCredential(credential),
-						ModelCredential: modelCredential,
-					}, sink)
+					summary, err = sc.adapter.StreamChat(r.Context(), providerChatRequest(sc.instance, sc.address, sc.request, credential, modelCredential), sink)
 					if s.shouldRefreshOAuthAfterStream401(sc.instance, summary) {
 						summary.StatusCode = http.StatusBadGateway
 						summary.ErrorClass = "upstream_auth_failed"

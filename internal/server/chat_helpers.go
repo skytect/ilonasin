@@ -4,6 +4,9 @@ import (
 	"net/http"
 
 	"ilonasin/internal/metadata"
+	"ilonasin/internal/openai"
+	"ilonasin/internal/provider"
+	"ilonasin/internal/routing"
 )
 
 func resolvedChatModel(requestedModel, resultModel string) string {
@@ -27,4 +30,14 @@ func fallbackReason(events []metadata.FallbackEvent) string {
 		return ""
 	}
 	return events[0].Reason
+}
+
+func providerChatRequest(instance provider.Instance, addr routing.ModelAddress, req openai.ChatCompletionRequest, credential provider.BearerCredential, modelCredential provider.BearerCredential) provider.ChatRequest {
+	return provider.ChatRequest{
+		Instance:        instance,
+		UpstreamModel:   addr.ProviderModelID,
+		Request:         req,
+		Credential:      providerChatCredential(credential),
+		ModelCredential: modelCredential,
+	}
 }

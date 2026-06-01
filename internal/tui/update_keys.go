@@ -8,31 +8,25 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	switch key.String() {
 	case "tab", "right":
-		m.activeTab = (m.activeTab + 1) % tuiTabCount
-		m.clampScrolls()
+		return m.nextTabAction()
 	case "shift+tab", "left":
-		m.activeTab = (m.activeTab + tuiTabCount - 1) % tuiTabCount
-		m.clampScrolls()
+		return m.previousTabAction()
 	case "1":
-		m.activeTab = tabOverview
-		m.clampScrolls()
+		return m.selectTabAction(tabOverview)
 	case "2":
-		m.activeTab = tabAccounts
-		m.clampScrolls()
+		return m.selectTabAction(tabAccounts)
 	case "3":
-		m.activeTab = tabObservability
-		m.clampScrolls()
+		return m.selectTabAction(tabObservability)
 	case "4":
-		m.activeTab = tabHelp
-		m.clampScrolls()
+		return m.selectTabAction(tabHelp)
 	case "pgdown", "ctrl+d":
-		m.scrollActive(m.viewportHeight())
+		return m.pageDownAction()
 	case "pgup", "ctrl+u":
-		m.scrollActive(-m.viewportHeight())
+		return m.pageUpAction()
 	case "home":
-		m.setActiveScroll(0)
+		return m.homeAction()
 	case "end":
-		m.setActiveScroll(m.activeScrollMax())
+		return m.endAction()
 	case "q", "ctrl+c":
 		return m.quitAction()
 	case "n":
@@ -95,19 +89,9 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		return m.clearRevealAction()
 	case "down", "j":
-		m.clearReveal()
-		if m.activeTab == tabAccounts {
-			m.selectNextLocalToken()
-		} else {
-			m.scrollActive(1)
-		}
+		return m.downAction()
 	case "up", "k":
-		m.clearReveal()
-		if m.activeTab == tabAccounts {
-			m.selectPreviousLocalToken()
-		} else {
-			m.scrollActive(-1)
-		}
+		return m.upAction()
 	}
 	return m, nil
 }

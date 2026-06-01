@@ -117,15 +117,7 @@ func (s *Server) executeNonStreamingChat(r *http.Request, nc nonStreamContext) n
 			break
 		}
 		next := plan.attempts[i+1]
-		exec.fallbackEvents = append(exec.fallbackEvents, metadata.FallbackEvent{
-			OccurredAt:         time.Now(),
-			ProviderInstanceID: nc.address.ProviderInstanceID,
-			ModelID:            nc.address.ProviderModelID,
-			FromCredentialID:   credential.ID,
-			ToCredentialID:     next.ID,
-			Reason:             retryReason,
-			AllowedByPolicy:    true,
-		})
+		exec.fallbackEvents = append(exec.fallbackEvents, chatFallbackEvent(time.Now(), nc.address, credential, next, retryReason))
 	}
 	return exec
 }

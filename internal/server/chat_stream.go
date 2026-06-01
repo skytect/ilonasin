@@ -192,15 +192,7 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 				break
 			}
 			next := plan.attempts[i+1]
-			fallbackEvents = append(fallbackEvents, metadata.FallbackEvent{
-				OccurredAt:         time.Now(),
-				ProviderInstanceID: sc.address.ProviderInstanceID,
-				ModelID:            sc.address.ProviderModelID,
-				FromCredentialID:   credential.ID,
-				ToCredentialID:     next.ID,
-				Reason:             retryReason,
-				AllowedByPolicy:    true,
-			})
+			fallbackEvents = append(fallbackEvents, chatFallbackEvent(time.Now(), sc.address, credential, next, retryReason))
 		}
 	}
 	summary := final.summary

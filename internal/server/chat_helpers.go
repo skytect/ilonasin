@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"time"
 
 	"ilonasin/internal/metadata"
 	"ilonasin/internal/openai"
@@ -39,5 +40,17 @@ func providerChatRequest(instance provider.Instance, addr routing.ModelAddress, 
 		Request:         req,
 		Credential:      providerChatCredential(credential),
 		ModelCredential: modelCredential,
+	}
+}
+
+func chatFallbackEvent(occurredAt time.Time, addr routing.ModelAddress, from provider.BearerCredential, to provider.BearerCredential, reason string) metadata.FallbackEvent {
+	return metadata.FallbackEvent{
+		OccurredAt:         occurredAt,
+		ProviderInstanceID: addr.ProviderInstanceID,
+		ModelID:            addr.ProviderModelID,
+		FromCredentialID:   from.ID,
+		ToCredentialID:     to.ID,
+		Reason:             reason,
+		AllowedByPolicy:    true,
 	}
 }

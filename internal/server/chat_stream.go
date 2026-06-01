@@ -196,21 +196,7 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 		}
 	}
 	summary := final.summary
-	if (final.err != nil || summary.StatusCode >= 400) && !sink.started {
-		localStatus := summary.StatusCode
-		if localStatus < 400 || localStatus >= 500 {
-			localStatus = http.StatusBadGateway
-		}
-		summary.StatusCode = localStatus
-		errorCode := "upstream_stream_error"
-		if summary.ErrorClass == "upstream_auth_failed" ||
-			summary.ErrorClass == "rate_limit_exceeded" ||
-			summary.ErrorClass == "insufficient_quota" ||
-			sc.instance.Type == "codex" && summary.ErrorClass != "" {
-			errorCode = summary.ErrorClass
-		}
-		writeError(w, localStatus, "upstream stream failed", "api_error", errorCode)
-	}
+	summary = writeStreamingChatPreResponseError(w, summary, final.err, sink.started, sc.instance.Type)
 	recordCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
 	defer cancel()
 	status := summary.StatusCode
@@ -260,6 +246,26 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 	})
 	s.recordQuotaObservations(recordCtx, requestID, quotaObservations)
 	s.recordFallbacks(recordCtx, requestID, fallbackEvents)
+}
+
+func writeStreamingChatPreResponseError(w http.ResponseWriter, summary provider.ChatStreamSummary, err error, sinkStarted bool, providerType string) provider.ChatStreamSummary {
+	if (err == nil && summary.StatusCode < 400) || sinkStarted {
+		return summary
+	}
+	localStatus := summary.StatusCode
+	if localStatus < 400 || localStatus >= 500 {
+		localStatus = http.StatusBadGateway
+	}
+	summary.StatusCode = localStatus
+	errorCode := "upstream_stream_error"
+	if summary.ErrorClass == "upstream_auth_failed" ||
+		summary.ErrorClass == "rate_limit_exceeded" ||
+		summary.ErrorClass == "insufficient_quota" ||
+		providerType == "codex" && summary.ErrorClass != "" {
+		errorCode = summary.ErrorClass
+	}
+	writeError(w, localStatus, "upstream stream failed", "api_error", errorCode)
+	return summary
 }
 
 type streamSink struct {

@@ -19,15 +19,6 @@ import (
 
 const anthropicCodexFallbackModel = "gpt-5.5"
 
-var anthropicCodexFallbackAliases = map[string]bool{
-	"claude-haiku-4-6":  true,
-	"claude-opus-4-6":   true,
-	"claude-sonnet-4-6": true,
-	"haiku":             true,
-	"opus":              true,
-	"sonnet":            true,
-}
-
 func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request, token credentials.VerifiedLocalToken) {
 	start := time.Now()
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
@@ -165,7 +156,7 @@ func (s *Server) resolveAnthropicModelAddress(r *http.Request, model string) (ro
 	if strings.Contains(model, "/") {
 		return routing.ModelAddress{}, err
 	}
-	if !anthropicCodexFallbackAliases[model] {
+	if !isAnthropicCodexFallbackAlias(model) {
 		return routing.ModelAddress{}, err
 	}
 	var codexInstances []provider.Instance
@@ -188,6 +179,16 @@ func (s *Server) resolveAnthropicModelAddress(r *http.Request, model string) (ro
 		return routing.ModelAddress{}, fmt.Errorf("model must be addressed as <provider_instance_id>/<provider_model_id>; Anthropic fallback is ambiguous across Codex providers")
 	}
 	return routing.ModelAddress{}, err
+}
+
+func isAnthropicCodexFallbackAlias(model string) bool {
+	switch model {
+	case "haiku", "opus", "sonnet":
+		return true
+	}
+	return strings.HasPrefix(model, "claude-haiku-") ||
+		strings.HasPrefix(model, "claude-opus-") ||
+		strings.HasPrefix(model, "claude-sonnet-")
 }
 
 func (s *Server) recordAnthropicEarly(r *http.Request, start time.Time, token credentials.VerifiedLocalToken, addr routing.ModelAddress, instance provider.Instance, chatReq openai.ChatCompletionRequest, req anthropic.Request, status int, errorClass string) {

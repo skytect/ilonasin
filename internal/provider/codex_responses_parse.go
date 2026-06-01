@@ -275,9 +275,9 @@ func handleCodexEvent(data []byte, state *codexResponseParseState) (retErr error
 			}
 			return state.emitCodexFunctionCall(codexToolCallKey(event.Item.ID, event.Item.CallID))
 		case "tool_search_call":
-			return state.addCodexToolSearchCall(event.Item.CallID, event.Item.Execution, event.Item.Arguments, event.Item.Tools)
+			return state.addCodexToolSearchCall(codexToolCallKey(event.Item.ID, event.Item.CallID), event.Item.Execution, event.Item.Arguments, event.Item.Tools)
 		case "web_search_call":
-			return state.addCodexWebSearchCall(event.Item.CallID, event.Item.Status)
+			return state.addCodexWebSearchCall(codexToolCallKey(event.Item.ID, event.Item.CallID), event.Item.Status)
 		case "custom_tool_call":
 			return state.finishCodexCustomToolCall(event.Item.ID, event.Item.CallID, event.Item.Name, event.Item.Input)
 		case "message":

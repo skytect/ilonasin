@@ -1,7 +1,9 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
+	"sort"
 	"time"
 
 	"ilonasin/internal/logging"
@@ -44,6 +46,7 @@ func (s *Server) ioLogInput(r *http.Request, body []byte) {
 		Route:       routeLabel(r),
 		ContentType: r.Header.Get("Content-Type"),
 		Bytes:       len(body),
+		Meta:        ioRequestMeta(body),
 	})
 }
 
@@ -69,4 +72,87 @@ func (s *Server) ioLog(r *http.Request, record logging.IORecord) {
 	}
 	record.Time = time.Now().UTC()
 	s.ioLogger.Record(record)
+}
+
+type ioRequestMetadata struct {
+	Model             string   `json:"model,omitempty"`
+	Stream            *bool    `json:"stream,omitempty"`
+	MessageCount      int      `json:"message_count,omitempty"`
+	InputCount        int      `json:"input_count,omitempty"`
+	ToolCount         int      `json:"tool_count,omitempty"`
+	InputItemTypes    []string `json:"input_item_types,omitempty"`
+	InputMessageRoles []string `json:"input_message_roles,omitempty"`
+}
+
+func ioRequestMeta(body []byte) *ioRequestMetadata {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil
+	}
+	meta := &ioRequestMetadata{}
+	if value, ok := raw["model"]; ok {
+		_ = json.Unmarshal(value, &meta.Model)
+	}
+	if value, ok := raw["stream"]; ok {
+		var stream bool
+		if err := json.Unmarshal(value, &stream); err == nil {
+			meta.Stream = &stream
+		}
+	}
+	meta.MessageCount = rawArrayLength(raw["messages"])
+	meta.ToolCount = rawArrayLength(raw["tools"])
+	if input, ok := raw["input"]; ok {
+		meta.InputCount = rawArrayLength(input)
+		meta.InputItemTypes, meta.InputMessageRoles = inputShape(input)
+	}
+	if meta.Model == "" && meta.Stream == nil && meta.MessageCount == 0 && meta.InputCount == 0 && meta.ToolCount == 0 {
+		return nil
+	}
+	return meta
+}
+
+func rawArrayLength(raw json.RawMessage) int {
+	if len(raw) == 0 {
+		return 0
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return 0
+	}
+	return len(items)
+}
+
+func inputShape(raw json.RawMessage) ([]string, []string) {
+	var items []struct {
+		Type string `json:"type"`
+		Role string `json:"role"`
+	}
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil, nil
+	}
+	types := map[string]bool{}
+	roles := map[string]bool{}
+	for _, item := range items {
+		typ := item.Type
+		if typ == "" {
+			typ = "<missing>"
+		}
+		types[typ] = true
+		if item.Role != "" {
+			roles[item.Role] = true
+		}
+	}
+	return sortedKeys(types), sortedKeys(roles)
+}
+
+func sortedKeys(values map[string]bool) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for value := range values {
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
 }

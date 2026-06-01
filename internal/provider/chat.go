@@ -97,6 +97,7 @@ type ChatCredential struct {
 
 type ChatResult struct {
 	StatusCode           int
+	UpstreamStatusCode   int
 	ContentType          string
 	Body                 []byte
 	Usage                openai.Usage
@@ -121,6 +122,7 @@ type ChatStreamEvent struct {
 
 type ChatStreamSummary struct {
 	StatusCode            int
+	UpstreamStatusCode    int
 	Usage                 openai.Usage
 	ResolvedModel         string
 	ErrorClass            string

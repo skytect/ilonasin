@@ -283,7 +283,11 @@ func retryableChatAttempt(result provider.ChatResult, err error) bool {
 	if errorClass != "" && errorClass != "upstream_http_error" {
 		return false
 	}
-	return retryableHTTPStatus(result.StatusCode)
+	status := result.StatusCode
+	if result.UpstreamStatusCode != 0 {
+		status = result.UpstreamStatusCode
+	}
+	return retryableHTTPStatus(status)
 }
 
 func quotaRetryableChatAttempt(result provider.ChatResult) bool {

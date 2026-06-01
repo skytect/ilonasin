@@ -266,8 +266,12 @@ func normalizeResponsesInputItem(raw map[string]json.RawMessage) map[string]json
 	}
 	out["type"] = mustRawJSONString("message")
 	if text, ok := rawJSONStringValue(content); ok {
+		contentType := "input_text"
+		if role, ok := rawJSONStringValue(raw["role"]); ok && role == "assistant" {
+			contentType = "output_text"
+		}
 		part := []map[string]string{{
-			"type": "input_text",
+			"type": contentType,
 			"text": text,
 		}}
 		if rawContent, err := json.Marshal(part); err == nil {

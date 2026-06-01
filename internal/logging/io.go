@@ -28,6 +28,7 @@ type IORecord struct {
 	Status      int       `json:"status,omitempty"`
 	ContentType string    `json:"content_type,omitempty"`
 	Bytes       int       `json:"bytes"`
+	Meta        any       `json:"meta,omitempty"`
 }
 
 func SetupIO(cfg config.Config) (*IOLogger, error) {

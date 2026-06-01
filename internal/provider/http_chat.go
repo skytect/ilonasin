@@ -104,12 +104,13 @@ func (a HTTPChatAdapter) CompleteChat(ctx context.Context, req ChatRequest) (Cha
 			slog.String("error_class", "upstream_body_too_large"),
 		)
 		return ChatResult{
-			StatusCode:    http.StatusBadGateway,
-			ContentType:   "application/json",
-			ErrorClass:    "upstream_body_too_large",
-			Latency:       latency,
-			RetryAfter:    retryAfterFromHeader(resp.Header, time.Now()),
-			BodyTruncated: true,
+			StatusCode:         http.StatusBadGateway,
+			UpstreamStatusCode: resp.StatusCode,
+			ContentType:        "application/json",
+			ErrorClass:         "upstream_body_too_large",
+			Latency:            latency,
+			RetryAfter:         retryAfterFromHeader(resp.Header, time.Now()),
+			BodyTruncated:      true,
 		}, fmt.Errorf("upstream response body exceeded limit")
 	}
 	respBody, tooLarge, readErr := readLimitedUpstreamBody(resp.Body, MaxUpstreamChatBodyBytes)
@@ -126,12 +127,13 @@ func (a HTTPChatAdapter) CompleteChat(ctx context.Context, req ChatRequest) (Cha
 			slog.String("error_class", "upstream_body_too_large"),
 		)
 		return ChatResult{
-			StatusCode:    http.StatusBadGateway,
-			ContentType:   "application/json",
-			ErrorClass:    "upstream_body_too_large",
-			Latency:       latency,
-			RetryAfter:    retryAfterFromHeader(resp.Header, time.Now()),
-			BodyTruncated: true,
+			StatusCode:         http.StatusBadGateway,
+			UpstreamStatusCode: resp.StatusCode,
+			ContentType:        "application/json",
+			ErrorClass:         "upstream_body_too_large",
+			Latency:            latency,
+			RetryAfter:         retryAfterFromHeader(resp.Header, time.Now()),
+			BodyTruncated:      true,
 		}, fmt.Errorf("upstream response body exceeded limit")
 	}
 	if readErr != nil {
@@ -146,11 +148,12 @@ func (a HTTPChatAdapter) CompleteChat(ctx context.Context, req ChatRequest) (Cha
 			slog.String("error_class", "upstream_network_error"),
 		)
 		return ChatResult{
-			StatusCode:  http.StatusBadGateway,
-			ContentType: "application/json",
-			ErrorClass:  "upstream_network_error",
-			Latency:     latency,
-			RetryAfter:  retryAfterFromHeader(resp.Header, time.Now()),
+			StatusCode:         http.StatusBadGateway,
+			UpstreamStatusCode: resp.StatusCode,
+			ContentType:        "application/json",
+			ErrorClass:         "upstream_network_error",
+			Latency:            latency,
+			RetryAfter:         retryAfterFromHeader(resp.Header, time.Now()),
 		}, readErr
 	}
 	contentType := resp.Header.Get("Content-Type")
@@ -159,11 +162,12 @@ func (a HTTPChatAdapter) CompleteChat(ctx context.Context, req ChatRequest) (Cha
 	}
 
 	result := ChatResult{
-		StatusCode:  resp.StatusCode,
-		ContentType: contentType,
-		Body:        respBody,
-		Latency:     latency,
-		RetryAfter:  retryAfterFromHeader(resp.Header, time.Now()),
+		StatusCode:         resp.StatusCode,
+		UpstreamStatusCode: resp.StatusCode,
+		ContentType:        contentType,
+		Body:               respBody,
+		Latency:            latency,
+		RetryAfter:         retryAfterFromHeader(resp.Header, time.Now()),
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		result.ErrorClass = "upstream_http_error"

@@ -77,11 +77,12 @@ func (a HTTPChatAdapter) StreamChat(ctx context.Context, req ChatRequest, sink C
 			slog.String("error_class", "upstream_http_error"),
 		)
 		return withStreamLatency(start, ChatStreamSummary{
-			StatusCode:       resp.StatusCode,
-			ErrorClass:       "upstream_http_error",
-			CompletionStatus: "upstream_error",
-			RetryAfter:       retryAfterFromHeader(resp.Header, time.Now()),
-			PreStreamError:   true,
+			StatusCode:         resp.StatusCode,
+			UpstreamStatusCode: resp.StatusCode,
+			ErrorClass:         "upstream_http_error",
+			CompletionStatus:   "upstream_error",
+			RetryAfter:         retryAfterFromHeader(resp.Header, time.Now()),
+			PreStreamError:     true,
 		}), fmt.Errorf("upstream stream status %d", resp.StatusCode)
 	}
 

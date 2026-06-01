@@ -37,7 +37,11 @@ func retryableStreamAttempt(summary provider.ChatStreamSummary, err error, sinkS
 	case "upstream_network_error", "upstream_timeout":
 		return true
 	case "upstream_http_error":
-		return retryableHTTPStatus(summary.StatusCode)
+		status := summary.StatusCode
+		if summary.UpstreamStatusCode != 0 {
+			status = summary.UpstreamStatusCode
+		}
+		return retryableHTTPStatus(status)
 	default:
 		return false
 	}

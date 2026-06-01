@@ -80,7 +80,7 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 				slog.Int64("duration_ms", durationMS(start)),
 				slog.String("error_class", "upstream_body_too_large"),
 			)
-			return ChatResult{StatusCode: http.StatusBadGateway, ContentType: "application/json", ErrorClass: "upstream_body_too_large", Latency: time.Since(start), RetryAfter: retryAfter, BodyTruncated: true}, fmt.Errorf("codex responses body exceeded limit")
+			return ChatResult{StatusCode: http.StatusBadGateway, UpstreamStatusCode: resp.StatusCode, ContentType: "application/json", ErrorClass: "upstream_body_too_large", Latency: time.Since(start), RetryAfter: retryAfter, BodyTruncated: true}, fmt.Errorf("codex responses body exceeded limit")
 		}
 		if readErr != nil {
 			logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
@@ -93,7 +93,7 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 				slog.Int64("duration_ms", durationMS(start)),
 				slog.String("error_class", "upstream_network_error"),
 			)
-			return ChatResult{StatusCode: http.StatusBadGateway, ContentType: "application/json", ErrorClass: "upstream_network_error", Latency: time.Since(start), RetryAfter: retryAfter}, readErr
+			return ChatResult{StatusCode: http.StatusBadGateway, UpstreamStatusCode: resp.StatusCode, ContentType: "application/json", ErrorClass: "upstream_network_error", Latency: time.Since(start), RetryAfter: retryAfter}, readErr
 		}
 		if resp.StatusCode == http.StatusUnauthorized {
 			logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
@@ -107,13 +107,13 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 				slog.Int("response_bytes", len(respBody)),
 				slog.String("error_class", "upstream_auth_failed"),
 			)
-			return ChatResult{StatusCode: http.StatusUnauthorized, ContentType: "application/json", ErrorClass: "upstream_auth_failed", Latency: time.Since(start), RetryAfter: retryAfter}, fmt.Errorf("codex responses status %d", resp.StatusCode)
+			return ChatResult{StatusCode: http.StatusUnauthorized, UpstreamStatusCode: resp.StatusCode, ContentType: "application/json", ErrorClass: "upstream_auth_failed", Latency: time.Since(start), RetryAfter: retryAfter}, fmt.Errorf("codex responses status %d", resp.StatusCode)
 		}
 		errorClass := "upstream_http_error"
 		if resp.StatusCode == http.StatusTooManyRequests {
 			errorClass = "rate_limit_exceeded"
 		}
-		logProviderHTTP(ctx, a.Logger, statusLevel(resp.StatusCode, errorClass), "provider_http",
+		attrs := []slog.Attr{
 			slog.String("endpoint", "responses"),
 			slog.String("method", http.MethodPost),
 			slog.String("provider_instance", req.Instance.ID),
@@ -123,8 +123,12 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 			slog.Int64("duration_ms", durationMS(start)),
 			slog.Int("response_bytes", len(respBody)),
 			slog.String("error_class", errorClass),
-		)
-		return ChatResult{StatusCode: http.StatusBadGateway, ContentType: "application/json", ErrorClass: errorClass, Latency: time.Since(start), RetryAfter: retryAfter}, fmt.Errorf("codex responses status %d", resp.StatusCode)
+		}
+		if resp.StatusCode == http.StatusBadRequest {
+			attrs = append(attrs, codexResponsesRequestShapeAttrs(req.Request)...)
+		}
+		logProviderHTTP(ctx, a.Logger, statusLevel(resp.StatusCode, errorClass), "provider_http", attrs...)
+		return ChatResult{StatusCode: http.StatusBadGateway, UpstreamStatusCode: resp.StatusCode, ContentType: "application/json", ErrorClass: errorClass, Latency: time.Since(start), RetryAfter: retryAfter}, fmt.Errorf("codex responses status %d", resp.StatusCode)
 	}
 	parsed, err := a.readCodexResponses(streamCtx, resp.Body)
 	if err != nil {
@@ -309,6 +313,7 @@ func (a HTTPChatAdapter) streamCodexChat(ctx context.Context, req ChatRequest, s
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		upstreamStatus := resp.StatusCode
 		errorClass := "upstream_http_error"
 		if resp.StatusCode == http.StatusUnauthorized {
 			errorClass = "upstream_auth_failed"
@@ -332,16 +337,20 @@ func (a HTTPChatAdapter) streamCodexChat(ctx context.Context, req ChatRequest, s
 		if !tooLarge && readErr == nil {
 			attrs = append(attrs, slog.Int("response_bytes", len(respBody)))
 		}
+		if resp.StatusCode == http.StatusBadRequest {
+			attrs = append(attrs, codexResponsesRequestShapeAttrs(req.Request)...)
+		}
 		logProviderHTTP(ctx, a.Logger, statusLevel(resp.StatusCode, errorClass), "provider_http", attrs...)
 		if tooLarge {
 			resp.StatusCode = http.StatusBadGateway
 		}
 		return withStreamLatency(start, ChatStreamSummary{
-			StatusCode:       resp.StatusCode,
-			ErrorClass:       errorClass,
-			CompletionStatus: "upstream_error",
-			RetryAfter:       retryAfterFromHeader(resp.Header, time.Now()),
-			PreStreamError:   true,
+			StatusCode:         resp.StatusCode,
+			UpstreamStatusCode: upstreamStatus,
+			ErrorClass:         errorClass,
+			CompletionStatus:   "upstream_error",
+			RetryAfter:         retryAfterFromHeader(resp.Header, time.Now()),
+			PreStreamError:     true,
 		}), fmt.Errorf("codex responses stream status %d", resp.StatusCode)
 	}
 

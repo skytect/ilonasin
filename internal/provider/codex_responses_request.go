@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -178,6 +179,84 @@ func marshalCodexResponsesRequest(req openai.ChatCompletionRequest, upstreamMode
 	out.Input = inputItems
 	body, err := json.Marshal(out)
 	return body, out.ServiceTier, err
+}
+
+func codexResponsesRequestShapeAttrs(req openai.ChatCompletionRequest) []slog.Attr {
+	attrs := []slog.Attr{
+		slog.Int("codex_input_items", len(req.CodexResponsesInput)),
+		slog.Int("codex_tools", len(req.CodexResponsesTools)),
+	}
+	if len(req.CodexResponsesInput) == 0 {
+		return attrs
+	}
+	shape := codexResponsesInputShape(req.CodexResponsesInput)
+	attrs = append(attrs,
+		slog.Int("codex_input_missing_type", shape.missingType),
+		slog.Int("codex_message_items", shape.messageItems),
+		slog.Int("codex_assistant_input_text_parts", shape.assistantInputTextParts),
+		slog.String("codex_last_input_type", shape.lastType),
+		slog.String("codex_last_input_role", shape.lastRole),
+		slog.String("codex_last_content_types", strings.Join(shape.lastContentTypes, ",")),
+	)
+	return attrs
+}
+
+type codexInputShape struct {
+	missingType             int
+	messageItems            int
+	assistantInputTextParts int
+	lastType                string
+	lastRole                string
+	lastContentTypes        []string
+}
+
+func codexResponsesInputShape(input []json.RawMessage) codexInputShape {
+	var shape codexInputShape
+	for _, raw := range input {
+		var item struct {
+			Type    string `json:"type"`
+			Role    string `json:"role"`
+			Content []struct {
+				Type string `json:"type"`
+			} `json:"content"`
+		}
+		if err := json.Unmarshal(raw, &item); err != nil {
+			continue
+		}
+		if item.Type == "" {
+			shape.missingType++
+		}
+		if item.Type == "message" {
+			shape.messageItems++
+		}
+		if item.Role == "assistant" {
+			for _, part := range item.Content {
+				if part.Type == "input_text" {
+					shape.assistantInputTextParts++
+				}
+			}
+		}
+		shape.lastType = item.Type
+		shape.lastRole = item.Role
+		shape.lastContentTypes = uniqueCodexContentTypes(item.Content)
+	}
+	return shape
+}
+
+func uniqueCodexContentTypes(parts []struct {
+	Type string `json:"type"`
+}) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part.Type == "" || seen[part.Type] {
+			continue
+		}
+		seen[part.Type] = true
+		out = append(out, part.Type)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func codexUserContent(parts []openai.ChatContentPart) []codexContentItem {

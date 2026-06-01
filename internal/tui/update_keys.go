@@ -29,61 +29,6 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.endAction()
 	case "q", "ctrl+c":
 		return m.quitAction()
-	case "n":
-		if m.activeTab != tabAccounts {
-			return m, nil
-		}
-		return m.createLocalToken()
-	case "d":
-		if m.activeTab != tabAccounts {
-			return m, nil
-		}
-		return m.disableSelectedLocalToken()
-	case "x":
-		if m.activeTab != tabAccounts {
-			return m, nil
-		}
-		return m.disableUpstreamCredentialAction()
-	case "a":
-		if m.activeTab != tabAccounts {
-			return m, nil
-		}
-		return m.startAPIKeyInput()
-	case "p":
-		if m.activeTab != tabObservability {
-			return m, nil
-		}
-		return m.pruneTelemetryAction()
-	case "u":
-		if m.activeTab != tabObservability {
-			return m, nil
-		}
-		return m.refreshSubscriptionUsageAction()
-	case "l":
-		if m.activeTab != tabAccounts {
-			return m, nil
-		}
-		return m.startOAuthLoginAction()
-	case "r":
-		if m.activeTab != tabAccounts {
-			return m, nil
-		}
-		return m.refreshSelectedOAuthCredentialAction()
-	case "o":
-		if m.activeTab != tabAccounts {
-			return m, nil
-		}
-		return m.cycleOAuthSelectionAction()
-	case "f":
-		if m.activeTab != tabAccounts {
-			return m, nil
-		}
-		return m.enableFallbackPolicyAction()
-	case "F":
-		if m.activeTab != tabAccounts {
-			return m, nil
-		}
-		return m.disableFallbackPolicyAction()
 	case "esc":
 		return m.cancelVisibleAction()
 	case "enter":
@@ -93,5 +38,89 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "up", "k":
 		return m.upAction()
 	}
+	if next, cmd, handled := m.updateAccountKey(key); handled {
+		return next, cmd
+	}
+	if next, cmd, handled := m.updateObservabilityKey(key); handled {
+		return next, cmd
+	}
 	return m, nil
+}
+
+func (m Model) updateAccountKey(key tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
+	switch key.String() {
+	case "n":
+		if m.activeTab != tabAccounts {
+			return m, nil, true
+		}
+		next, cmd := m.createLocalToken()
+		return next, cmd, true
+	case "d":
+		if m.activeTab != tabAccounts {
+			return m, nil, true
+		}
+		next, cmd := m.disableSelectedLocalToken()
+		return next, cmd, true
+	case "x":
+		if m.activeTab != tabAccounts {
+			return m, nil, true
+		}
+		next, cmd := m.disableUpstreamCredentialAction()
+		return next, cmd, true
+	case "a":
+		if m.activeTab != tabAccounts {
+			return m, nil, true
+		}
+		next, cmd := m.startAPIKeyInput()
+		return next, cmd, true
+	case "l":
+		if m.activeTab != tabAccounts {
+			return m, nil, true
+		}
+		next, cmd := m.startOAuthLoginAction()
+		return next, cmd, true
+	case "r":
+		if m.activeTab != tabAccounts {
+			return m, nil, true
+		}
+		next, cmd := m.refreshSelectedOAuthCredentialAction()
+		return next, cmd, true
+	case "o":
+		if m.activeTab != tabAccounts {
+			return m, nil, true
+		}
+		next, cmd := m.cycleOAuthSelectionAction()
+		return next, cmd, true
+	case "f":
+		if m.activeTab != tabAccounts {
+			return m, nil, true
+		}
+		next, cmd := m.enableFallbackPolicyAction()
+		return next, cmd, true
+	case "F":
+		if m.activeTab != tabAccounts {
+			return m, nil, true
+		}
+		next, cmd := m.disableFallbackPolicyAction()
+		return next, cmd, true
+	}
+	return m, nil, false
+}
+
+func (m Model) updateObservabilityKey(key tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
+	switch key.String() {
+	case "p":
+		if m.activeTab != tabObservability {
+			return m, nil, true
+		}
+		next, cmd := m.pruneTelemetryAction()
+		return next, cmd, true
+	case "u":
+		if m.activeTab != tabObservability {
+			return m, nil, true
+		}
+		next, cmd := m.refreshSubscriptionUsageAction()
+		return next, cmd, true
+	}
+	return m, nil, false
 }

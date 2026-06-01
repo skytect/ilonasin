@@ -55,27 +55,12 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.activeTab != tabAccounts {
 			return m, nil
 		}
-		m.clearReveal()
-		if err := m.disableFirstUpstreamCredential(); err != nil {
-			m.logError(context.Background(), "tui_upstream_credential_disable_failed", err)
-			m.err = err.Error()
-			return m, nil
-		}
-		_ = m.reload()
+		return m.disableUpstreamCredentialAction()
 	case "a":
 		if m.activeTab != tabAccounts {
 			return m, nil
 		}
-		m.clearReveal()
-		instance, ok := firstAPIKeyProvider(m.registry)
-		if !ok {
-			m.err = "no API-key provider instance is configured"
-			return m, nil
-		}
-		m.apiKeyMode = true
-		m.apiKeyProvider = instance.ID
-		m.apiKeyInput = ""
-		return m, nil
+		return m.startAPIKeyInput()
 	case "p":
 		if m.activeTab != tabObservability {
 			return m, nil
@@ -143,24 +128,12 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.activeTab != tabAccounts {
 			return m, nil
 		}
-		m.clearReveal()
-		if err := m.enableFirstFallbackPolicy(); err != nil {
-			m.logError(context.Background(), "tui_fallback_policy_update_failed", err)
-			m.err = "fallback policy update failed"
-			return m, nil
-		}
-		_ = m.reload()
+		return m.enableFallbackPolicyAction()
 	case "F":
 		if m.activeTab != tabAccounts {
 			return m, nil
 		}
-		m.clearReveal()
-		if err := m.disableFirstFallbackPolicy(); err != nil {
-			m.logError(context.Background(), "tui_fallback_policy_update_failed", err)
-			m.err = "fallback policy update failed"
-			return m, nil
-		}
-		_ = m.reload()
+		return m.disableFallbackPolicyAction()
 	case "esc":
 		m.clearReveal()
 		m.oauthChallenge = nil

@@ -61,9 +61,9 @@ func Manage(opts Options) error {
 		slog.String("event", "app_command_start"),
 		slog.String("command", "manage"),
 	)
-	tokenClient := management.NewUnixLocalTokenClient(management.SocketPath(rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database))
-	if _, err := tokenClient.LoadManagementSnapshot(context.Background()); err != nil {
+	managementClient := management.NewUnixClient(management.SocketPath(rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database))
+	if _, err := managementClient.LoadManagementSnapshot(context.Background()); err != nil {
 		return err
 	}
-	return tui.Run(rt.Config, rt.Registry, tokenClient, tokenClient, tokenClient, tokenClient, tokenClient, rt.Logger)
+	return tui.Run(rt.Config, rt.Registry, managementClient, managementClient, managementClient, managementClient, managementClient, rt.Logger)
 }

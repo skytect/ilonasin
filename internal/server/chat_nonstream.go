@@ -182,27 +182,34 @@ func (s *Server) handleNonStreamingChat(w http.ResponseWriter, r *http.Request, 
 	if errorClass == "client_disconnected" {
 		return
 	}
-	if final.err != nil && final.result.InvalidBody {
-		writeError(w, http.StatusBadGateway, "upstream returned an invalid chat completion response", "api_error", "upstream_invalid_response")
-		return
-	}
-	if final.err != nil && final.result.BodyTruncated {
-		writeError(w, http.StatusBadGateway, "upstream response body exceeded the configured limit", "api_error", "upstream_body_too_large")
-		return
-	}
-	if retryableChatAttempt(final.result, final.err) {
-		writeError(w, http.StatusBadGateway, "upstream request failed", "api_error", errorClass)
-		return
-	}
-	if final.err != nil && final.result.Body == nil {
-		writeError(w, http.StatusBadGateway, "upstream request failed", "api_error", errorClass)
-		return
-	}
-	if status < 200 || status >= 300 {
-		writeError(w, status, "upstream request failed", "api_error", errorClass)
+	if writeNonStreamingChatPreResponseError(w, final, status, errorClass) {
 		return
 	}
 	writeRaw(w, status, final.result.ContentType, final.result.Body)
+}
+
+func writeNonStreamingChatPreResponseError(w http.ResponseWriter, final chatAttempt, status int, errorClass string) bool {
+	if final.err != nil && final.result.InvalidBody {
+		writeError(w, http.StatusBadGateway, "upstream returned an invalid chat completion response", "api_error", "upstream_invalid_response")
+		return true
+	}
+	if final.err != nil && final.result.BodyTruncated {
+		writeError(w, http.StatusBadGateway, "upstream response body exceeded the configured limit", "api_error", "upstream_body_too_large")
+		return true
+	}
+	if retryableChatAttempt(final.result, final.err) {
+		writeError(w, http.StatusBadGateway, "upstream request failed", "api_error", errorClass)
+		return true
+	}
+	if final.err != nil && final.result.Body == nil {
+		writeError(w, http.StatusBadGateway, "upstream request failed", "api_error", errorClass)
+		return true
+	}
+	if status < 200 || status >= 300 {
+		writeError(w, status, "upstream request failed", "api_error", errorClass)
+		return true
+	}
+	return false
 }
 
 func normalizedChatStatus(result provider.ChatResult) int {

@@ -151,26 +151,6 @@ func subscriptionAccountWindowLines(row management.SubscriptionUsageRow, width i
 
 func subscriptionPoolWindowLines(row management.SubscriptionUsageAggregate, width int) []string {
 	windows := row.Windows
-	if len(windows) == 0 {
-		windows = []management.SubscriptionUsagePoolWindow{
-			{
-				Label:                       "5h",
-				AverageUsedPercent:          row.AveragePrimaryUsedPercent,
-				MinimumRemainingPercent:     row.MinimumPrimaryRemainingPercent,
-				TotalRemainingPercentPoints: legacyPoolRemainingPoints(row.AveragePrimaryUsedPercent, row.AccountCount),
-				TotalCapacityPercentPoints:  legacyPoolCapacityPoints(row.AccountCount),
-				EarliestResetAt:             row.EarliestPrimaryResetAt,
-			},
-			{
-				Label:                       "weekly",
-				AverageUsedPercent:          row.AverageSecondaryUsedPercent,
-				MinimumRemainingPercent:     row.MinimumSecondaryRemainingPercent,
-				TotalRemainingPercentPoints: legacyPoolRemainingPoints(row.AverageSecondaryUsedPercent, row.AccountCount),
-				TotalCapacityPercentPoints:  legacyPoolCapacityPoints(row.AccountCount),
-				EarliestResetAt:             row.EarliestSecondaryResetAt,
-			},
-		}
-	}
 	lines := make([]string, 0, len(windows)+1)
 	for _, window := range windows {
 		lines = append(lines, poolGaugeBlock(
@@ -193,22 +173,6 @@ func gaugeBarWidth(width int) int {
 	default:
 		return 24
 	}
-}
-
-func legacyPoolCapacityPoints(accounts int) float64 {
-	if accounts <= 0 {
-		return 0
-	}
-	return float64(accounts) * 100
-}
-
-func legacyPoolRemainingPoints(averageUsed float64, accounts int) float64 {
-	capacity := legacyPoolCapacityPoints(accounts)
-	if capacity <= 0 {
-		return 0
-	}
-	used := boundedTUIFloat(averageUsed, 0, 100) * float64(accounts)
-	return boundedTUIFloat(capacity-used, 0, capacity)
 }
 
 func subscriptionCardWidth(width int) int {

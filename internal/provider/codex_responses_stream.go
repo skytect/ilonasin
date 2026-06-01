@@ -291,7 +291,7 @@ func (a HTTPChatAdapter) handleCodexStreamEvent(ctx context.Context, data []byte
 		summary.CompletionStatus = "upstream_invalid"
 		return err
 	}
-	if codexToolEvent(event.Type) || (event.Item != nil && unsupportedCodexOutputItem(event.Item.Type)) {
+	if unsupportedCodexToolEvent(event.Type) || (event.Item != nil && unsupportedCodexOutputItem(event.Item.Type)) {
 		summary.ErrorClass = "upstream_invalid_response"
 		summary.CompletionStatus = "upstream_invalid"
 		return fmt.Errorf("codex stream contained unsupported tool event")

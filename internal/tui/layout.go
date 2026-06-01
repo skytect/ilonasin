@@ -29,27 +29,6 @@ func (m Model) View() string {
 	return b.String()
 }
 
-func (m Model) activeTabBody() string {
-	return m.tabBody(m.activeTab)
-}
-
-func (m Model) tabBody(tab tuiTab) string {
-	var b strings.Builder
-	switch tab {
-	case tabAPI:
-		m.writeAPI(&b)
-	case tabProviders:
-		m.writeProviders(&b)
-	case tabUsage:
-		m.writeUsage(&b)
-	case tabLogs:
-		m.writeLogs(&b)
-	default:
-		m.writeAPI(&b)
-	}
-	return b.String()
-}
-
 func (m Model) tabBar(width int) string {
 	active := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
 	inactive := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))

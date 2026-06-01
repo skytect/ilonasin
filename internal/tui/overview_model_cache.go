@@ -36,7 +36,7 @@ func modelCacheSummaries(rows []management.ModelMetadata) []modelCacheSummary {
 	return out
 }
 
-func (m Model) writeOverviewModelCache(b *strings.Builder) {
+func (m Model) writeModelCache(b *strings.Builder) {
 	b.WriteString("\nModel cache\n")
 	summaries := modelCacheSummaries(m.modelRows)
 	if len(summaries) == 0 {

@@ -47,7 +47,6 @@ type Model struct {
 	height            int
 	renderWidth       int
 	activeTab         tuiTab
-	scrollOffsets     [tuiTabCount]int
 	paneFocus         [tuiTabCount]int
 	paneScrollOffsets [tuiTabCount][maxDashboardPanes]int
 	selected          int

@@ -81,12 +81,6 @@ func (m Model) localTokensBody(width int) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func (m Model) helpBody(width int) string {
-	var b strings.Builder
-	m.writeHelp(&b)
-	return strings.TrimRight(b.String(), "\n")
-}
-
 func (m Model) providerInstancesBody(width int) string {
 	var b strings.Builder
 	m = m.withRenderWidth(width)

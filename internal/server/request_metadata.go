@@ -14,6 +14,7 @@ import (
 const (
 	metadataEndpointChatCompletions = "chat_completions"
 	metadataEndpointResponses       = "responses"
+	metadataEndpointAnthropic       = "anthropic_messages"
 )
 
 func requestMetadataBase(start time.Time, token credentials.VerifiedLocalToken, addr routing.ModelAddress, instance provider.Instance, req openai.ChatCompletionRequest, endpoint string, stream bool) metadata.Request {

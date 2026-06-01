@@ -5,9 +5,10 @@ import "strings"
 func (m Model) writeHelp(b *strings.Builder) {
 	b.WriteString("Guidance\n")
 	b.WriteString("- tab / shift+tab switch sections\n")
+	b.WriteString("- [ / ] switch the focused pane inside a section\n")
 	b.WriteString("- 1-4 jump to api, providers, usage, logs\n")
-	b.WriteString("- up/down or j/k select local tokens on api, scroll elsewhere\n")
-	b.WriteString("- pgup/pgdown, ctrl+u/ctrl+d, home/end scroll content\n")
+	b.WriteString("- up/down or j/k select local tokens when their pane is focused, scroll elsewhere\n")
+	b.WriteString("- pgup/pgdown, ctrl+u/ctrl+d, home/end scroll the focused pane\n")
 	b.WriteString("- n create local token on api\n")
 	b.WriteString("- d disable selected local token on api\n")
 	b.WriteString("- a add upstream API key on providers\n")

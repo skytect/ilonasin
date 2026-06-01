@@ -8,12 +8,14 @@ func (m Model) updateAccountKey(key tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		if m.activeTab != tabAPI {
 			return m, nil, true
 		}
+		m.paneFocus[tabAPI] = apiPaneTokens
 		next, cmd := m.createLocalToken()
 		return next, cmd, true
 	case "d":
 		if m.activeTab != tabAPI {
 			return m, nil, true
 		}
+		m.paneFocus[tabAPI] = apiPaneTokens
 		next, cmd := m.disableSelectedLocalToken()
 		return next, cmd, true
 	case "x":

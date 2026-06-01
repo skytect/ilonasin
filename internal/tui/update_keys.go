@@ -11,6 +11,10 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.nextTabAction()
 	case "shift+tab", "left":
 		return m.previousTabAction()
+	case "]":
+		return m.nextPaneAction()
+	case "[":
+		return m.previousPaneAction()
 	case "1":
 		return m.selectTabAction(tabAPI)
 	case "2":

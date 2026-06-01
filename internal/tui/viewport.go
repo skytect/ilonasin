@@ -41,6 +41,9 @@ func splitBodyLines(body string) []string {
 }
 
 func (m Model) viewWidth() int {
+	if m.renderWidth > 0 {
+		return m.renderWidth
+	}
 	if m.width > 0 {
 		return m.width
 	}
@@ -117,6 +120,7 @@ func (m *Model) clampScrolls() {
 			m.scrollOffsets[tab.id] = 0
 		}
 	}
+	m.clampPaneState()
 }
 
 func clipPlainLine(line string, width int) string {

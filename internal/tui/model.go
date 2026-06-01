@@ -45,8 +45,11 @@ type Model struct {
 	pruningAvailable  bool
 	width             int
 	height            int
+	renderWidth       int
 	activeTab         tuiTab
 	scrollOffsets     [tuiTabCount]int
+	paneFocus         [tuiTabCount]int
+	paneScrollOffsets [tuiTabCount][maxDashboardPanes]int
 	selected          int
 	oauthSelected     int
 	revealTokenID     int64
@@ -82,7 +85,9 @@ var tuiTabs = []struct {
 }
 
 func NewModel(cfg config.Config, registry provider.Registry, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, oauth management.OAuthClient, pruner management.TelemetryPruneClient, subscriptionUsage management.SubscriptionUsageClient, now func() time.Time, loggers ...*slog.Logger) Model {
-	return Model{cfg: cfg, registry: registry, tokens: tokens, upstreams: upstreams, oauth: oauth, pruner: pruner, subscriptionUsage: subscriptionUsage, now: now, logger: firstLogger(loggers)}
+	m := Model{cfg: cfg, registry: registry, tokens: tokens, upstreams: upstreams, oauth: oauth, pruner: pruner, subscriptionUsage: subscriptionUsage, now: now, logger: firstLogger(loggers)}
+	m.paneFocus[tabAPI] = apiPaneTokens
+	return m
 }
 
 func (m Model) Init() tea.Cmd {

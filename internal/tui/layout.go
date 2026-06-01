@@ -22,7 +22,7 @@ func (m Model) View() string {
 		b.WriteString(clipPlainLine(status, width))
 		b.WriteByte('\n')
 	}
-	b.WriteString(m.renderViewport(m.activeTabBody()))
+	b.WriteString(m.renderDashboard())
 	b.WriteByte('\n')
 	b.WriteString(clipPlainLine(m.footerLine(), width))
 	b.WriteByte('\n')
@@ -88,13 +88,13 @@ func (m Model) statusLine() string {
 func (m Model) footerLine() string {
 	switch m.activeTab {
 	case tabAPI:
-		return "tab switch  up/down select token  pgup/pgdown scroll  n new token  d disable token  q quit"
+		return "tab switch  [/ ] pane  up/down select token  pgup/pgdown scroll pane  n new token  d disable token  q quit"
 	case tabProviders:
-		return "tab switch  up/down scroll  pgup/pgdown page  a add key  x disable key  l login  o/r OAuth  f/F fallback  q quit"
+		return "tab switch  [/ ] pane  up/down scroll pane  a add key  x disable key  l login  o/r OAuth  f/F fallback  q quit"
 	case tabUsage:
-		return "tab switch  up/down scroll  pgup/pgdown page  home/end jump  u refresh usage  q quit"
+		return "tab switch  [/ ] pane  up/down scroll pane  home/end jump pane  u refresh usage  q quit"
 	case tabLogs:
-		return "tab switch  up/down scroll  pgup/pgdown page  home/end jump  p prune  q quit"
+		return "tab switch  [/ ] pane  up/down scroll pane  home/end jump pane  p prune  q quit"
 	default:
 		return "tab switch  up/down scroll  q quit"
 	}

@@ -40,9 +40,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseMsg:
 		switch msg.Type {
 		case tea.MouseWheelUp:
-			m.scrollActive(-3)
+			m.scrollFocusedPane(-3)
 		case tea.MouseWheelDown:
-			m.scrollActive(3)
+			m.scrollFocusedPane(3)
 		}
 		return m, nil
 	}

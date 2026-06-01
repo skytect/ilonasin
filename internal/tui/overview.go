@@ -7,18 +7,7 @@ import (
 
 func (m Model) writeOverview(b *strings.Builder) {
 	fmt.Fprintf(b, "Providers: %d\nBind: %s\n", len(m.cfg.Providers), m.cfg.Server.Bind)
-	b.WriteString("\nProvider instances\n")
-	for _, instance := range m.providers {
-		apiKey := "api-key disabled"
-		if instance.APIKey {
-			apiKey = "api-key"
-		}
-		oauth := "oauth disabled"
-		if instance.OAuth {
-			oauth = "oauth"
-		}
-		fmt.Fprintf(b, "- %s %s %s %s %s\n", instance.ID, instance.Type, instance.BaseURL, apiKey, oauth)
-	}
+	m.writeProviderInstances(b)
 	b.WriteString("\nModel cache\n")
 	summaries := modelCacheSummaries(m.modelRows)
 	if len(summaries) == 0 {

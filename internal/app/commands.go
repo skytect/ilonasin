@@ -42,9 +42,15 @@ func Serve(opts Options) error {
 	refresher := provider.NewHTTPOAuthRefresher(nil)
 	refresher.Logger = rt.Logger
 	upstreams.OAuthRefresher = refresher
+	codexAdapter := provider.NewHTTPChatAdapter(nil)
+	codexAdapter.Logger = rt.Logger
+	adapters := chatAdapters(nil, rt.Logger)
+	adapters["codex"] = codexAdapter
+	stopKeepalive := startSubscriptionKeepalive(context.Background(), rt.Config.SubscriptionKeepalive, rt.Registry, upstreams, codexAdapter, codexAdapter, rt.Logger)
+	defer stopKeepalive()
 	srv := &http.Server{
 		Addr:              rt.Config.Server.Bind,
-		Handler:           server.New(rt.Registry, auth, upstreams, upstreams, chatAdapters(nil, rt.Logger), modelDiscoverers(nil, rt.Logger), rt.Store, rt.Store).WithLogger(rt.Logger).WithIOLogger(rt.IOLogger).Handler(),
+		Handler:           server.New(rt.Registry, auth, upstreams, upstreams, adapters, modelDiscoverers(nil, rt.Logger), rt.Store, rt.Store).WithLogger(rt.Logger).WithIOLogger(rt.IOLogger).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	fmt.Fprintf(opts.Stdout, "ilonasin serving on %s\n", rt.Config.Server.Bind)

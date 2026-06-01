@@ -5,7 +5,7 @@ import "strings"
 func (s Service) keepaliveStatus() KeepaliveStatus {
 	status := "disabled"
 	if s.Keepalive.Enabled {
-		status = "unavailable_output_cap_unverified"
+		status = "enabled_uncapped"
 	}
 	times := append([]string(nil), s.Keepalive.ScheduleTimes...)
 	for i := range times {

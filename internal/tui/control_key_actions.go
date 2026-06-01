@@ -2,7 +2,7 @@ package tui
 
 import tea "github.com/charmbracelet/bubbletea"
 
-func (m Model) updateAccountKey(key tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
+func (m Model) updateControlSectionKey(key tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	switch key.String() {
 	case "n":
 		if m.activeTab != tabAPI {

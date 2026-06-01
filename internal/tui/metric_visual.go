@@ -8,14 +8,14 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-func observabilityCardWidth(width int) int {
+func metricCardWidth(width int) int {
 	if width >= 110 {
 		return (width - 2) / 2
 	}
 	return width
 }
 
-func renderObservabilityCardGrid(width int, cards []string) string {
+func renderMetricCardGrid(width int, cards []string) string {
 	if len(cards) == 0 {
 		return ""
 	}
@@ -39,7 +39,7 @@ func renderObservabilityCardGrid(width int, cards []string) string {
 	return strings.Join(joined, "\n")
 }
 
-func renderObservabilityAccentCard(width int, accent lipgloss.Color, lines ...string) string {
+func renderMetricAccentCard(width int, accent lipgloss.Color, lines ...string) string {
 	style := cardStyle.MarginBottom(0).BorderForeground(accent)
 	innerWidth := width - style.GetHorizontalFrameSize()
 	if innerWidth < 8 {
@@ -58,11 +58,11 @@ func renderObservabilityAccentCard(width int, accent lipgloss.Color, lines ...st
 	return style.Width(innerWidth).Render(body)
 }
 
-func narrowObservability(width int) bool {
+func narrowMetrics(width int) bool {
 	return width < 80
 }
 
-func observabilityBarWidth(width int) int {
+func metricBarWidth(width int) int {
 	switch {
 	case width < 60:
 		return 10
@@ -155,7 +155,7 @@ func latencyState(ms int64) string {
 func percentGaugeLine(label string, value float64, width int) string {
 	return metricLine(
 		mutedStyle.Render(safeMetricLabel(label)),
-		percentBar(value, observabilityBarWidth(width)),
+		percentBar(value, metricBarWidth(width)),
 		valueStyle.Render(percentText(value)),
 	)
 }

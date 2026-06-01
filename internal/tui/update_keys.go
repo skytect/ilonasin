@@ -42,10 +42,10 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "up", "k":
 		return m.upAction()
 	}
-	if next, cmd, handled := m.updateAccountKey(key); handled {
+	if next, cmd, handled := m.updateControlSectionKey(key); handled {
 		return next, cmd
 	}
-	if next, cmd, handled := m.updateObservabilityKey(key); handled {
+	if next, cmd, handled := m.updateUsageLogKey(key); handled {
 		return next, cmd
 	}
 	return m, nil

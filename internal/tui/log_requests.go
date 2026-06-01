@@ -72,7 +72,7 @@ func (m Model) writeRecentRequests(b *strings.Builder) {
 		if row.ErrorClass != "" {
 			lines = append(lines, badBadgeStyle.Render(safeDisplay(row.ErrorClass)))
 		}
-		if !narrowObservability(width) {
+		if !narrowMetrics(width) {
 			lines = append(lines, metricLine(
 				metricChip("messages", fmt.Sprintf("%d", row.MessageCount)),
 				metricChip("tools", fmt.Sprintf("%d", row.ToolCount)),
@@ -82,10 +82,10 @@ func (m Model) writeRecentRequests(b *strings.Builder) {
 		if len(options) > 0 {
 			lines = append(lines, metricLine(options...))
 		}
-		cards = append(cards, renderObservabilityAccentCard(observabilityCardWidth(width), accent, lines...))
+		cards = append(cards, renderMetricAccentCard(metricCardWidth(width), accent, lines...))
 	}
 	if len(cards) > 0 {
-		b.WriteString(renderObservabilityCardGrid(width, cards))
+		b.WriteString(renderMetricCardGrid(width, cards))
 		b.WriteByte('\n')
 	}
 }

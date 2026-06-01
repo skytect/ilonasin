@@ -39,10 +39,10 @@ func (m Model) writeHealthAndQuota(b *strings.Builder) {
 		if row.RetryAfter != nil {
 			lines = append(lines, optionalTimeChip("retry", now, row.RetryAfter))
 		}
-		healthCards = append(healthCards, renderObservabilityAccentCard(observabilityCardWidth(width), accent, lines...))
+		healthCards = append(healthCards, renderMetricAccentCard(metricCardWidth(width), accent, lines...))
 	}
 	if len(healthCards) > 0 {
-		b.WriteString(renderObservabilityCardGrid(width, healthCards))
+		b.WriteString(renderMetricCardGrid(width, healthCards))
 		b.WriteByte('\n')
 	}
 	b.WriteString("\nQuota\n")
@@ -78,10 +78,10 @@ func (m Model) writeHealthAndQuota(b *strings.Builder) {
 		if row.ResetAt != nil {
 			lines = append(lines, optionalTimeChip("reset", now, row.ResetAt))
 		}
-		quotaCards = append(quotaCards, renderObservabilityAccentCard(observabilityCardWidth(width), accent, lines...))
+		quotaCards = append(quotaCards, renderMetricAccentCard(metricCardWidth(width), accent, lines...))
 	}
 	if len(quotaCards) > 0 {
-		b.WriteString(renderObservabilityCardGrid(width, quotaCards))
+		b.WriteString(renderMetricCardGrid(width, quotaCards))
 		b.WriteByte('\n')
 	}
 }

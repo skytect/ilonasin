@@ -10,7 +10,7 @@ import (
 	"ilonasin/internal/management"
 )
 
-func (m Model) updateObservabilityKey(key tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
+func (m Model) updateUsageLogKey(key tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	switch key.String() {
 	case "p":
 		if m.activeTab != tabLogs {

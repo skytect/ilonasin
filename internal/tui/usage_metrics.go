@@ -28,7 +28,7 @@ func (m Model) writeUsageMetrics(b *strings.Builder) {
 				metricChip("reason", compactInt(row.ReasoningTokens)),
 			),
 		}
-		if narrowObservability(width) {
+		if narrowMetrics(width) {
 			lines = append(lines, metricLine(
 				compactPercentMetric("hit", row.CacheHitRate*100),
 				compactPercentMetric("miss", row.CacheMissRate*100),
@@ -41,10 +41,10 @@ func (m Model) writeUsageMetrics(b *strings.Builder) {
 				percentGaugeLine("reason", row.ReasoningTokenRate*100, width),
 			)
 		}
-		usageCards = append(usageCards, renderObservabilityAccentCard(observabilityCardWidth(width), lipgloss.Color("42"), lines...))
+		usageCards = append(usageCards, renderMetricAccentCard(metricCardWidth(width), lipgloss.Color("42"), lines...))
 	}
 	if len(usageCards) > 0 {
-		b.WriteString(renderObservabilityCardGrid(width, usageCards))
+		b.WriteString(renderMetricCardGrid(width, usageCards))
 		b.WriteByte('\n')
 	}
 	b.WriteString("\nLatency\n")
@@ -75,10 +75,10 @@ func (m Model) writeUsageMetrics(b *strings.Builder) {
 				tpsText("post-ttft", row.AverageOutputTPSAfterTTFT),
 			),
 		}
-		latencyCards = append(latencyCards, renderObservabilityAccentCard(observabilityCardWidth(width), accent, lines...))
+		latencyCards = append(latencyCards, renderMetricAccentCard(metricCardWidth(width), accent, lines...))
 	}
 	if len(latencyCards) > 0 {
-		b.WriteString(renderObservabilityCardGrid(width, latencyCards))
+		b.WriteString(renderMetricCardGrid(width, latencyCards))
 		b.WriteByte('\n')
 	}
 	b.WriteString("\nStreams\n")
@@ -98,10 +98,10 @@ func (m Model) writeUsageMetrics(b *strings.Builder) {
 				metricChip("chunks", compactInt(row.ChunkCount)),
 			),
 		}
-		streamCards = append(streamCards, renderObservabilityAccentCard(observabilityCardWidth(width), lipgloss.Color("110"), lines...))
+		streamCards = append(streamCards, renderMetricAccentCard(metricCardWidth(width), lipgloss.Color("110"), lines...))
 	}
 	if len(streamCards) > 0 {
-		b.WriteString(renderObservabilityCardGrid(width, streamCards))
+		b.WriteString(renderMetricCardGrid(width, streamCards))
 		b.WriteByte('\n')
 	}
 }

@@ -25,10 +25,10 @@ func (m Model) writeFallbacks(b *strings.Builder) {
 			valueStyle.Render("->"),
 			mutedStyle.Render(credentialDisplay(row.ToCredentialID, row.ToCredentialLabel)),
 		}
-		cards = append(cards, renderObservabilityAccentCard(observabilityCardWidth(width), lipgloss.Color("214"), lines...))
+		cards = append(cards, renderMetricAccentCard(metricCardWidth(width), lipgloss.Color("214"), lines...))
 	}
 	if len(cards) > 0 {
-		b.WriteString(renderObservabilityCardGrid(width, cards))
+		b.WriteString(renderMetricCardGrid(width, cards))
 		b.WriteByte('\n')
 	}
 }

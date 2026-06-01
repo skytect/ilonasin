@@ -29,6 +29,14 @@ type streamAttempt struct {
 	err        error
 }
 
+type streamExecution struct {
+	final             streamAttempt
+	fallbackEvents    []metadata.FallbackEvent
+	quotaObservations []metadata.QuotaObservation
+	authRetries       int
+	attemptCount      int
+}
+
 func retryableStreamAttempt(summary provider.ChatStreamSummary, err error, sinkStarted bool) bool {
 	if err == nil || sinkStarted || summary.Started {
 		return false
@@ -96,27 +104,12 @@ func shouldRecordStreamHealth(summary provider.ChatStreamSummary) bool {
 	return summary.ErrorClass != "client_disconnected" && summary.CompletionStatus != "client_disconnected"
 }
 
-func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc streamContext) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		requestMeta := requestMetadataBase(sc.start, sc.token, sc.address, sc.instance, sc.request, sc.endpoint, true)
-		requestMeta.HTTPStatus = http.StatusInternalServerError
-		requestMeta.ErrorClass = "client_stream_unavailable"
-		requestMeta.TotalLatencyMS = time.Since(sc.start).Milliseconds()
-		_ = s.record(r.Context(), requestMeta)
-		writeError(w, http.StatusInternalServerError, "streaming is not available for this response writer", "api_error", "client_stream_unavailable")
-		return
-	}
-	sink := &streamSink{w: w, flusher: flusher, server: s, request: r}
-	var final streamAttempt
-	var fallbackEvents []metadata.FallbackEvent
-	var quotaObservations []metadata.QuotaObservation
-	authRetries := 0
-	attemptCount := 0
+func (s *Server) executeStreamingChat(r *http.Request, sc streamContext, sink *streamSink) streamExecution {
+	exec := streamExecution{}
 	plan := s.planCredentialAttempts(r.Context(), sc.address, sc.credentials)
 	modelCredential := plan.modelCredential
 	if plan.exhausted {
-		final = streamAttempt{summary: provider.ChatStreamSummary{
+		exec.final = streamAttempt{summary: provider.ChatStreamSummary{
 			StatusCode:       http.StatusTooManyRequests,
 			ErrorClass:       "upstream_quota_pool_exhausted",
 			CompletionStatus: "upstream_error",
@@ -125,7 +118,7 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 		}}
 	} else {
 		for i, credential := range plan.attempts {
-			attemptCount++
+			exec.attemptCount++
 			summary, err := sc.adapter.StreamChat(r.Context(), providerChatRequest(sc.instance, sc.address, sc.request, credential, modelCredential), sink)
 			if s.shouldRefreshModelCredentialAfterStream401(sc.instance, summary, modelCredential) {
 				refreshed, refreshErr := s.refreshOAuthCredentialForRetryIfBearer(r.Context(), modelCredential)
@@ -138,8 +131,8 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 					if credential.ID == modelCredentialID {
 						credential = refreshed
 					}
-					authRetries++
-					attemptCount++
+					exec.authRetries++
+					exec.attemptCount++
 					summary, err = sc.adapter.StreamChat(r.Context(), providerChatRequest(sc.instance, sc.address, sc.request, credential, modelCredential), sink)
 					if s.shouldRefreshModelCredentialAfterStream401(sc.instance, summary, modelCredential) || s.shouldRefreshOAuthAfterStream401(sc.instance, summary) {
 						summary.StatusCode = http.StatusBadGateway
@@ -156,8 +149,8 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 					if modelCredential.ID == refreshed.ID {
 						modelCredential = refreshed
 					}
-					authRetries++
-					attemptCount++
+					exec.authRetries++
+					exec.attemptCount++
 					summary, err = sc.adapter.StreamChat(r.Context(), providerChatRequest(sc.instance, sc.address, sc.request, credential, modelCredential), sink)
 					if s.shouldRefreshOAuthAfterStream401(sc.instance, summary) {
 						summary.StatusCode = http.StatusBadGateway
@@ -165,9 +158,9 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 					}
 				}
 			}
-			final = streamAttempt{credential: credential, summary: summary, err: err}
+			exec.final = streamAttempt{credential: credential, summary: summary, err: err}
 			if shouldRecordStreamHealth(summary) {
-				s.recordHealth(r.Context(), healthFromStreamAttempt(sc.address, final))
+				s.recordHealth(r.Context(), healthFromStreamAttempt(sc.address, exec.final))
 			}
 			status := summary.StatusCode
 			if status == 0 {
@@ -178,7 +171,7 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 				errorClass = "upstream_http_error"
 			}
 			if isQuotaObservation(status, errorClass) {
-				quotaObservations = append(quotaObservations, chatQuotaObservation(s.now(), sc.address, credential, "stream", status, errorClass, summary.RetryAfter))
+				exec.quotaObservations = append(exec.quotaObservations, chatQuotaObservation(s.now(), sc.address, credential, "stream", status, errorClass, summary.RetryAfter))
 			}
 			retryReason := ""
 			switch {
@@ -192,9 +185,26 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 				break
 			}
 			next := plan.attempts[i+1]
-			fallbackEvents = append(fallbackEvents, chatFallbackEvent(time.Now(), sc.address, credential, next, retryReason))
+			exec.fallbackEvents = append(exec.fallbackEvents, chatFallbackEvent(time.Now(), sc.address, credential, next, retryReason))
 		}
 	}
+	return exec
+}
+
+func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc streamContext) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		requestMeta := requestMetadataBase(sc.start, sc.token, sc.address, sc.instance, sc.request, sc.endpoint, true)
+		requestMeta.HTTPStatus = http.StatusInternalServerError
+		requestMeta.ErrorClass = "client_stream_unavailable"
+		requestMeta.TotalLatencyMS = time.Since(sc.start).Milliseconds()
+		_ = s.record(r.Context(), requestMeta)
+		writeError(w, http.StatusInternalServerError, "streaming is not available for this response writer", "api_error", "client_stream_unavailable")
+		return
+	}
+	sink := &streamSink{w: w, flusher: flusher, server: s, request: r}
+	exec := s.executeStreamingChat(r, sc, sink)
+	final := exec.final
 	summary := final.summary
 	summary = writeStreamingChatPreResponseError(w, summary, final.err, sink.started, sc.instance.Type)
 	recordCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
@@ -218,9 +228,9 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 		resolvedModel:        summary.ResolvedModel,
 		status:               status,
 		errorClass:           errorClass,
-		authRetries:          authRetries,
-		attemptCount:         attemptCount,
-		fallbackEvents:       fallbackEvents,
+		authRetries:          exec.authRetries,
+		attemptCount:         exec.attemptCount,
+		fallbackEvents:       exec.fallbackEvents,
 		usage:                summary.Usage,
 		totalLatency:         time.Since(sc.start),
 		upstreamLatency:      summary.Latency,
@@ -244,8 +254,8 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 		CompletionStatus:      completionStatus,
 		ChunkCount:            summary.ChunkCount,
 	})
-	s.recordQuotaObservations(recordCtx, requestID, quotaObservations)
-	s.recordFallbacks(recordCtx, requestID, fallbackEvents)
+	s.recordQuotaObservations(recordCtx, requestID, exec.quotaObservations)
+	s.recordFallbacks(recordCtx, requestID, exec.fallbackEvents)
 }
 
 func writeStreamingChatPreResponseError(w http.ResponseWriter, summary provider.ChatStreamSummary, err error, sinkStarted bool, providerType string) provider.ChatStreamSummary {

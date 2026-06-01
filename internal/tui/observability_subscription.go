@@ -3,64 +3,58 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 	b.WriteString("\nSubscription usage\n")
+	width := m.viewWidth()
 	if len(m.subscriptionRows) == 0 {
 		b.WriteString("No subscription usage snapshots.\n")
 	}
 	for _, row := range m.subscriptionRows {
-		primaryReset := ""
-		if row.PrimaryResetAt != nil {
-			primaryReset = " reset " + formatTime(*row.PrimaryResetAt)
-		}
-		secondaryReset := ""
-		if row.SecondaryResetAt != nil {
-			secondaryReset = " reset " + formatTime(*row.SecondaryResetAt)
-		}
 		state := "fresh"
 		if row.Stale || row.ErrorClass != "" {
 			state = "stale"
 		}
-		account := safeDisplay(row.AccountDisplayLabel)
-		if account == "" {
-			account = "subscription"
+		account := accountIdentity(row.AccountDisplayLabel, "subscription")
+		lines := []string{
+			cardTitleStyle.Render(account) + " " + mutedStyle.Render(state),
+			accountMeta(
+				safeDisplay(row.ProviderInstanceID),
+				fmt.Sprintf("credential %d", row.CredentialID),
+				accountMetaField("plan", row.PlanLabel),
+				accountMetaField("limit", row.LimitID),
+				"observed "+formatTime(row.ObservedAt),
+			),
 		}
-		fmt.Fprintf(b, "- %s credential %d %s plan %s limit %s %s at %s\n",
-			safeDisplay(row.ProviderInstanceID), row.CredentialID,
-			account, safeDisplay(row.PlanLabel),
-			safeDisplay(row.LimitID), state, formatTime(row.ObservedAt))
 		if row.ErrorClass != "" {
-			fmt.Fprintf(b, "  error %s\n", safeDisplay(row.ErrorClass))
-			continue
+			lines = append(lines, "error "+safeDisplay(row.ErrorClass))
+		} else {
+			lines = append(lines,
+				subscriptionWindowBar(row.PrimaryLabel, row.PrimaryUsedPercent, row.PrimaryRemainingPercent, row.PrimaryResetAt),
+				subscriptionWindowBar(row.SecondaryLabel, row.SecondaryUsedPercent, row.SecondaryRemainingPercent, row.SecondaryResetAt),
+			)
 		}
-		fmt.Fprintf(b, "  %s used %.1f%% left %.1f%%%s\n",
-			safeDisplay(row.PrimaryLabel), row.PrimaryUsedPercent,
-			row.PrimaryRemainingPercent, primaryReset)
-		fmt.Fprintf(b, "  %s used %.1f%% left %.1f%%%s\n",
-			safeDisplay(row.SecondaryLabel), row.SecondaryUsedPercent,
-			row.SecondaryRemainingPercent, secondaryReset)
+		b.WriteString(renderCard(width, lines...))
+		b.WriteByte('\n')
 	}
 	if len(m.subscriptionPools) > 0 {
 		b.WriteString("\nSubscription pools\n")
 	}
 	for _, row := range m.subscriptionPools {
-		primaryReset := ""
-		if row.EarliestPrimaryResetAt != nil {
-			primaryReset = " earliest_5h_reset " + formatTime(*row.EarliestPrimaryResetAt)
+		lines := []string{
+			cardTitleStyle.Render(safeDisplay(row.ProviderInstanceID)) + " " + mutedStyle.Render("pooled"),
+			accountMeta(
+				accountMetaField("limit", row.LimitID),
+				fmt.Sprintf("accounts %d", row.AccountCount),
+				fmt.Sprintf("stale %d", row.StaleCount),
+			),
+			subscriptionPoolBar("5h", row.AveragePrimaryUsedPercent, row.MinimumPrimaryRemainingPercent, row.EarliestPrimaryResetAt),
+			subscriptionPoolBar("weekly", row.AverageSecondaryUsedPercent, row.MinimumSecondaryRemainingPercent, row.EarliestSecondaryResetAt),
 		}
-		secondaryReset := ""
-		if row.EarliestSecondaryResetAt != nil {
-			secondaryReset = " earliest_weekly_reset " + formatTime(*row.EarliestSecondaryResetAt)
-		}
-		fmt.Fprintf(b, "- %s limit %s accounts %d stale %d\n",
-			safeDisplay(row.ProviderInstanceID), safeDisplay(row.LimitID),
-			row.AccountCount, row.StaleCount)
-		fmt.Fprintf(b, "  5h avg_used %.1f%% min_left %.1f%%%s\n",
-			row.AveragePrimaryUsedPercent, row.MinimumPrimaryRemainingPercent, primaryReset)
-		fmt.Fprintf(b, "  weekly avg_used %.1f%% min_left %.1f%%%s\n",
-			row.AverageSecondaryUsedPercent, row.MinimumSecondaryRemainingPercent, secondaryReset)
+		b.WriteString(renderCard(width, lines...))
+		b.WriteByte('\n')
 	}
 	b.WriteString("\nSubscription keepalive\n")
 	schedule := strings.Join(m.keepaliveStatus.ScheduleTimes, ",")
@@ -70,4 +64,26 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 	fmt.Fprintf(b, "- enabled %t status %s output_cap_verified %t schedule %s\n",
 		m.keepaliveStatus.Enabled, safeDisplay(m.keepaliveStatus.Status),
 		m.keepaliveStatus.OutputCapVerified, safeDisplay(schedule))
+}
+
+func subscriptionWindowBar(label string, used, remaining float64, resetAt *time.Time) string {
+	label = safeDisplay(label)
+	if label == "" {
+		label = "window"
+	}
+	reset := "reset none"
+	if resetAt != nil {
+		reset = "reset " + formatTime(*resetAt)
+	}
+	return fmt.Sprintf("%-7s %s used %s left %s  %s",
+		label, percentBar(used, 18), percentText(used), percentText(remaining), mutedStyle.Render(reset))
+}
+
+func subscriptionPoolBar(label string, averageUsed, minimumRemaining float64, resetAt *time.Time) string {
+	reset := "earliest reset none"
+	if resetAt != nil {
+		reset = "earliest reset " + formatTime(*resetAt)
+	}
+	return fmt.Sprintf("%-7s %s avg %s min left %s  %s",
+		safeDisplay(label), percentBar(averageUsed, 18), percentText(averageUsed), percentText(minimumRemaining), mutedStyle.Render(reset))
 }

@@ -4,7 +4,7 @@ func sanitizeSubscriptionUsageResponse(out *SubscriptionUsageResponse) {
 	for i := range out.Accounts {
 		row := &out.Accounts[i]
 		row.ProviderInstanceID = safeMachineString(row.ProviderInstanceID)
-		row.AccountDisplayLabel = safeSnapshotString(row.AccountDisplayLabel)
+		row.AccountDisplayLabel = safeAccountDisplayString(row.AccountDisplayLabel)
 		row.PlanLabel = safeSnapshotString(row.PlanLabel)
 		row.LimitID = safeSnapshotString(row.LimitID)
 		row.LimitName = safeSnapshotString(row.LimitName)

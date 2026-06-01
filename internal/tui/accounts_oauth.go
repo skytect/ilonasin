@@ -17,6 +17,7 @@ func (m Model) writeOAuth(b *strings.Builder) {
 	if len(m.oauthRows) == 0 {
 		b.WriteString("No OAuth accounts.\n")
 	}
+	width := m.viewWidth()
 	for i, row := range m.oauthRows {
 		cursor := " "
 		if i == m.oauthSelected {
@@ -38,17 +39,34 @@ func (m Model) writeOAuth(b *strings.Builder) {
 		if refreshDescription != "" {
 			refresh = refresh + " " + refreshDescription
 		}
-		fmt.Fprintf(b, "%s %d %s oauth account %s plan %s expires %s refresh %s %s\n",
-			cursor, row.ID, safeDisplay(row.ProviderInstanceID), safeDisplay(row.AccountDisplayLabel),
-			safeDisplay(row.PlanLabel), expires, refresh, state)
+		title := cursor + " " + accountIdentity(row.AccountDisplayLabel, "OAuth account")
+		lines := []string{
+			cardTitleStyle.Render(title) + " " + mutedStyle.Render(state),
+			accountMeta(
+				fmt.Sprintf("credential %d", row.ID),
+				safeDisplay(row.ProviderInstanceID),
+				accountMetaField("plan", row.PlanLabel),
+				"expires "+expires,
+				"refresh "+refresh,
+			),
+		}
+		b.WriteString(renderCard(width, lines...))
+		b.WriteByte('\n')
 	}
 	b.WriteString("\nProvider accounts\n")
 	if len(m.accountRows) == 0 {
 		b.WriteString("No provider accounts.\n")
 	}
 	for _, row := range m.accountRows {
-		fmt.Fprintf(b, "- %s credential %d %s plan %s\n",
-			safeDisplay(row.ProviderInstanceID), row.CredentialID,
-			safeDisplay(row.DisplayLabel), safeDisplay(row.PlanLabel))
+		lines := []string{
+			cardTitleStyle.Render(accountIdentity(row.DisplayLabel, "provider account")),
+			accountMeta(
+				safeDisplay(row.ProviderInstanceID),
+				fmt.Sprintf("credential %d", row.CredentialID),
+				accountMetaField("plan", row.PlanLabel),
+			),
+		}
+		b.WriteString(renderCard(width, lines...))
+		b.WriteByte('\n')
 	}
 }

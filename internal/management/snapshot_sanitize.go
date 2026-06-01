@@ -8,6 +8,7 @@ import (
 )
 
 var unsafeSnapshotStringPattern = regexp.MustCompile(`(?i)(bearer|sk-|iln_|oauth|token|secret|authorization|raw|payload|prompt|completion|body|account|acct[-_]|request[_ -]?id|requestid|req[-_]|balance|credit|sse[_ -]?chunk|tool[_ -]?(argument|result)|eyj[a-z0-9_-]*\.[a-z0-9_-]*\.)`)
+var unsafeAccountDisplayPattern = regexp.MustCompile(`(?i)(bearer|sk-|iln_|token|secret|authorization|raw|payload|prompt|completion|body|acct[-_]|request[_ -]?id|requestid|req[-_]|balance|credit|sse[_ -]?chunk|tool[_ -]?(argument|result)|eyj[a-z0-9_-]*\.[a-z0-9_-]*\.)`)
 
 func sanitizeSnapshot(out *ManagementSnapshotResponse) {
 	for i := range out.Providers {
@@ -33,7 +34,7 @@ func sanitizeSnapshot(out *ManagementSnapshotResponse) {
 	for i := range out.OAuthCredentials {
 		out.OAuthCredentials[i].ProviderInstanceID = safeMachineString(out.OAuthCredentials[i].ProviderInstanceID)
 		out.OAuthCredentials[i].Label = safeSnapshotString(out.OAuthCredentials[i].Label)
-		out.OAuthCredentials[i].AccountDisplayLabel = safeSnapshotString(out.OAuthCredentials[i].AccountDisplayLabel)
+		out.OAuthCredentials[i].AccountDisplayLabel = safeAccountDisplayString(out.OAuthCredentials[i].AccountDisplayLabel)
 		out.OAuthCredentials[i].PlanLabel = safeSnapshotString(out.OAuthCredentials[i].PlanLabel)
 		out.OAuthCredentials[i].Scopes = safeSnapshotString(out.OAuthCredentials[i].Scopes)
 		out.OAuthCredentials[i].RefreshFailureClass = safeRefreshFailureClass(out.OAuthCredentials[i].RefreshFailureClass)
@@ -41,7 +42,7 @@ func sanitizeSnapshot(out *ManagementSnapshotResponse) {
 	}
 	for i := range out.ProviderAccounts {
 		out.ProviderAccounts[i].ProviderInstanceID = safeMachineString(out.ProviderAccounts[i].ProviderInstanceID)
-		out.ProviderAccounts[i].DisplayLabel = safeSnapshotString(out.ProviderAccounts[i].DisplayLabel)
+		out.ProviderAccounts[i].DisplayLabel = safeAccountDisplayString(out.ProviderAccounts[i].DisplayLabel)
 		out.ProviderAccounts[i].PlanLabel = safeSnapshotString(out.ProviderAccounts[i].PlanLabel)
 	}
 	for i := range out.ModelCache {
@@ -113,6 +114,27 @@ func safeSnapshotString(value string) string {
 		return ""
 	}
 	if unsafeSnapshotStringPattern.MatchString(value) {
+		return "[redacted]"
+	}
+	const maxRunes = 128
+	runes := []rune(value)
+	if len(runes) > maxRunes {
+		return string(runes[:maxRunes]) + "..."
+	}
+	return value
+}
+
+func safeAccountDisplayString(value string) string {
+	value = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, strings.TrimSpace(value))
+	if value == "" {
+		return ""
+	}
+	if unsafeAccountDisplayPattern.MatchString(value) {
 		return "[redacted]"
 	}
 	const maxRunes = 128

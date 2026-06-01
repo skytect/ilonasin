@@ -4,6 +4,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 func (m Model) renderViewport(body string) string {
@@ -121,14 +123,13 @@ func clipPlainLine(line string, width int) string {
 	if width <= 0 {
 		return line
 	}
-	runes := []rune(line)
-	if len(runes) <= width {
+	if ansi.StringWidth(line) <= width {
 		return line
 	}
 	if width <= 3 {
-		return string(runes[:width])
+		return ansi.Truncate(line, width, "")
 	}
-	return string(runes[:width-3]) + "..."
+	return ansi.Truncate(line, width, "...")
 }
 
 func maxInt(a, b int) int {

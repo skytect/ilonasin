@@ -105,6 +105,19 @@ func finalizeChatRequestMetadata(out *metadata.Request, final chatMetadataFinali
 	out.OutputTokensPerSecond = out.OutputTokensPerSecondTotal
 }
 
+func chatQuotaObservation(observedAt time.Time, addr routing.ModelAddress, credential provider.BearerCredential, source string, status int, errorClass string, retryAfter *time.Time) metadata.QuotaObservation {
+	return metadata.QuotaObservation{
+		ObservedAt:         observedAt,
+		ProviderInstanceID: addr.ProviderInstanceID,
+		CredentialID:       credential.ID,
+		ModelID:            addr.ProviderModelID,
+		Source:             source,
+		HTTPStatus:         status,
+		ErrorClass:         errorClass,
+		RetryAfter:         retryAfter,
+	}
+}
+
 func applySafeOptionMetadata(out *metadata.Request, providerType string, req openai.ChatCompletionRequest) {
 	if req.ServiceTier != nil {
 		out.RequestedServiceTier = safeServiceTier(*req.ServiceTier)

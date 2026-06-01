@@ -103,16 +103,7 @@ func (s *Server) executeNonStreamingChat(r *http.Request, nc nonStreamContext) n
 		status := localChatStatus(result, err)
 		errorClass := localChatErrorClass(result, err, status)
 		if isQuotaObservation(status, errorClass) {
-			exec.quotaObservations = append(exec.quotaObservations, metadata.QuotaObservation{
-				ObservedAt:         s.now(),
-				ProviderInstanceID: nc.address.ProviderInstanceID,
-				CredentialID:       credential.ID,
-				ModelID:            nc.address.ProviderModelID,
-				Source:             "chat",
-				HTTPStatus:         status,
-				ErrorClass:         errorClass,
-				RetryAfter:         result.RetryAfter,
-			})
+			exec.quotaObservations = append(exec.quotaObservations, chatQuotaObservation(s.now(), nc.address, credential, "chat", status, errorClass, result.RetryAfter))
 		}
 		retryReason := ""
 		switch {

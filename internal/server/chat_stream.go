@@ -178,16 +178,7 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 				errorClass = "upstream_http_error"
 			}
 			if isQuotaObservation(status, errorClass) {
-				quotaObservations = append(quotaObservations, metadata.QuotaObservation{
-					ObservedAt:         s.now(),
-					ProviderInstanceID: sc.address.ProviderInstanceID,
-					CredentialID:       credential.ID,
-					ModelID:            sc.address.ProviderModelID,
-					Source:             "stream",
-					HTTPStatus:         status,
-					ErrorClass:         errorClass,
-					RetryAfter:         summary.RetryAfter,
-				})
+				quotaObservations = append(quotaObservations, chatQuotaObservation(s.now(), sc.address, credential, "stream", status, errorClass, summary.RetryAfter))
 			}
 			retryReason := ""
 			switch {

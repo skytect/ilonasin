@@ -53,7 +53,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 		requestMeta.TotalLatencyMS = time.Since(start).Milliseconds()
 		_ = s.record(r.Context(), requestMeta)
 		s.logHTTP(r, http.StatusNotImplemented, "chat_route", "provider_unimplemented")
-		writeError(w, http.StatusNotImplemented, "provider credential type is not implemented in this slice", "invalid_request_error", "provider_unimplemented")
+		writeError(w, http.StatusNotImplemented, providerUnsupportedCapabilityMessage, "invalid_request_error", "provider_unimplemented")
 		return
 	}
 	if s.adapters == nil {

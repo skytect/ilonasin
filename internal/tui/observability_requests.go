@@ -3,50 +3,88 @@ package tui
 import (
 	"fmt"
 	"strings"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 func (m Model) writeRecentRequests(b *strings.Builder) {
 	b.WriteString("\nRecent requests\n")
+	width := m.viewWidth()
 	if len(m.requestRows) == 0 {
 		b.WriteString("No request metadata.\n")
 	}
+	cards := make([]string, 0, len(m.requestRows))
 	for _, row := range m.requestRows {
 		credential := credentialDisplay(row.CredentialID, row.CredentialLabel)
-		fallbackReason := ""
-		if row.FallbackReason != "" {
-			fallbackReason = " reason " + safeDisplay(row.FallbackReason)
-		}
-		route := safeEndpointDisplay(row.Endpoint)
-		if row.Stream {
-			route += " stream"
-		}
-		options := ""
+		options := []string{}
 		if row.RequestedServiceTier != "" {
-			options += " service_tier " + safeDisplay(row.RequestedServiceTier)
+			options = append(options, metricChip("tier", row.RequestedServiceTier))
 		}
 		if row.EffectiveServiceTier != "" && row.EffectiveServiceTier != row.RequestedServiceTier {
-			options += " effective_tier " + safeDisplay(row.EffectiveServiceTier)
+			options = append(options, metricChip("effective", row.EffectiveServiceTier))
 		}
 		if row.ReasoningEffort != "" {
-			options += " reasoning " + safeDisplay(row.ReasoningEffort)
+			options = append(options, metricChip("reasoning", row.ReasoningEffort))
 		}
 		if row.ThinkingType != "" {
-			options += " thinking " + safeDisplay(row.ThinkingType)
+			options = append(options, metricChip("thinking", row.ThinkingType))
 		}
-		fmt.Fprintf(b, "- %s %s %s status %d %s\n",
-			formatTime(row.StartedAt), route, requestModelDisplay(row),
-			row.HTTPStatus, safeDisplay(row.ErrorClass))
-		fmt.Fprintf(b, "  credential %s attempts %d auth_retry %d fallback %d%s\n",
-			credential, row.AttemptCount, row.AuthRetryCount, row.FallbackCount, fallbackReason)
-		fmt.Fprintf(b, "  shape msg %d tools %d images %d%s\n",
-			row.MessageCount, row.ToolCount, row.ImageCount, options)
-		fmt.Fprintf(b, "  tokens prompt %d completion %d total %d reasoning %d reasoning_rate %.2f\n",
-			row.PromptTokens, row.CompletionTokens, row.TotalTokens, row.ReasoningTokens, row.ReasoningTokenRate)
-		fmt.Fprintf(b, "  cache_hit %d cache_hit_rate %.2f\n", row.CacheHitTokens, row.CacheHitRate)
-		fmt.Fprintf(b, "  cache_miss %d cache_miss_rate %.2f\n", row.CacheMissTokens, row.CacheMissRate)
-		fmt.Fprintf(b, "  cache_write %d cache_write_rate %.2f\n", row.CacheWriteTokens, row.CacheWriteRate)
-		fmt.Fprintf(b, "  latency total %dms upstream %dms ttft %dms tps_total %.2f tps_after_ttft %.2f\n",
-			row.TotalLatencyMS, row.UpstreamLatencyMS, row.TimeToFirstTokenMS,
-			row.OutputTokensPerSecondTotal, row.OutputTokensPerSecondAfterTTFT)
+		state := statusState(row.HTTPStatus, row.ErrorClass)
+		accent := lipgloss.Color("42")
+		if state == "warning" {
+			accent = lipgloss.Color("214")
+		}
+		if state == "error" {
+			accent = lipgloss.Color("160")
+		}
+		lines := []string{
+			cardTitleStyle.Render(requestModelDisplay(row)) + " " + statusBadge(state),
+			metricLine(
+				endpointMetricChip("route", row.Endpoint),
+				metricChip("status", fmt.Sprintf("%d", row.HTTPStatus)),
+				metricChip("at", formatTime(row.StartedAt)),
+				streamChip(row.Stream),
+			),
+			metricLine(
+				mutedStyle.Render(credential),
+				metricChip("attempts", fmt.Sprintf("%d", row.AttemptCount)),
+				metricChip("auth", fmt.Sprintf("%d", row.AuthRetryCount)),
+				metricChip("fallback", fmt.Sprintf("%d", row.FallbackCount)),
+			),
+			metricLine(
+				metricChip("in", compactInt(row.PromptTokens)),
+				metricChip("out", compactInt(row.CompletionTokens)),
+				metricChip("total", compactInt(row.TotalTokens)),
+				metricChip("reason", compactInt(row.ReasoningTokens)),
+			),
+			metricLine(
+				msText("lat", row.TotalLatencyMS),
+				msText("up", row.UpstreamLatencyMS),
+				msText("ttft", row.TimeToFirstTokenMS),
+				tpsText("tps", row.OutputTokensPerSecondTotal),
+			),
+			percentGaugeLine("cache", row.CacheHitRate*100, width),
+		}
+		if row.FallbackReason != "" {
+			lines = append(lines, metricChip("reason", row.FallbackReason))
+		}
+		if row.ErrorClass != "" {
+			lines = append(lines, badBadgeStyle.Render(safeDisplay(row.ErrorClass)))
+		}
+		if !narrowObservability(width) {
+			lines = append(lines, metricLine(
+				metricChip("messages", fmt.Sprintf("%d", row.MessageCount)),
+				metricChip("tools", fmt.Sprintf("%d", row.ToolCount)),
+				metricChip("images", fmt.Sprintf("%d", row.ImageCount)),
+			))
+		}
+		if len(options) > 0 {
+			lines = append(lines, metricLine(options...))
+		}
+		cards = append(cards, renderObservabilityAccentCard(observabilityCardWidth(width), accent, lines...))
+	}
+	if len(cards) > 0 {
+		b.WriteString(renderObservabilityCardGrid(width, cards))
+		b.WriteByte('\n')
 	}
 }

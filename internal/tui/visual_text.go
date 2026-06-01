@@ -22,6 +22,18 @@ func accountMetaField(label, value string) string {
 	return label + " " + value
 }
 
+func metricLine(parts ...string) string {
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		out = append(out, part)
+	}
+	return strings.Join(out, "  ")
+}
+
 func statusBadge(state string) string {
 	state = strings.TrimSpace(state)
 	switch state {
@@ -46,6 +58,13 @@ func metricChip(label, value string) string {
 		value = "none"
 	}
 	return chipStyle.Render(label + " " + value)
+}
+
+func streamChip(stream bool) string {
+	if stream {
+		return chipStyle.Render("stream on")
+	}
+	return chipStyle.Render("stream off")
 }
 
 func safeMetricLabel(value string) string {

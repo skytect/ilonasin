@@ -1,19 +1,33 @@
 package tui
 
 import (
-	"fmt"
 	"strings"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 func (m Model) writeFallbacks(b *strings.Builder) {
 	b.WriteString("\nFallbacks\n")
+	width := m.viewWidth()
 	if len(m.fallbackRows) == 0 {
 		b.WriteString("No fallback metadata.\n")
 	}
+	cards := make([]string, 0, len(m.fallbackRows))
 	for _, row := range m.fallbackRows {
-		fmt.Fprintf(b, "- %s %s/%s %s -> %s %s\n",
-			formatTime(row.OccurredAt), safeDisplay(row.ProviderInstanceID), safeDisplay(row.ModelID),
-			credentialDisplay(row.FromCredentialID, row.FromCredentialLabel),
-			credentialDisplay(row.ToCredentialID, row.ToCredentialLabel), safeDisplay(row.Reason))
+		lines := []string{
+			cardTitleStyle.Render(safeDisplay(row.ProviderInstanceID)+"/"+safeDisplay(row.ModelID)) + " " + statusBadge("warning"),
+			metricLine(
+				metricChip("at", formatTime(row.OccurredAt)),
+				metricChip("reason", row.Reason),
+			),
+			mutedStyle.Render(credentialDisplay(row.FromCredentialID, row.FromCredentialLabel)),
+			valueStyle.Render("->"),
+			mutedStyle.Render(credentialDisplay(row.ToCredentialID, row.ToCredentialLabel)),
+		}
+		cards = append(cards, renderObservabilityAccentCard(observabilityCardWidth(width), lipgloss.Color("214"), lines...))
+	}
+	if len(cards) > 0 {
+		b.WriteString(renderObservabilityCardGrid(width, cards))
+		b.WriteByte('\n')
 	}
 }

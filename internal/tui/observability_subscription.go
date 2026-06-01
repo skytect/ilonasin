@@ -135,24 +135,6 @@ func subscriptionUsageSummary(width int, rows []management.SubscriptionUsageRow,
 
 func subscriptionAccountWindowLines(row management.SubscriptionUsageRow, width int, now time.Time) []string {
 	windows := row.Windows
-	if len(windows) == 0 {
-		windows = []management.SubscriptionUsageWindow{
-			{
-				Label:            row.PrimaryLabel,
-				UsedPercent:      row.PrimaryUsedPercent,
-				RemainingPercent: row.PrimaryRemainingPercent,
-				WindowMinutes:    row.PrimaryWindowMinutes,
-				ResetAt:          row.PrimaryResetAt,
-			},
-			{
-				Label:            row.SecondaryLabel,
-				UsedPercent:      row.SecondaryUsedPercent,
-				RemainingPercent: row.SecondaryRemainingPercent,
-				WindowMinutes:    row.SecondaryWindowMinutes,
-				ResetAt:          row.SecondaryResetAt,
-			},
-		}
-	}
 	lines := make([]string, 0, len(windows))
 	for _, window := range windows {
 		lines = append(lines, usageGaugeBlock(windowLabel(window.Label, window.WindowMinutes), window.UsedPercent, window.RemainingPercent, resetLocalText("reset", window.ResetAt, now), gaugeBarWidth(width)))

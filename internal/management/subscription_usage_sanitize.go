@@ -10,8 +10,6 @@ func sanitizeSubscriptionUsageResponse(out *SubscriptionUsageResponse) {
 		row.LimitName = safeSnapshotString(row.LimitName)
 		row.PlanType = safeSnapshotString(row.PlanType)
 		row.ReachedType = safeSnapshotString(row.ReachedType)
-		row.PrimaryLabel = safeSnapshotString(row.PrimaryLabel)
-		row.SecondaryLabel = safeSnapshotString(row.SecondaryLabel)
 		row.Source = safeSnapshotString(row.Source)
 		row.ErrorClass = safeSnapshotString(row.ErrorClass)
 		for j := range row.Windows {

@@ -24,30 +24,20 @@ func subscriptionUsageResponse(rows []metadata.SubscriptionUsageSnapshot, keepal
 
 func subscriptionUsageRow(row metadata.SubscriptionUsageSnapshot) SubscriptionUsageRow {
 	out := SubscriptionUsageRow{
-		ObservedAt:                row.ObservedAt,
-		ProviderInstanceID:        row.ProviderInstanceID,
-		CredentialID:              row.CredentialID,
-		AccountDisplayLabel:       row.AccountDisplayLabel,
-		PlanLabel:                 row.PlanLabel,
-		LimitID:                   row.LimitID,
-		LimitName:                 row.LimitName,
-		PlanType:                  row.PlanType,
-		ReachedType:               row.ReachedType,
-		PrimaryLabel:              windowLabel(row.PrimaryWindowMinutes),
-		PrimaryUsedPercent:        boundedPercent(row.PrimaryUsedPercent),
-		PrimaryRemainingPercent:   remainingPercent(row.PrimaryUsedPercent),
-		PrimaryWindowMinutes:      row.PrimaryWindowMinutes,
-		PrimaryResetAt:            cloneTime(row.PrimaryResetAt),
-		SecondaryLabel:            windowLabel(row.SecondaryWindowMinutes),
-		SecondaryUsedPercent:      boundedPercent(row.SecondaryUsedPercent),
-		SecondaryRemainingPercent: remainingPercent(row.SecondaryUsedPercent),
-		SecondaryWindowMinutes:    row.SecondaryWindowMinutes,
-		SecondaryResetAt:          cloneTime(row.SecondaryResetAt),
-		Source:                    row.Source,
-		ErrorClass:                row.ErrorClass,
-		Stale:                     row.Stale,
+		ObservedAt:          row.ObservedAt,
+		ProviderInstanceID:  row.ProviderInstanceID,
+		CredentialID:        row.CredentialID,
+		AccountDisplayLabel: row.AccountDisplayLabel,
+		PlanLabel:           row.PlanLabel,
+		LimitID:             row.LimitID,
+		LimitName:           row.LimitName,
+		PlanType:            row.PlanType,
+		ReachedType:         row.ReachedType,
+		Source:              row.Source,
+		ErrorClass:          row.ErrorClass,
+		Stale:               row.Stale,
 	}
-	out.Windows = subscriptionUsageWindows(out)
+	out.Windows = subscriptionUsageWindows(row)
 	return out
 }
 
@@ -79,22 +69,28 @@ func subscriptionUsageAggregates(rows []SubscriptionUsageRow, now time.Time) []S
 		if row.Stale || row.ErrorClass != "" {
 			b.agg.StaleCount++
 		}
-		b.primarySum += row.PrimaryUsedPercent
-		b.secondarySum += row.SecondaryUsedPercent
-		if row.PrimaryWindowMinutes > 0 || row.PrimaryResetAt != nil {
-			b.primaryWindowCount++
-			if b.primaryLabel == "" {
-				b.primaryLabel = row.PrimaryLabel
+		for _, window := range row.Windows {
+			switch window.Kind {
+			case "primary":
+				b.primarySum += window.UsedPercent
+				if window.WindowMinutes > 0 || window.ResetAt != nil {
+					b.primaryWindowCount++
+					if b.primaryLabel == "" {
+						b.primaryLabel = window.Label
+					}
+				}
+				b.primaryReset = earliestFutureTime(b.primaryReset, window.ResetAt, now)
+			case "secondary":
+				b.secondarySum += window.UsedPercent
+				if window.WindowMinutes > 0 || window.ResetAt != nil {
+					b.secondaryWindowCount++
+					if b.secondaryLabel == "" {
+						b.secondaryLabel = window.Label
+					}
+				}
+				b.secondaryReset = earliestFutureTime(b.secondaryReset, window.ResetAt, now)
 			}
 		}
-		if row.SecondaryWindowMinutes > 0 || row.SecondaryResetAt != nil {
-			b.secondaryWindowCount++
-			if b.secondaryLabel == "" {
-				b.secondaryLabel = row.SecondaryLabel
-			}
-		}
-		b.primaryReset = earliestFutureTime(b.primaryReset, row.PrimaryResetAt, now)
-		b.secondaryReset = earliestFutureTime(b.secondaryReset, row.SecondaryResetAt, now)
 	}
 	out := make([]SubscriptionUsageAggregate, 0, len(buckets))
 	for _, b := range buckets {
@@ -112,14 +108,14 @@ func subscriptionUsageAggregates(rows []SubscriptionUsageRow, now time.Time) []S
 	return out
 }
 
-func subscriptionUsageWindows(row SubscriptionUsageRow) []SubscriptionUsageWindow {
+func subscriptionUsageWindows(row metadata.SubscriptionUsageSnapshot) []SubscriptionUsageWindow {
 	out := make([]SubscriptionUsageWindow, 0, 2)
 	if row.PrimaryWindowMinutes > 0 || row.PrimaryUsedPercent > 0 || row.PrimaryResetAt != nil {
 		out = append(out, SubscriptionUsageWindow{
 			Kind:             "primary",
-			Label:            row.PrimaryLabel,
-			UsedPercent:      row.PrimaryUsedPercent,
-			RemainingPercent: row.PrimaryRemainingPercent,
+			Label:            windowLabel(row.PrimaryWindowMinutes),
+			UsedPercent:      boundedPercent(row.PrimaryUsedPercent),
+			RemainingPercent: remainingPercent(row.PrimaryUsedPercent),
 			WindowMinutes:    row.PrimaryWindowMinutes,
 			ResetAt:          cloneTime(row.PrimaryResetAt),
 		})
@@ -127,9 +123,9 @@ func subscriptionUsageWindows(row SubscriptionUsageRow) []SubscriptionUsageWindo
 	if row.SecondaryWindowMinutes > 0 || row.SecondaryUsedPercent > 0 || row.SecondaryResetAt != nil {
 		out = append(out, SubscriptionUsageWindow{
 			Kind:             "secondary",
-			Label:            row.SecondaryLabel,
-			UsedPercent:      row.SecondaryUsedPercent,
-			RemainingPercent: row.SecondaryRemainingPercent,
+			Label:            windowLabel(row.SecondaryWindowMinutes),
+			UsedPercent:      boundedPercent(row.SecondaryUsedPercent),
+			RemainingPercent: remainingPercent(row.SecondaryUsedPercent),
 			WindowMinutes:    row.SecondaryWindowMinutes,
 			ResetAt:          cloneTime(row.SecondaryResetAt),
 		})

@@ -3,29 +3,19 @@ package management
 import "time"
 
 type SubscriptionUsageRow struct {
-	ObservedAt                time.Time                 `json:"observed_at"`
-	ProviderInstanceID        string                    `json:"provider_instance_id"`
-	CredentialID              int64                     `json:"credential_id"`
-	AccountDisplayLabel       string                    `json:"account_display_label"`
-	PlanLabel                 string                    `json:"plan_label"`
-	LimitID                   string                    `json:"limit_id"`
-	LimitName                 string                    `json:"limit_name"`
-	PlanType                  string                    `json:"plan_type"`
-	ReachedType               string                    `json:"reached_type"`
-	PrimaryLabel              string                    `json:"primary_label"`
-	PrimaryUsedPercent        float64                   `json:"primary_used_percent"`
-	PrimaryRemainingPercent   float64                   `json:"primary_remaining_percent"`
-	PrimaryWindowMinutes      int                       `json:"primary_window_minutes"`
-	PrimaryResetAt            *time.Time                `json:"primary_reset_at,omitempty"`
-	SecondaryLabel            string                    `json:"secondary_label"`
-	SecondaryUsedPercent      float64                   `json:"secondary_used_percent"`
-	SecondaryRemainingPercent float64                   `json:"secondary_remaining_percent"`
-	SecondaryWindowMinutes    int                       `json:"secondary_window_minutes"`
-	SecondaryResetAt          *time.Time                `json:"secondary_reset_at,omitempty"`
-	Source                    string                    `json:"source"`
-	ErrorClass                string                    `json:"error_class"`
-	Stale                     bool                      `json:"stale"`
-	Windows                   []SubscriptionUsageWindow `json:"windows"`
+	ObservedAt          time.Time                 `json:"observed_at"`
+	ProviderInstanceID  string                    `json:"provider_instance_id"`
+	CredentialID        int64                     `json:"credential_id"`
+	AccountDisplayLabel string                    `json:"account_display_label"`
+	PlanLabel           string                    `json:"plan_label"`
+	LimitID             string                    `json:"limit_id"`
+	LimitName           string                    `json:"limit_name"`
+	PlanType            string                    `json:"plan_type"`
+	ReachedType         string                    `json:"reached_type"`
+	Source              string                    `json:"source"`
+	ErrorClass          string                    `json:"error_class"`
+	Stale               bool                      `json:"stale"`
+	Windows             []SubscriptionUsageWindow `json:"windows"`
 }
 
 type SubscriptionUsageAggregate struct {

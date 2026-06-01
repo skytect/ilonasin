@@ -75,6 +75,7 @@ type UpstreamCredentialRepository interface {
 	ResolveOAuthRefreshCredentialForProvider(ctx context.Context, providerInstanceID string) (ResolvedOAuthRefreshCredential, error)
 	ResolveOAuthRefreshToken(ctx context.Context, credentialID, refreshSecretID int64) (string, error)
 	UpdateOAuthTokens(ctx context.Context, credentialID int64, update OAuthTokenUpdate) error
+	UpdateOAuthAccountMetadata(ctx context.Context, credentialID int64, displayLabel, planLabel string, updatedAt time.Time) error
 	ListFallbackPolicies(ctx context.Context) ([]FallbackPolicyMetadata, error)
 	SetFallbackGroupEnabled(ctx context.Context, providerInstanceID, credentialKind, groupLabel string, enabled bool, now time.Time) error
 	UpsertOAuthCredentialForAccountHash(ctx context.Context, meta NewOAuthCredential, accessToken, refreshToken string) (OAuthCredentialMetadata, error)
@@ -247,6 +248,7 @@ type ResolvedOAuthBearerCredential struct {
 type ResolvedOAuthRefreshCredential struct {
 	ID                   int64
 	ProviderInstanceID   string
+	AccountHash          string
 	AccessTokenSecretID  int64
 	RefreshTokenSecretID int64
 }
@@ -659,7 +661,28 @@ func (s *UpstreamService) refreshOAuthCredential(ctx context.Context, credential
 	}); err != nil {
 		return err
 	}
+	if strings.TrimSpace(result.IDToken) != "" {
+		claims, err := parseChatGPTIDTokenClaims(result.IDToken)
+		if err == nil && claims.AccountID != "" && AccountHash(instance.Type, credential.ProviderInstanceID, claims.AccountID) == credential.AccountHash {
+			displayLabel := safeOAuthLoginDisplay(claims.Email, "", accessToken, firstNonEmpty(newRefreshToken, refreshToken), result.IDToken, claims.AccountID)
+			planLabel := safeOAuthLoginDisplay(claims.PlanLabel, "", accessToken, firstNonEmpty(newRefreshToken, refreshToken), result.IDToken, claims.AccountID)
+			if displayLabel != "" || planLabel != "" {
+				if err := s.Repo.UpdateOAuthAccountMetadata(ctx, credentialID, displayLabel, planLabel, now); err != nil {
+					return err
+				}
+			}
+		}
+	}
 	return nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (s *UpstreamService) refreshCalls() *OAuthRefreshCalls {

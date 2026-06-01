@@ -31,6 +31,7 @@ type OAuthRefreshRequest struct {
 type OAuthRefreshResult struct {
 	AccessToken  string
 	RefreshToken string
+	IDToken      string
 	ExpiresAt    *time.Time
 }
 
@@ -221,6 +222,7 @@ func decodeOAuthRefreshResponse(body []byte, now time.Time) (OAuthRefreshResult,
 	result := OAuthRefreshResult{
 		AccessToken:  strings.TrimSpace(resp.AccessToken),
 		RefreshToken: strings.TrimSpace(resp.RefreshToken),
+		IDToken:      strings.TrimSpace(resp.IDToken),
 	}
 	if resp.ExpiresIn > 0 {
 		expiresAt := now.UTC().Add(time.Duration(resp.ExpiresIn) * time.Second)

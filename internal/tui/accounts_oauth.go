@@ -42,7 +42,7 @@ func (m Model) writeOAuth(b *strings.Builder) {
 		title := cursor + " " + accountIdentity(row.AccountDisplayLabel, "OAuth account")
 		lines := []string{
 			cardTitleStyle.Render(title) + " " + statusBadge(state),
-			accountIdentityField(row.AccountDisplayLabel, "OAuth account"),
+			highlightedIdentity(row.AccountDisplayLabel, "OAuth account"),
 			accountMeta(
 				fmt.Sprintf("credential %d", row.ID),
 				safeDisplay(row.ProviderInstanceID),
@@ -61,7 +61,7 @@ func (m Model) writeOAuth(b *strings.Builder) {
 	for _, row := range m.accountRows {
 		lines := []string{
 			cardTitleStyle.Render(accountIdentity(row.DisplayLabel, "provider account")),
-			accountIdentityField(row.DisplayLabel, "provider account"),
+			highlightedIdentity(row.DisplayLabel, "provider account"),
 			accountMeta(
 				safeDisplay(row.ProviderInstanceID),
 				fmt.Sprintf("credential %d", row.CredentialID),

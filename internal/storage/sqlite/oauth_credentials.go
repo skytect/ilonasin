@@ -316,6 +316,30 @@ func updateProviderAccountTx(ctx context.Context, tx *sql.Tx, accountID, credent
 	return nil
 }
 
+func (s *Store) UpdateOAuthAccountMetadata(ctx context.Context, credentialID int64, displayLabel, planLabel string, updatedAt time.Time) error {
+	if displayLabel == "" && planLabel == "" {
+		return nil
+	}
+	res, err := s.DB.ExecContext(ctx, `
+		UPDATE provider_accounts
+		SET display_label = CASE WHEN ? != '' THEN ? ELSE display_label END,
+			plan_label = CASE WHEN ? != '' THEN ? ELSE plan_label END,
+			updated_at = ?
+		WHERE credential_id = ?
+	`, displayLabel, displayLabel, planLabel, planLabel, updatedAt.UTC().Format(time.RFC3339Nano), credentialID)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return credentials.ErrCredentialNotFound
+	}
+	return nil
+}
+
 func insertCredentialSecret(ctx context.Context, tx *sql.Tx, credentialID int64, kind, material, ts string) (int64, error) {
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO credential_secrets(credential_id, secret_kind, secret_material, created_at, updated_at)
@@ -645,9 +669,10 @@ func (s *Store) ResolveOAuthBearerCredentialByID(ctx context.Context, credential
 func (s *Store) ResolveOAuthRefreshCredential(ctx context.Context, credentialID int64) (credentials.ResolvedOAuthRefreshCredential, error) {
 	var out credentials.ResolvedOAuthRefreshCredential
 	err := s.DB.QueryRowContext(ctx, `
-		SELECT pc.id, pc.provider_instance_id, ot.access_token_secret_id, ot.refresh_token_secret_id
+		SELECT pc.id, pc.provider_instance_id, pa.account_hash, ot.access_token_secret_id, ot.refresh_token_secret_id
 		FROM provider_credentials pc
 		JOIN oauth_tokens ot ON ot.credential_id = pc.id
+		JOIN provider_accounts pa ON pa.credential_id = pc.id
 		JOIN credential_secrets access_secret
 			ON access_secret.id = ot.access_token_secret_id
 			AND access_secret.credential_id = pc.id
@@ -661,7 +686,7 @@ func (s *Store) ResolveOAuthRefreshCredential(ctx context.Context, credentialID 
 			AND pc.disabled_at IS NULL
 			AND ot.refresh_token_secret_id IS NOT NULL
 			AND ot.access_token_secret_id IS NOT NULL
-	`, credentialID).Scan(&out.ID, &out.ProviderInstanceID, &out.AccessTokenSecretID, &out.RefreshTokenSecretID)
+	`, credentialID).Scan(&out.ID, &out.ProviderInstanceID, &out.AccountHash, &out.AccessTokenSecretID, &out.RefreshTokenSecretID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return credentials.ResolvedOAuthRefreshCredential{}, credentials.ErrNoEligibleCredential
@@ -676,15 +701,16 @@ func (s *Store) ResolveOAuthRefreshCredentialForProvider(ctx context.Context, pr
 	var accessSecretID sql.NullInt64
 	var refreshSecretID sql.NullInt64
 	err := s.DB.QueryRowContext(ctx, `
-		SELECT pc.id, pc.provider_instance_id, ot.access_token_secret_id, ot.refresh_token_secret_id
+		SELECT pc.id, pc.provider_instance_id, pa.account_hash, ot.access_token_secret_id, ot.refresh_token_secret_id
 		FROM provider_credentials pc
-		LEFT JOIN oauth_tokens ot ON ot.credential_id = pc.id
+		JOIN oauth_tokens ot ON ot.credential_id = pc.id
+		JOIN provider_accounts pa ON pa.credential_id = pc.id
 		WHERE pc.provider_instance_id = ?
 			AND pc.kind = 'oauth'
 			AND pc.disabled_at IS NULL
 		ORDER BY pc.id ASC
 		LIMIT 1
-	`, providerInstanceID).Scan(&out.ID, &out.ProviderInstanceID, &accessSecretID, &refreshSecretID)
+	`, providerInstanceID).Scan(&out.ID, &out.ProviderInstanceID, &out.AccountHash, &accessSecretID, &refreshSecretID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return credentials.ResolvedOAuthRefreshCredential{}, credentials.ErrNoEligibleCredential

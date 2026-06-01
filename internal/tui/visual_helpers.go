@@ -28,6 +28,9 @@ var (
 	warnBarStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 	badBarStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
 	emptyBarStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("236"))
+	heroStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("57")).Padding(0, 1)
+	identityStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("24")).Padding(0, 1)
+	windowStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("16")).Background(lipgloss.Color("110")).Padding(0, 1)
 )
 
 func accountIdentity(label, fallback string) string {
@@ -61,13 +64,19 @@ func accountMetaField(label, value string) string {
 	return label + " " + value
 }
 
-func accountIdentityField(label, fallback string) string {
-	identity := accountIdentity(label, fallback)
+func highlightedIdentity(label, fallback string) string {
+	identity := safeAccountDisplay(label)
+	if identity == "" {
+		return warnBadgeStyle.Render("email") + " " + mutedStyle.Render("not captured")
+	}
+	if identity == "[redacted]" {
+		return warnBadgeStyle.Render("identity") + " " + mutedStyle.Render("redacted")
+	}
 	field := "identity"
 	if looksLikeEmail(identity) {
 		field = "email"
 	}
-	return labelStyle.Render(field) + " " + valueStyle.Render(identity)
+	return identityStyle.Render(field) + " " + valueStyle.Bold(true).Render(identity)
 }
 
 func looksLikeEmail(value string) bool {
@@ -94,7 +103,7 @@ func statusBadge(state string) string {
 }
 
 func metricChip(label, value string) string {
-	label = safeDisplay(label)
+	label = safeMetricLabel(label)
 	value = safeDisplay(value)
 	if label == "" {
 		label = "metric"
@@ -103,6 +112,27 @@ func metricChip(label, value string) string {
 		value = "none"
 	}
 	return chipStyle.Render(label + " " + value)
+}
+
+func safeMetricLabel(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	var out strings.Builder
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+			out.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			out.WriteRune(r)
+		case r >= '0' && r <= '9':
+			out.WriteRune(r)
+		case r == '-' || r == '_':
+			out.WriteRune(r)
+		}
+	}
+	return out.String()
 }
 
 func percentBar(value float64, width int) string {
@@ -128,41 +158,110 @@ func percentBar(value float64, width int) string {
 	return style.Render(fill) + emptyBarStyle.Render(empty)
 }
 
+func remainingBar(value float64, width int) string {
+	if width <= 0 {
+		width = 16
+	}
+	value = boundedTUIFloat(value, 0, 100)
+	filled := int(math.Round((value / 100) * float64(width)))
+	if filled < 0 {
+		filled = 0
+	}
+	if filled > width {
+		filled = width
+	}
+	fill := strings.Repeat("█", filled)
+	empty := strings.Repeat("░", width-filled)
+	style := goodBarStyle
+	if value <= 15 {
+		style = badBarStyle
+	} else if value <= 35 {
+		style = warnBarStyle
+	}
+	return style.Render(fill) + emptyBarStyle.Render(empty)
+}
+
 func percentText(value float64) string {
 	return fmt.Sprintf("%5.1f%%", boundedTUIFloat(value, 0, 100))
 }
 
-func usageGauge(label string, used, remaining float64, resetLabel string, width int) string {
+func usageGaugeBlock(label string, used, remaining float64, resetLabel string, width int) string {
 	label = safeDisplay(label)
 	if label == "" {
 		label = "window"
 	}
 	if width <= 0 {
-		width = 18
+		width = 22
 	}
-	remaining = boundedTUIFloat(remaining, 0, 100)
-	head := labelStyle.Render(label) + " " + valueStyle.Render("used "+percentText(used)) + " " + mutedStyle.Render("left "+percentText(remaining))
-	bar := percentBar(used, width)
+	status := riskLabel(used)
+	head := windowStyle.Render(label) + " " +
+		valueStyle.Render("used "+percentText(used)) + " " +
+		mutedStyle.Render("left "+percentText(remaining)) + " " +
+		statusBadge(status)
+	lines := []string{
+		head,
+		percentBar(used, width) + " " + mutedStyle.Render("account usage"),
+		remainingBar(remaining, width) + " " + mutedStyle.Render("account remaining"),
+	}
 	if resetLabel != "" {
-		return head + "\n" + bar + " " + mutedStyle.Render(resetLabel)
+		lines = append(lines, mutedStyle.Render(resetLabel))
 	}
-	return head + "\n" + bar
+	return strings.Join(lines, "\n")
 }
 
-func poolGauge(label string, averageUsed, minimumRemaining float64, resetLabel string, width int) string {
+func poolGaugeBlock(label string, averageUsed, remainingPoints, capacityPoints float64, resetLabel string, width int) string {
 	label = safeDisplay(label)
 	if label == "" {
 		label = "window"
 	}
 	if width <= 0 {
-		width = 18
+		width = 22
 	}
-	head := labelStyle.Render(label) + " " + valueStyle.Render("avg "+percentText(averageUsed)) + " " + mutedStyle.Render("min left "+percentText(minimumRemaining))
-	bar := percentBar(averageUsed, width)
+	if capacityPoints < 0 {
+		capacityPoints = 0
+	}
+	remainingPoints = boundedTUIFloat(remainingPoints, 0, capacityPoints)
+	remainingPercent := 0.0
+	if capacityPoints > 0 {
+		remainingPercent = (remainingPoints / capacityPoints) * 100
+	}
+	head := windowStyle.Render(label) + " " +
+		valueStyle.Render(fmt.Sprintf("remaining %.1f/%.1f account-points", remainingPoints, capacityPoints)) + " " +
+		statusBadge(poolRiskLabel(averageUsed, remainingPercent))
+	lines := []string{
+		head,
+		remainingBar(remainingPercent, width) + " " + mutedStyle.Render("pool remaining"),
+		percentBar(averageUsed, width) + " " + mutedStyle.Render("avg used "+percentText(averageUsed)),
+	}
 	if resetLabel != "" {
-		return head + "\n" + bar + " " + mutedStyle.Render(resetLabel)
+		lines = append(lines, mutedStyle.Render(resetLabel))
 	}
-	return head + "\n" + bar
+	return strings.Join(lines, "\n")
+}
+
+func riskLabel(used float64) string {
+	used = boundedTUIFloat(used, 0, 100)
+	switch {
+	case used >= 85:
+		return "error"
+	case used >= 65:
+		return "warning"
+	default:
+		return "fresh"
+	}
+}
+
+func poolRiskLabel(averageUsed, remaining float64) string {
+	averageUsed = boundedTUIFloat(averageUsed, 0, 100)
+	remaining = boundedTUIFloat(remaining, 0, 100)
+	switch {
+	case averageUsed >= 85 || remaining <= 15:
+		return "error"
+	case averageUsed >= 65 || remaining <= 35:
+		return "warning"
+	default:
+		return "fresh"
+	}
 }
 
 func boundedTUIFloat(value, min, max float64) float64 {
@@ -182,14 +281,63 @@ func renderCard(width int, lines ...string) string {
 	return renderAccentCard(width, lipgloss.Color("238"), lines...)
 }
 
+func renderSectionBanner(width int, title string, chips ...string) string {
+	title = safeDisplay(title)
+	if title == "" {
+		title = "section"
+	}
+	parts := []string{heroStyle.Render(title)}
+	for _, chip := range chips {
+		chip = strings.TrimSpace(chip)
+		if chip != "" {
+			parts = append(parts, chipStyle.Render(chip))
+		}
+	}
+	line := strings.Join(parts, " ")
+	if width <= 0 || lipgloss.Width(line) <= width {
+		return line
+	}
+	return ansi.Truncate(line, width, "...")
+}
+
+func renderCardGrid(width int, cards []string) string {
+	if len(cards) == 0 {
+		return ""
+	}
+	if width < 160 || len(cards) == 1 {
+		return strings.Join(cards, "\n")
+	}
+	gap := 2
+	columnWidth := (width - gap) / 2
+	if columnWidth < 72 {
+		return strings.Join(cards, "\n")
+	}
+	rows := make([]string, 0, (len(cards)+1)/2)
+	for i := 0; i < len(cards); i += 2 {
+		left := cards[i]
+		if i+1 >= len(cards) {
+			rows = append(rows, left)
+			continue
+		}
+		right := cards[i+1]
+		joined := lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", gap), right)
+		if lipgloss.Width(joined) > width {
+			rows = append(rows, left, right)
+			continue
+		}
+		rows = append(rows, joined)
+	}
+	return strings.Join(rows, "\n")
+}
+
 func renderAccentCard(width int, accent lipgloss.Color, lines ...string) string {
 	style := cardStyle.BorderForeground(accent)
 	innerWidth := width - style.GetHorizontalFrameSize()
 	if innerWidth < 8 {
 		innerWidth = 8
 	}
-	if innerWidth > 92 {
-		innerWidth = 92
+	if innerWidth > 148 {
+		innerWidth = 148
 	}
 	bodyLines := make([]string, 0, len(lines))
 	for _, line := range lines {

@@ -13,9 +13,12 @@ import (
 func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 	b.WriteString("\nSubscription usage\n")
 	width := m.viewWidth()
+	b.WriteString(subscriptionUsageSummary(width, m.subscriptionRows, m.subscriptionPools))
+	b.WriteByte('\n')
 	if len(m.subscriptionRows) == 0 {
 		b.WriteString("No subscription usage snapshots.\n")
 	}
+	accountCards := make([]string, 0, len(m.subscriptionRows))
 	for _, row := range m.subscriptionRows {
 		state := "fresh"
 		accent := lipgloss.Color("42")
@@ -28,43 +31,57 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 			accent = lipgloss.Color("160")
 		}
 		account := accountIdentity(row.AccountDisplayLabel, "subscription")
+		meta := []string{
+			safeDisplay(row.ProviderInstanceID),
+			fmt.Sprintf("credential %d", row.CredentialID),
+			accountMetaField("plan", row.PlanLabel),
+			accountMetaField("limit", row.LimitID),
+		}
+		if !row.ObservedAt.IsZero() {
+			meta = append(meta, "observed "+formatTime(row.ObservedAt))
+		}
 		lines := []string{
 			cardTitleStyle.Render(account) + " " + statusBadge(state),
-			accountIdentityField(row.AccountDisplayLabel, "subscription"),
-			accountMeta(
-				safeDisplay(row.ProviderInstanceID),
-				fmt.Sprintf("credential %d", row.CredentialID),
-				accountMetaField("plan", row.PlanLabel),
-				accountMetaField("limit", row.LimitID),
-				"observed "+formatTime(row.ObservedAt),
-			),
+			highlightedIdentity(row.AccountDisplayLabel, "subscription"),
+			accountMeta(meta...),
 		}
 		if row.ErrorClass != "" {
 			lines = append(lines, badBadgeStyle.Render("error")+" "+safeDisplay(row.ErrorClass))
 		} else {
 			lines = append(lines, subscriptionAccountWindowLines(row)...)
 		}
-		b.WriteString(renderAccentCard(width, accent, lines...))
+		accountCards = append(accountCards, renderAccentCard(subscriptionCardWidth(width), accent, lines...))
+	}
+	if len(accountCards) > 0 {
+		b.WriteString(renderCardGrid(width, accountCards))
 		b.WriteByte('\n')
 	}
 	if len(m.subscriptionPools) > 0 {
 		b.WriteString("\nSubscription pools\n")
 	}
+	poolCards := make([]string, 0, len(m.subscriptionPools))
 	for _, row := range m.subscriptionPools {
 		accent := lipgloss.Color("42")
 		if row.StaleCount > 0 {
 			accent = lipgloss.Color("214")
 		}
+		limit := safeDisplay(row.LimitName)
+		if limit == "" {
+			limit = safeDisplay(row.LimitID)
+		}
 		lines := []string{
 			cardTitleStyle.Render(safeDisplay(row.ProviderInstanceID)) + " " + statusBadge("pooled"),
 			accountMeta(
-				metricChip("limit", row.LimitID),
+				metricChip("limit", limit),
 				metricChip("accounts", fmt.Sprintf("%d", row.AccountCount)),
 				metricChip("stale", fmt.Sprintf("%d", row.StaleCount)),
 			),
 		}
 		lines = append(lines, subscriptionPoolWindowLines(row)...)
-		b.WriteString(renderAccentCard(width, accent, lines...))
+		poolCards = append(poolCards, renderAccentCard(subscriptionCardWidth(width), accent, lines...))
+	}
+	if len(poolCards) > 0 {
+		b.WriteString(renderCardGrid(width, poolCards))
 		b.WriteByte('\n')
 	}
 	b.WriteString("\nSubscription keepalive\n")
@@ -83,6 +100,29 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 	}
 	b.WriteString(renderAccentCard(width, lipgloss.Color("238"), lines...))
 	b.WriteByte('\n')
+}
+
+func subscriptionUsageSummary(width int, rows []management.SubscriptionUsageRow, pools []management.SubscriptionUsageAggregate) string {
+	fresh := 0
+	stale := 0
+	errored := 0
+	for _, row := range rows {
+		switch {
+		case row.ErrorClass != "":
+			errored++
+		case row.Stale:
+			stale++
+		default:
+			fresh++
+		}
+	}
+	return renderSectionBanner(width, "Codex subscription limits",
+		fmt.Sprintf("accounts %d", len(rows)),
+		fmt.Sprintf("fresh %d", fresh),
+		fmt.Sprintf("stale %d", stale),
+		fmt.Sprintf("errors %d", errored),
+		fmt.Sprintf("pools %d", len(pools)),
+	)
 }
 
 func subscriptionAccountWindowLines(row management.SubscriptionUsageRow) []string {
@@ -107,7 +147,7 @@ func subscriptionAccountWindowLines(row management.SubscriptionUsageRow) []strin
 	}
 	lines := make([]string, 0, len(windows))
 	for _, window := range windows {
-		lines = append(lines, usageGauge(windowLabel(window.Label, window.WindowMinutes), window.UsedPercent, window.RemainingPercent, resetText("reset", window.ResetAt), 22))
+		lines = append(lines, usageGaugeBlock(windowLabel(window.Label, window.WindowMinutes), window.UsedPercent, window.RemainingPercent, resetText("reset", window.ResetAt), 24))
 	}
 	return lines
 }
@@ -117,30 +157,58 @@ func subscriptionPoolWindowLines(row management.SubscriptionUsageAggregate) []st
 	if len(windows) == 0 {
 		windows = []management.SubscriptionUsagePoolWindow{
 			{
-				Label:                   "5h",
-				AverageUsedPercent:      row.AveragePrimaryUsedPercent,
-				MinimumRemainingPercent: row.MinimumPrimaryRemainingPercent,
-				EarliestResetAt:         row.EarliestPrimaryResetAt,
+				Label:                       "5h",
+				AverageUsedPercent:          row.AveragePrimaryUsedPercent,
+				MinimumRemainingPercent:     row.MinimumPrimaryRemainingPercent,
+				TotalRemainingPercentPoints: legacyPoolRemainingPoints(row.AveragePrimaryUsedPercent, row.AccountCount),
+				TotalCapacityPercentPoints:  legacyPoolCapacityPoints(row.AccountCount),
+				EarliestResetAt:             row.EarliestPrimaryResetAt,
 			},
 			{
-				Label:                   "weekly",
-				AverageUsedPercent:      row.AverageSecondaryUsedPercent,
-				MinimumRemainingPercent: row.MinimumSecondaryRemainingPercent,
-				EarliestResetAt:         row.EarliestSecondaryResetAt,
+				Label:                       "weekly",
+				AverageUsedPercent:          row.AverageSecondaryUsedPercent,
+				MinimumRemainingPercent:     row.MinimumSecondaryRemainingPercent,
+				TotalRemainingPercentPoints: legacyPoolRemainingPoints(row.AverageSecondaryUsedPercent, row.AccountCount),
+				TotalCapacityPercentPoints:  legacyPoolCapacityPoints(row.AccountCount),
+				EarliestResetAt:             row.EarliestSecondaryResetAt,
 			},
 		}
 	}
 	lines := make([]string, 0, len(windows)+1)
 	for _, window := range windows {
-		lines = append(lines, poolGauge(windowLabel(window.Label, 0), window.AverageUsedPercent, window.MinimumRemainingPercent, resetText("earliest reset", window.EarliestResetAt), 22))
-		if window.TotalCapacityPercentPoints > 0 {
-			lines = append(lines, accountMeta(
-				fmt.Sprintf("used %.1f account-points", boundedTUIFloat(window.TotalUsedPercentPoints, 0, window.TotalCapacityPercentPoints)),
-				fmt.Sprintf("capacity %.1f", window.TotalCapacityPercentPoints),
-			))
-		}
+		lines = append(lines, poolGaugeBlock(
+			windowLabel(window.Label, 0),
+			window.AverageUsedPercent,
+			window.TotalRemainingPercentPoints,
+			window.TotalCapacityPercentPoints,
+			resetText("earliest reset", window.EarliestResetAt),
+			28,
+		))
 	}
 	return lines
+}
+
+func legacyPoolCapacityPoints(accounts int) float64 {
+	if accounts <= 0 {
+		return 0
+	}
+	return float64(accounts) * 100
+}
+
+func legacyPoolRemainingPoints(averageUsed float64, accounts int) float64 {
+	capacity := legacyPoolCapacityPoints(accounts)
+	if capacity <= 0 {
+		return 0
+	}
+	used := boundedTUIFloat(averageUsed, 0, 100) * float64(accounts)
+	return boundedTUIFloat(capacity-used, 0, capacity)
+}
+
+func subscriptionCardWidth(width int) int {
+	if width >= 160 {
+		return (width - 2) / 2
+	}
+	return width
 }
 
 func windowLabel(label string, minutes int) string {

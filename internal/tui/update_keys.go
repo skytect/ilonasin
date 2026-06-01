@@ -92,38 +92,17 @@ func (m Model) updateKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.activeTab != tabAccounts {
 			return m, nil
 		}
-		m.clearReveal()
-		m.cancelOAuthLogin()
-		providerID, ok := firstOAuthLoginProvider(m.registry)
-		if !ok || m.oauth == nil {
-			m.logInfo(context.Background(), "tui_oauth_login_unavailable")
-			m.err = "OAuth login failed"
-			return m, nil
-		}
-		loginCtx, cancel := context.WithCancel(context.Background())
-		m.oauthCtx = loginCtx
-		m.oauthCancel = cancel
-		return m, m.startOAuthLoginCmd(loginCtx, providerID)
+		return m.startOAuthLoginAction()
 	case "r":
 		if m.activeTab != tabAccounts {
 			return m, nil
 		}
-		m.clearReveal()
-		if err := m.refreshSelectedOAuthCredential(); err != nil {
-			m.logError(context.Background(), "tui_oauth_refresh_failed", err)
-			m.err = "OAuth refresh failed"
-			_ = m.reload()
-			return m, nil
-		}
-		_ = m.reload()
+		return m.refreshSelectedOAuthCredentialAction()
 	case "o":
 		if m.activeTab != tabAccounts {
 			return m, nil
 		}
-		m.clearReveal()
-		if len(m.oauthRows) > 0 {
-			m.oauthSelected = (m.oauthSelected + 1) % len(m.oauthRows)
-		}
+		return m.cycleOAuthSelectionAction()
 	case "f":
 		if m.activeTab != tabAccounts {
 			return m, nil

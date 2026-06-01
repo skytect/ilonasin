@@ -56,6 +56,41 @@ func (m *Model) cancelOAuthLogin() {
 	m.oauthCtx = nil
 }
 
+func (m Model) startOAuthLoginAction() (tea.Model, tea.Cmd) {
+	m.clearReveal()
+	m.cancelOAuthLogin()
+	providerID, ok := firstOAuthLoginProvider(m.registry)
+	if !ok || m.oauth == nil {
+		m.logInfo(context.Background(), "tui_oauth_login_unavailable")
+		m.err = "OAuth login failed"
+		return m, nil
+	}
+	loginCtx, cancel := context.WithCancel(context.Background())
+	m.oauthCtx = loginCtx
+	m.oauthCancel = cancel
+	return m, m.startOAuthLoginCmd(loginCtx, providerID)
+}
+
+func (m Model) refreshSelectedOAuthCredentialAction() (tea.Model, tea.Cmd) {
+	m.clearReveal()
+	if err := m.refreshSelectedOAuthCredential(); err != nil {
+		m.logError(context.Background(), "tui_oauth_refresh_failed", err)
+		m.err = "OAuth refresh failed"
+		_ = m.reload()
+		return m, nil
+	}
+	_ = m.reload()
+	return m, nil
+}
+
+func (m Model) cycleOAuthSelectionAction() (tea.Model, tea.Cmd) {
+	m.clearReveal()
+	if len(m.oauthRows) > 0 {
+		m.oauthSelected = (m.oauthSelected + 1) % len(m.oauthRows)
+	}
+	return m, nil
+}
+
 func (m *Model) refreshSelectedOAuthCredential() error {
 	if m.oauth == nil || len(m.oauthRows) == 0 {
 		return nil

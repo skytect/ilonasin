@@ -5,11 +5,15 @@
   sqlite,
 }:
 
+let
+  src = lib.cleanSource ../.;
+  version = "0.1.0";
+in
 buildGoModule {
   pname = "ilonasin";
-  version = "0.1.0";
+  inherit version;
 
-  src = lib.cleanSource ../.;
+  inherit src;
 
   vendorHash = "sha256-gBP25CkwLRKRuZQB/2E/5JwE29GBrmJe8pe49hXBVpw=";
 
@@ -23,6 +27,7 @@ buildGoModule {
   ldflags = [
     "-s"
     "-w"
+    "-X ilonasin/internal/cli.Version=${version}"
   ];
 
   meta = {

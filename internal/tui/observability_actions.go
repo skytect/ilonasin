@@ -10,6 +10,24 @@ import (
 	"ilonasin/internal/management"
 )
 
+func (m Model) updateObservabilityKey(key tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
+	switch key.String() {
+	case "p":
+		if m.activeTab != tabObservability {
+			return m, nil, true
+		}
+		next, cmd := m.pruneTelemetryAction()
+		return next, cmd, true
+	case "u":
+		if m.activeTab != tabObservability {
+			return m, nil, true
+		}
+		next, cmd := m.refreshSubscriptionUsageAction()
+		return next, cmd, true
+	}
+	return m, nil, false
+}
+
 func (m Model) pruneTelemetryAction() (tea.Model, tea.Cmd) {
 	m.clearReveal()
 	if err := m.pruneTelemetry(); err != nil {

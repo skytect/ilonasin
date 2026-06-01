@@ -179,7 +179,7 @@ func codexReadErrorReason(err error) string {
 	return err.Error()
 }
 
-func handleCodexEvent(data []byte, state *codexResponseParseState) error {
+func handleCodexEvent(data []byte, state *codexResponseParseState) (retErr error) {
 	if bytes.Equal(bytes.TrimSpace(data), []byte("[DONE]")) {
 		return nil
 	}
@@ -230,6 +230,9 @@ func handleCodexEvent(data []byte, state *codexResponseParseState) error {
 	if err := json.Unmarshal(data, &event); err != nil {
 		return err
 	}
+	defer func() {
+		retErr = codexEventContextError(retErr, event.Type, eventItemType(event.Item))
+	}()
 	if unsupportedCodexToolEvent(event.Type) {
 		return codexEventFailure{class: "upstream_invalid_response", reason: fmt.Sprintf("unsupported codex event type %q", event.Type)}
 	}
@@ -332,6 +335,44 @@ func handleCodexEvent(data []byte, state *codexResponseParseState) error {
 		return codexEventFailure{class: "upstream_response_incomplete"}
 	}
 	return nil
+}
+
+func eventItemType(item *struct {
+	ID        string            `json:"id"`
+	Type      string            `json:"type"`
+	Role      string            `json:"role"`
+	CallID    string            `json:"call_id"`
+	Name      string            `json:"name"`
+	Namespace string            `json:"namespace"`
+	Arguments json.RawMessage   `json:"arguments"`
+	Execution string            `json:"execution"`
+	Status    string            `json:"status"`
+	Input     string            `json:"input"`
+	Tools     []json.RawMessage `json:"tools"`
+	Content   []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	} `json:"content"`
+}) string {
+	if item == nil {
+		return ""
+	}
+	return item.Type
+}
+
+func codexEventContextError(err error, eventType, itemType string) error {
+	if err == nil {
+		return nil
+	}
+	var failure codexEventFailure
+	if !errors.As(err, &failure) || failure.reason != "" {
+		return err
+	}
+	reason := fmt.Sprintf("invalid codex event %q", eventType)
+	if itemType != "" {
+		reason = fmt.Sprintf("%s item %q", reason, itemType)
+	}
+	return codexEventFailure{class: failure.class, reason: reason}
 }
 
 func (state *codexResponseParseState) addCodexFunctionCall(key, callID, name, namespace string, arguments json.RawMessage) error {

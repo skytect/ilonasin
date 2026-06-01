@@ -10,12 +10,6 @@ import (
 	"ilonasin/internal/routing"
 )
 
-const (
-	metadataEndpointChatCompletions   = "chat_completions"
-	metadataEndpointResponses         = "responses"
-	metadataEndpointAnthropicMessages = "anthropic_messages"
-)
-
 func requestMetadataBase(start time.Time, token credentials.VerifiedLocalToken, addr routing.ModelAddress, instance provider.Instance, req openai.ChatCompletionRequest, endpoint string, stream bool) metadata.Request {
 	out := metadata.Request{
 		StartedAt:                 start,

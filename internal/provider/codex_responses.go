@@ -166,6 +166,7 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 			slog.Int("status", http.StatusBadGateway),
 			slog.Int64("duration_ms", durationMS(start)),
 			slog.String("error_class", "upstream_invalid_response"),
+			slog.String("error_reason", err.Error()),
 		)
 		return ChatResult{StatusCode: http.StatusBadGateway, ContentType: "application/json", ErrorClass: "upstream_invalid_response", Latency: time.Since(start)}, err
 	}

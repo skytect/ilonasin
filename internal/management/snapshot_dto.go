@@ -31,6 +31,7 @@ type ProviderInstance struct {
 	ID             string `json:"id"`
 	Type           string `json:"type"`
 	BaseURL        string `json:"base_url"`
+	AuthIssuer     string `json:"-"`
 	AuthStyle      string `json:"auth_style"`
 	APIKey         bool   `json:"api_key"`
 	OAuth          bool   `json:"oauth"`

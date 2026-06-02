@@ -6,7 +6,6 @@ import (
 
 	"ilonasin/internal/credentials"
 	"ilonasin/internal/metadata"
-	"ilonasin/internal/provider"
 )
 
 type LocalToken struct {
@@ -50,7 +49,6 @@ type Service struct {
 	Runtime           RuntimeStatus
 	Tokens            credentials.LocalTokenManager
 	Providers         []ProviderInstance
-	Registry          provider.Registry
 	Upstreams         UpstreamMetadataReader
 	UpstreamMutations UpstreamMutationManager
 	OAuth             OAuthMetadataReader

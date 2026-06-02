@@ -6,7 +6,6 @@ import (
 
 	"ilonasin/internal/credentials"
 	"ilonasin/internal/metadata"
-	"ilonasin/internal/provider"
 )
 
 const PathSubscriptionUsage = "/_ilonasin/manage/subscription-usage"
@@ -42,7 +41,7 @@ func (s Service) RefreshSubscriptionUsage(ctx context.Context) (SubscriptionUsag
 	var successes int
 	var recordedErrors int
 	var firstErr error
-	for _, instance := range s.Registry.List() {
+	for _, instance := range s.Providers {
 		if instance.Type != "codex" || !instance.OAuth {
 			continue
 		}
@@ -101,7 +100,7 @@ func (s Service) oauthRows(ctx context.Context) ([]credentials.OAuthCredentialMe
 	return rows, nil
 }
 
-func (s Service) refreshCredentialUsage(ctx context.Context, instance provider.Instance, bearer credentials.ResolvedOAuthBearerCredential, meta credentials.OAuthCredentialMetadata, now time.Time) (int, error) {
+func (s Service) refreshCredentialUsage(ctx context.Context, instance ProviderInstance, bearer credentials.ResolvedOAuthBearerCredential, meta credentials.OAuthCredentialMetadata, now time.Time) (int, error) {
 	req := subscriptionUsageFetchRequest(instance, bearer)
 	result, err := s.UsageClient.FetchSubscriptionUsage(ctx, req)
 	if err != nil && (result.ErrorClass == "auth_failed" || result.ErrorClass == "upstream_auth_failed") {
@@ -166,7 +165,7 @@ func (s Service) refreshCredentialUsage(ctx context.Context, instance provider.I
 	return count, nil
 }
 
-func subscriptionUsageFetchRequest(instance provider.Instance, bearer credentials.ResolvedOAuthBearerCredential) SubscriptionUsageFetchRequest {
+func subscriptionUsageFetchRequest(instance ProviderInstance, bearer credentials.ResolvedOAuthBearerCredential) SubscriptionUsageFetchRequest {
 	return SubscriptionUsageFetchRequest{
 		Provider: SubscriptionUsageProvider{
 			ID:             instance.ID,

@@ -32,8 +32,9 @@ After this slice:
   to later eligible credentials if refresh does not recover it;
 - model discovery health rows are recorded per attempted credential;
 - cached model rows remain the fallback when every live attempt fails;
-- OAuth bearer pool resolution skips expired, missing, or malformed bearer
-  candidates instead of letting the first bad row hide later valid rows;
+- OAuth bearer pool resolution skips expired, missing, terminal refresh-failed,
+  or malformed bearer candidates instead of letting the first bad row hide
+  later valid rows;
 - chat and Responses routing may benefit from the shared resolver fix when an
   earlier OAuth row is ineligible, but route policy, quota planning, streaming,
   subscription usage, TUI, config, and logging behavior are otherwise
@@ -45,7 +46,8 @@ After this slice:
    - `ResolveOAuthBearerCredentials` should iterate all candidate rows and
      return every materializable bearer.
    - Skip candidates with missing access-secret references, expired
-     `expires_at`, or missing access-secret rows.
+     `expires_at`, missing access-secret rows, or terminal refresh failure
+     classes such as `refresh_token_reused`.
    - Do not skip a candidate only because best-effort ChatGPT routing claims
      cannot derive an account ID.
    - If no candidate materializes, return `ErrNoEligibleCredential`.

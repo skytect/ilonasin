@@ -13,16 +13,21 @@ func (s *Store) ResolveOAuthBearerCredential(ctx context.Context, providerInstan
 	var out credentials.ResolvedOAuthBearerCredential
 	var accessSecretID sql.NullInt64
 	var expires sql.NullString
+	var refreshFailure sql.NullString
 	err := s.DB.QueryRowContext(ctx, `
-		SELECT pc.id, pc.provider_instance_id, pc.fallback_group, ot.access_token_secret_id, ot.expires_at
+		SELECT pc.id, pc.provider_instance_id, pc.fallback_group, ot.access_token_secret_id, ot.expires_at, COALESCE(ot.refresh_failure_class, '')
 		FROM provider_credentials pc
 		LEFT JOIN oauth_tokens ot ON ot.credential_id = pc.id
 		WHERE pc.provider_instance_id = ?
 			AND pc.kind = 'oauth'
 			AND pc.disabled_at IS NULL
+			AND COALESCE(ot.refresh_failure_class, '') NOT IN (
+				'refresh_token_expired', 'refresh_token_invalidated', 'refresh_token_reused',
+				'refresh_invalid_grant', 'refresh_access_denied'
+			)
 		ORDER BY pc.id ASC
 		LIMIT 1
-	`, providerInstanceID).Scan(&out.ID, &out.ProviderInstanceID, &out.FallbackGroup, &accessSecretID, &expires)
+	`, providerInstanceID).Scan(&out.ID, &out.ProviderInstanceID, &out.FallbackGroup, &accessSecretID, &expires, &refreshFailure)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return credentials.ResolvedOAuthBearerCredential{}, credentials.ErrNoEligibleCredential
@@ -30,6 +35,9 @@ func (s *Store) ResolveOAuthBearerCredential(ctx context.Context, providerInstan
 		return credentials.ResolvedOAuthBearerCredential{}, err
 	}
 	if !accessSecretID.Valid {
+		return credentials.ResolvedOAuthBearerCredential{}, credentials.ErrNoEligibleCredential
+	}
+	if terminalOAuthRefreshFailure(refreshFailure.String) {
 		return credentials.ResolvedOAuthBearerCredential{}, credentials.ErrNoEligibleCredential
 	}
 	if expires.Valid {
@@ -63,7 +71,7 @@ func (s *Store) ResolveOAuthBearerCredential(ctx context.Context, providerInstan
 
 func (s *Store) ResolveOAuthBearerCredentials(ctx context.Context, providerInstanceID string, now time.Time) ([]credentials.ResolvedOAuthBearerCredential, error) {
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT pc.id, pc.provider_instance_id, pc.fallback_group, ot.access_token_secret_id, ot.expires_at
+		SELECT pc.id, pc.provider_instance_id, pc.fallback_group, ot.access_token_secret_id, ot.expires_at, COALESCE(ot.refresh_failure_class, '')
 		FROM provider_credentials pc
 		LEFT JOIN oauth_tokens ot ON ot.credential_id = pc.id
 		WHERE pc.provider_instance_id = ?
@@ -78,7 +86,7 @@ func (s *Store) ResolveOAuthBearerCredentials(ctx context.Context, providerInsta
 	var candidates []oauthBearerRow
 	for rows.Next() {
 		var row oauthBearerRow
-		if err := rows.Scan(&row.credential.ID, &row.credential.ProviderInstanceID, &row.fallback, &row.accessSecret, &row.expires); err != nil {
+		if err := rows.Scan(&row.credential.ID, &row.credential.ProviderInstanceID, &row.fallback, &row.accessSecret, &row.expires, &row.refreshFailure); err != nil {
 			return nil, err
 		}
 		row.credential.FallbackGroup = row.fallback
@@ -107,10 +115,11 @@ func (s *Store) ResolveOAuthBearerCredentials(ctx context.Context, providerInsta
 }
 
 type oauthBearerRow struct {
-	credential   credentials.ResolvedOAuthBearerCredential
-	fallback     string
-	accessSecret sql.NullInt64
-	expires      sql.NullString
+	credential     credentials.ResolvedOAuthBearerCredential
+	fallback       string
+	accessSecret   sql.NullInt64
+	expires        sql.NullString
+	refreshFailure sql.NullString
 }
 
 func (s *Store) materializeOAuthBearer(ctx context.Context, row oauthBearerRow, now time.Time, skipIneligible bool) (credentials.ResolvedOAuthBearerCredential, bool, error) {
@@ -119,6 +128,9 @@ func (s *Store) materializeOAuthBearer(ctx context.Context, row oauthBearerRow, 
 		if skipIneligible {
 			return credentials.ResolvedOAuthBearerCredential{}, false, nil
 		}
+		return credentials.ResolvedOAuthBearerCredential{}, false, nil
+	}
+	if terminalOAuthRefreshFailure(row.refreshFailure.String) {
 		return credentials.ResolvedOAuthBearerCredential{}, false, nil
 	}
 	if row.expires.Valid {
@@ -156,12 +168,22 @@ func (s *Store) materializeOAuthBearer(ctx context.Context, row oauthBearerRow, 
 	return credential, true, nil
 }
 
+func terminalOAuthRefreshFailure(failureClass string) bool {
+	switch failureClass {
+	case "refresh_token_expired", "refresh_token_invalidated", "refresh_token_reused", "refresh_invalid_grant", "refresh_access_denied":
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *Store) ResolveOAuthBearerCredentialByID(ctx context.Context, credentialID int64, now time.Time) (credentials.ResolvedOAuthBearerCredential, error) {
 	var out credentials.ResolvedOAuthBearerCredential
 	var accessSecretID int64
 	var expires sql.NullString
+	var refreshFailure sql.NullString
 	err := s.DB.QueryRowContext(ctx, `
-		SELECT pc.id, pc.provider_instance_id, pc.fallback_group, ot.access_token_secret_id, ot.expires_at
+		SELECT pc.id, pc.provider_instance_id, pc.fallback_group, ot.access_token_secret_id, ot.expires_at, COALESCE(ot.refresh_failure_class, '')
 		FROM provider_credentials pc
 		JOIN oauth_tokens ot ON ot.credential_id = pc.id
 		JOIN credential_secrets access_secret
@@ -172,12 +194,15 @@ func (s *Store) ResolveOAuthBearerCredentialByID(ctx context.Context, credential
 			AND pc.kind = 'oauth'
 			AND pc.disabled_at IS NULL
 			AND ot.access_token_secret_id IS NOT NULL
-	`, credentialID).Scan(&out.ID, &out.ProviderInstanceID, &out.FallbackGroup, &accessSecretID, &expires)
+	`, credentialID).Scan(&out.ID, &out.ProviderInstanceID, &out.FallbackGroup, &accessSecretID, &expires, &refreshFailure)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return credentials.ResolvedOAuthBearerCredential{}, credentials.ErrNoEligibleCredential
 		}
 		return credentials.ResolvedOAuthBearerCredential{}, err
+	}
+	if terminalOAuthRefreshFailure(refreshFailure.String) {
+		return credentials.ResolvedOAuthBearerCredential{}, credentials.ErrNoEligibleCredential
 	}
 	if expires.Valid && !now.IsZero() {
 		expiresAt, err := parseSQLiteTime(expires.String)
@@ -234,6 +259,10 @@ func (s *Store) ResolveOAuthRefreshCredential(ctx context.Context, credentialID 
 			AND pc.disabled_at IS NULL
 			AND ot.refresh_token_secret_id IS NOT NULL
 			AND ot.access_token_secret_id IS NOT NULL
+			AND COALESCE(ot.refresh_failure_class, '') NOT IN (
+				'refresh_token_expired', 'refresh_token_invalidated', 'refresh_token_reused',
+				'refresh_invalid_grant', 'refresh_access_denied'
+			)
 	`, credentialID).Scan(&out.ID, &out.ProviderInstanceID, &out.AccountHash, &out.AccessTokenSecretID, &out.RefreshTokenSecretID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -256,6 +285,10 @@ func (s *Store) ResolveOAuthRefreshCredentialForProvider(ctx context.Context, pr
 		WHERE pc.provider_instance_id = ?
 			AND pc.kind = 'oauth'
 			AND pc.disabled_at IS NULL
+			AND COALESCE(ot.refresh_failure_class, '') NOT IN (
+				'refresh_token_expired', 'refresh_token_invalidated', 'refresh_token_reused',
+				'refresh_invalid_grant', 'refresh_access_denied'
+			)
 		ORDER BY pc.id ASC
 		LIMIT 1
 	`, providerInstanceID).Scan(&out.ID, &out.ProviderInstanceID, &out.AccountHash, &accessSecretID, &refreshSecretID)

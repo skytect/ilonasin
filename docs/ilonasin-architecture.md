@@ -494,6 +494,9 @@ Exact schema is deferred, but the architecture should cover these concepts:
 - `oauth_tokens`: access/refresh token material, expiry data, refresh failure
   classes, and refresh failure descriptions from token endpoint error
   responses.
+  Terminal refresh-token failures, such as reused, invalidated, expired, invalid
+  grant, or access denied, make the bearer ineligible until the account is
+  reauthed and the refresh failure is cleared.
 - `provider_accounts`: account identity metadata from upstream providers.
 - `model_cache`: model lists and capability metadata per provider instance.
 - `request_metadata`: metadata-only request ledger.

@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"ilonasin/internal/config"
 	"ilonasin/internal/home"
 )
 
@@ -26,16 +25,23 @@ func (f closerFunc) Close() error {
 	return f()
 }
 
+type Options struct {
+	Level   string
+	Format  string
+	Outputs []string
+	LogDir  string
+}
+
 func Nop() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-func Setup(cfg config.Config, stderr io.Writer) (*slog.Logger, io.Closer, error) {
-	level, err := parseLevel(cfg.Logging.Level)
+func Setup(opts Options, stderr io.Writer) (*slog.Logger, io.Closer, error) {
+	level, err := parseLevel(opts.Level)
 	if err != nil {
 		return nil, nil, err
 	}
-	outputs := cfg.Logging.Outputs
+	outputs := opts.Outputs
 	if len(outputs) == 0 {
 		outputs = []string{"file"}
 	}
@@ -54,11 +60,11 @@ func Setup(cfg config.Config, stderr io.Writer) (*slog.Logger, io.Closer, error)
 		seen[output] = true
 		switch output {
 		case "file":
-			if err := os.MkdirAll(cfg.Paths.LogDir, 0o700); err != nil {
+			if err := os.MkdirAll(opts.LogDir, 0o700); err != nil {
 				closeAll(closers)
 				return nil, nil, err
 			}
-			f, err := os.OpenFile(filepath.Join(cfg.Paths.LogDir, LogFileName), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+			f, err := os.OpenFile(filepath.Join(opts.LogDir, LogFileName), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 			if err != nil {
 				closeAll(closers)
 				return nil, nil, err
@@ -79,17 +85,17 @@ func Setup(cfg config.Config, stderr io.Writer) (*slog.Logger, io.Closer, error)
 	if len(writers) == 0 {
 		writers = append(writers, io.Discard)
 	}
-	format := strings.TrimSpace(strings.ToLower(cfg.Logging.Format))
+	format := strings.TrimSpace(strings.ToLower(opts.Format))
 	if format == "" {
 		format = "json"
 	}
-	opts := &slog.HandlerOptions{Level: level}
+	handlerOpts := &slog.HandlerOptions{Level: level}
 	var handler slog.Handler
 	switch format {
 	case "json":
-		handler = slog.NewJSONHandler(io.MultiWriter(writers...), opts)
+		handler = slog.NewJSONHandler(io.MultiWriter(writers...), handlerOpts)
 	case "text":
-		handler = slog.NewTextHandler(io.MultiWriter(writers...), opts)
+		handler = slog.NewTextHandler(io.MultiWriter(writers...), handlerOpts)
 	default:
 		closeAll(closers)
 		return nil, nil, fmt.Errorf("unsupported logging format %q", format)

@@ -61,7 +61,7 @@ func bootstrapCore(ctx context.Context, opts Options, createDefaultConfig bool) 
 			return nil, err
 		}
 	}
-	logger, logCloser, err := logging.Setup(cfg, opts.Stderr)
+	logger, logCloser, err := logging.Setup(loggingOptions(cfg), opts.Stderr)
 	if err != nil {
 		cleanup()
 		return nil, err
@@ -72,7 +72,7 @@ func bootstrapCore(ctx context.Context, opts Options, createDefaultConfig bool) 
 			previous()
 		}
 	}(cleanup)
-	ioLogger, err := logging.SetupIO(cfg)
+	ioLogger, err := logging.SetupIO(loggingIOOptions(cfg))
 	if err != nil {
 		cleanup()
 		return nil, err
@@ -97,6 +97,22 @@ func bootstrapCore(ctx context.Context, opts Options, createDefaultConfig bool) 
 		return nil, err
 	}
 	return &coreRuntime{HomeDir: homeDir, ConfigPath: cfgPath, Config: cfg, Registry: registry, Logger: logger, IOLogger: ioLogger, cleanup: cleanup}, nil
+}
+
+func loggingOptions(cfg config.Config) logging.Options {
+	return logging.Options{
+		Level:   cfg.Logging.Level,
+		Format:  cfg.Logging.Format,
+		Outputs: append([]string(nil), cfg.Logging.Outputs...),
+		LogDir:  cfg.Paths.LogDir,
+	}
+}
+
+func loggingIOOptions(cfg config.Config) logging.IOOptions {
+	return logging.IOOptions{
+		Capture: cfg.Logging.CaptureIO,
+		LogDir:  cfg.Paths.LogDir,
+	}
 }
 
 func loadConfig(path, homeDir string, createDefault bool) (config.Config, string, error) {

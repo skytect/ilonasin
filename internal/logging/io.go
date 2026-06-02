@@ -13,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"ilonasin/internal/config"
 	"ilonasin/internal/home"
 )
 
@@ -45,14 +44,19 @@ type IORecord struct {
 	Meta        any       `json:"meta,omitempty"`
 }
 
-func SetupIO(cfg config.Config) (*IOLogger, error) {
-	if !cfg.Logging.CaptureIO {
+type IOOptions struct {
+	Capture bool
+	LogDir  string
+}
+
+func SetupIO(opts IOOptions) (*IOLogger, error) {
+	if !opts.Capture {
 		return nil, nil
 	}
-	if err := os.MkdirAll(cfg.Paths.LogDir, 0o700); err != nil {
+	if err := os.MkdirAll(opts.LogDir, 0o700); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(filepath.Join(cfg.Paths.LogDir, IOLogFileName), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	f, err := os.OpenFile(filepath.Join(opts.LogDir, IOLogFileName), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, err
 	}

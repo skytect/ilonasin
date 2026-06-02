@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 )
 
 func parseResponsesTools(raw json.RawMessage) ([]json.RawMessage, error) {
@@ -54,12 +55,8 @@ func responsesToolsToChatTools(tools []json.RawMessage, providerType string) ([]
 		if typ != "function" {
 			continue
 		}
-		for key := range tool {
-			switch key {
-			case "type", "name", "description", "parameters", "strict", "defer_loading":
-			default:
-				return nil, nil, fmt.Errorf("tools[%d] contains unsupported fields", i)
-			}
+		if key, ok := firstUnsupportedAnyField(tool, "type", "name", "description", "parameters", "strict", "defer_loading"); ok {
+			return nil, nil, fmt.Errorf("tools[%d].%s is unsupported", i, key)
 		}
 		deferLoadingValue := false
 		if deferLoading, ok := tool["defer_loading"]; ok {
@@ -124,6 +121,27 @@ func responsesToolsToChatTools(tools []json.RawMessage, providerType string) ([]
 		})
 	}
 	return out, codexRaw, nil
+}
+
+func firstUnsupportedAnyField(raw map[string]any, allowed ...string) (string, bool) {
+	if len(raw) == 0 {
+		return "", false
+	}
+	allowedSet := make(map[string]bool, len(allowed))
+	for _, key := range allowed {
+		allowedSet[key] = true
+	}
+	keys := make([]string, 0, len(raw))
+	for key := range raw {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if !allowedSet[key] {
+			return key, true
+		}
+	}
+	return "", false
 }
 
 func validateCodexResponsesTool(tool map[string]any, index int) error {

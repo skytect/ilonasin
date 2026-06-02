@@ -572,12 +572,8 @@ func parseResponsesContent(raw json.RawMessage, inputIndex int) ([]ResponseConte
 		}
 		switch typ {
 		case "input_text", "output_text", "text":
-			for key := range part {
-				switch key {
-				case "type", "text":
-				default:
-					return nil, fmt.Errorf("input[%d].content[%d] contains unsupported fields", inputIndex, i)
-				}
+			if key, ok := firstUnsupportedRawField(part, "type", "text"); ok {
+				return nil, fmt.Errorf("input[%d].content[%d].%s is unsupported", inputIndex, i, key)
 			}
 			text, err := requiredRawString(part["text"], fmt.Sprintf("input[%d].content[%d].text", inputIndex, i))
 			if err != nil {
@@ -585,12 +581,8 @@ func parseResponsesContent(raw json.RawMessage, inputIndex int) ([]ResponseConte
 			}
 			out = append(out, ResponseContentItem{Type: typ, Text: text})
 		case "input_image":
-			for key := range part {
-				switch key {
-				case "type", "image_url", "detail":
-				default:
-					return nil, fmt.Errorf("input[%d].content[%d] contains unsupported fields", inputIndex, i)
-				}
+			if key, ok := firstUnsupportedRawField(part, "type", "image_url", "detail"); ok {
+				return nil, fmt.Errorf("input[%d].content[%d].%s is unsupported", inputIndex, i, key)
 			}
 			imageURL, err := requiredRawString(part["image_url"], fmt.Sprintf("input[%d].content[%d].image_url", inputIndex, i))
 			if err != nil {
@@ -691,10 +683,15 @@ func (r ResponsesRequest) ToChatCompletionRequest(providerType string) (ChatComp
 			codex["reasoning"] = r.Reasoning
 		}
 		if r.Text != nil {
-			if verbosity, ok := r.Text["verbosity"].(string); ok {
+			if key, ok := firstUnsupportedAnyField(r.Text, "verbosity"); ok {
+				return ChatCompletionRequest{}, fmt.Errorf("text.%s is unsupported", key)
+			}
+			if rawVerbosity, ok := r.Text["verbosity"]; ok {
+				verbosity, ok := rawVerbosity.(string)
+				if !ok {
+					return ChatCompletionRequest{}, errors.New("text.verbosity must be a string")
+				}
 				codex["verbosity"] = verbosity
-			} else if len(r.Text) > 0 {
-				return ChatCompletionRequest{}, errors.New("text contains unsupported fields")
 			}
 		}
 		if r.ServiceTier != nil {

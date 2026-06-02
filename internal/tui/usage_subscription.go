@@ -75,14 +75,14 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 		schedule = "none"
 	}
 	lines := []string{
-		metricLine(
+		wrappedMetricLine(width,
 			cardTitleStyle.Render("keepalive"),
 			statusBadge(subscriptionKeepaliveState(m.keepaliveStatus)),
 			metricChip("enabled", fmt.Sprintf("%t", m.keepaliveStatus.Enabled)),
 			metricChip("cap", fmt.Sprintf("%t", m.keepaliveStatus.OutputCapVerified)),
-			metricChip("status", m.keepaliveStatus.Status),
+			wrappedMetricChip("status", m.keepaliveStatus.Status),
 		),
-		metricLine(labelStyle.Render("schedule"), valueStyle.Render(safeDisplay(schedule))),
+		wrappedDisplayField("schedule", safeFullWrappedDisplay(schedule), width),
 	}
 	b.WriteString(strings.Join(lines, "\n"))
 	b.WriteByte('\n')
@@ -221,7 +221,7 @@ func subscriptionGroupHeader(group subscriptionUsageGroup, width int) string {
 		label = "limit"
 	}
 	head := wrappedMetricLine(width,
-		machineChip("group", "accounts"),
+		windowStyle.Render("limit group"),
 		metricChip("accounts", fmt.Sprintf("%d", len(group.rows))),
 	)
 	return strings.Join([]string{
@@ -247,7 +247,7 @@ func subscriptionAccountRow(row management.SubscriptionUsageRow, width int, now 
 		subscriptionAccountMetaLine(row, width, now),
 	}
 	if row.ErrorClass != "" {
-		lines = append(lines, badBadgeStyle.Render("error")+" "+safeDisplay(row.ErrorClass))
+		lines = append(lines, wrappedDisplayField("error", safeFullWrappedDisplay(row.ErrorClass), width))
 	} else {
 		lines = append(lines, subscriptionAccountWindowLines(row, subscriptionCardWidth(width), now)...)
 	}
@@ -343,7 +343,7 @@ func subscriptionPoolSummaryLine(width int, pools []management.SubscriptionUsage
 	}
 	return wrappedMetricLine(width,
 		statusBadge("pooled"),
-		metricChip("window", label),
+		wrappedMetricChip("window", label),
 		metricChip("acct", fmt.Sprintf("%d", accounts)),
 		metricChip("stale", fmt.Sprintf("%d", stale)),
 		displayMetricChip("sum used", compactPercentPoints(used)),
@@ -353,8 +353,8 @@ func subscriptionPoolSummaryLine(width int, pools []management.SubscriptionUsage
 }
 
 func displayMetricChip(label, value string) string {
-	label = safeChromeDisplay(label)
-	value = safeDisplay(value)
+	label = safeWrappedChromeDisplay(label)
+	value = safeFullWrappedDisplay(value)
 	if label == "" {
 		label = "metric"
 	}
@@ -397,7 +397,7 @@ func subscriptionPoolWindowKey(window management.SubscriptionUsagePoolWindow) st
 	if label != "" && label != "window" {
 		return label
 	}
-	return safeDisplay(window.Kind)
+	return safeFullWrappedDisplay(window.Kind)
 }
 
 func compactPercentPoints(value float64) string {
@@ -480,7 +480,7 @@ func subscriptionCardWidth(width int) int {
 }
 
 func windowLabel(label string, minutes int) string {
-	label = safeDisplay(label)
+	label = safeFullWrappedDisplay(label)
 	if label != "" {
 		return label
 	}
@@ -526,7 +526,7 @@ func subscriptionKeepaliveState(status management.KeepaliveStatus) string {
 func readableKeepaliveSchedule(values []string) string {
 	labels := make([]string, 0, len(values))
 	for _, value := range values {
-		value = safeDisplay(value)
+		value = safeFullWrappedDisplay(value)
 		if value == "" || value == "[redacted]" {
 			continue
 		}

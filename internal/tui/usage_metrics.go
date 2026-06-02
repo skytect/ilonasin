@@ -26,7 +26,7 @@ func (m Model) writeUsageMetrics(b *strings.Builder) {
 	}
 	for index, row := range m.usageRows {
 		if index > 0 {
-			b.WriteByte('\n')
+			b.WriteString("\n\n")
 		}
 		b.WriteString(usageSummaryRow(row, width))
 		b.WriteByte('\n')
@@ -47,16 +47,16 @@ func (m Model) writeUsageMetrics(b *strings.Builder) {
 	}
 	for index, row := range m.latencyRows {
 		if index > 0 {
-			b.WriteByte('\n')
+			b.WriteString("\n\n")
 		}
 		b.WriteString(latencySummaryRow(row, width))
 		b.WriteByte('\n')
 	}
 	for index, row := range m.streamRows {
 		if index > 0 || len(m.latencyRows) > 0 {
-			b.WriteByte('\n')
+			b.WriteString("\n\n")
 		}
-		b.WriteString(streamSummaryRow(row))
+		b.WriteString(streamSummaryRow(row, width))
 		b.WriteByte('\n')
 	}
 }
@@ -184,14 +184,14 @@ func latencyShapeLines(width int, row management.LatencySummary) []string {
 	}
 }
 
-func streamSummaryRow(row management.StreamSummary) string {
+func streamSummaryRow(row management.StreamSummary, width int) string {
 	state := "fresh"
 	if row.CompletionStatus != "completed" {
 		state = "warning"
 	}
-	return metricLine(
+	return wrappedMetricLine(width,
 		statusBadge(state),
-		cardTitleStyle.Render(safeDisplay(row.CompletionStatus)),
+		cardTitleStyle.Render(safeFullWrappedDisplay(row.CompletionStatus)),
 		metricChip("streams", fmt.Sprintf("%d", row.StreamCount)),
 		metricChip("chunks", compactInt(row.ChunkCount)),
 	)

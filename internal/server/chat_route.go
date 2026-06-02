@@ -44,33 +44,33 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 	}
 	instance, ok := s.registry.Get(addr.ProviderInstanceID)
 	if !ok {
-		requestMeta := earlyChatRequestMetadata(start, token, req, metadataEndpointChatCompletions, http.StatusNotFound, "provider_not_configured")
-		_ = s.record(r.Context(), requestMeta)
-		s.logHTTP(r, http.StatusNotFound, "chat_route", "provider_not_configured")
-		writeError(w, http.StatusNotFound, "provider instance is not configured", "invalid_request_error", "provider_not_configured")
+		s.writeOpenAIProviderNotConfigured(w, r, "chat_route", func(status int, errorClass string) {
+			requestMeta := earlyChatRequestMetadata(start, token, req, metadataEndpointChatCompletions, status, errorClass)
+			_ = s.record(r.Context(), requestMeta)
+		})
 		return
 	}
 	preflight := s.preflightProviderAdapter(instance)
 	if preflight.failed() {
-		requestMeta := requestMetadataBase(start, token, addr, instance, req, metadataEndpointChatCompletions, req.Stream)
-		requestMeta.HTTPStatus = preflight.Status
-		requestMeta.ErrorClass = preflight.ErrorClass
-		requestMeta.TotalLatencyMS = time.Since(start).Milliseconds()
-		_ = s.record(r.Context(), requestMeta)
-		s.logHTTP(r, preflight.Status, "chat_route", preflight.ErrorClass)
-		writeError(w, preflight.Status, preflight.Message, "invalid_request_error", preflight.ErrorClass)
+		s.writeOpenAIPreflightFailure(w, r, "chat_route", preflight, func(status int, errorClass string) {
+			requestMeta := requestMetadataBase(start, token, addr, instance, req, metadataEndpointChatCompletions, req.Stream)
+			requestMeta.HTTPStatus = status
+			requestMeta.ErrorClass = errorClass
+			requestMeta.TotalLatencyMS = time.Since(start).Milliseconds()
+			_ = s.record(r.Context(), requestMeta)
+		})
 		return
 	}
 	adapter := preflight.Adapter
 	preflight = preflightAdapterRequest(adapter, instance, req)
 	if preflight.failed() {
-		requestMeta := requestMetadataBase(start, token, addr, instance, req, metadataEndpointChatCompletions, req.Stream)
-		requestMeta.HTTPStatus = preflight.Status
-		requestMeta.ErrorClass = preflight.ErrorClass
-		requestMeta.TotalLatencyMS = time.Since(start).Milliseconds()
-		_ = s.record(r.Context(), requestMeta)
-		s.logHTTP(r, preflight.Status, "chat_route", preflight.ErrorClass)
-		writeError(w, preflight.Status, preflight.Message, "invalid_request_error", preflight.ErrorClass)
+		s.writeOpenAIPreflightFailure(w, r, "chat_route", preflight, func(status int, errorClass string) {
+			requestMeta := requestMetadataBase(start, token, addr, instance, req, metadataEndpointChatCompletions, req.Stream)
+			requestMeta.HTTPStatus = status
+			requestMeta.ErrorClass = errorClass
+			requestMeta.TotalLatencyMS = time.Since(start).Milliseconds()
+			_ = s.record(r.Context(), requestMeta)
+		})
 		return
 	}
 	if s.logger != nil {
@@ -83,12 +83,13 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 	}
 	credentialsSet, err := s.resolveModelCredentials(r.Context(), instance)
 	if err != nil {
-		requestMeta := requestMetadataBase(start, token, addr, instance, req, metadataEndpointChatCompletions, req.Stream)
-		requestMeta.HTTPStatus = http.StatusUnauthorized
-		requestMeta.ErrorClass = "credential_unavailable"
-		requestMeta.TotalLatencyMS = time.Since(start).Milliseconds()
-		_ = s.record(r.Context(), requestMeta)
-		writeError(w, http.StatusUnauthorized, "no eligible upstream credential is available", "invalid_request_error", "credential_unavailable")
+		writeOpenAICredentialUnavailable(w, func(status int, errorClass string) {
+			requestMeta := requestMetadataBase(start, token, addr, instance, req, metadataEndpointChatCompletions, req.Stream)
+			requestMeta.HTTPStatus = status
+			requestMeta.ErrorClass = errorClass
+			requestMeta.TotalLatencyMS = time.Since(start).Milliseconds()
+			_ = s.record(r.Context(), requestMeta)
+		})
 		return
 	}
 	if s.logger != nil {

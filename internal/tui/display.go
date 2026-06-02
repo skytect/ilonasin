@@ -5,22 +5,15 @@ import (
 	"time"
 )
 
-func credentialDisplay(id int64, label string) string {
+func wrappedCredentialDisplay(id int64, label string) string {
 	if id == 0 {
 		return "credential none"
 	}
-	safe := safeDisplay(label)
+	safe := safeFullWrappedDisplay(label)
 	if safe == "" || safe == "[redacted]" {
 		return fmt.Sprintf("credential %d", id)
 	}
 	return fmt.Sprintf("credential %d %s", id, safe)
-}
-
-func healthModelDisplay(modelID string) string {
-	if modelID == "" {
-		return "models"
-	}
-	return safeDisplay(modelID)
 }
 
 func formatTime(t time.Time) string {

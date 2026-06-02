@@ -24,7 +24,7 @@ func (m Model) writeHealthAndQuota(b *strings.Builder) {
 	}
 	for index, row := range m.healthRows {
 		if index > 0 {
-			b.WriteByte('\n')
+			b.WriteString("\n\n")
 		}
 		b.WriteString(healthSummaryRow(row, now, width))
 		b.WriteByte('\n')
@@ -41,7 +41,7 @@ func (m Model) writeHealthAndQuota(b *strings.Builder) {
 	}
 	for index, row := range m.quotaRows {
 		if index > 0 {
-			b.WriteByte('\n')
+			b.WriteString("\n\n")
 		}
 		b.WriteString(quotaSummaryRow(row, now, width))
 		b.WriteByte('\n')
@@ -56,11 +56,11 @@ func healthSummaryRow(row management.HealthSummary, now time.Time, width int) st
 		metricChip("status", fmt.Sprintf("%d", row.HTTPStatus)),
 	}
 	tail := []string{
-		mutedStyle.Render(credentialDisplay(row.CredentialID, row.CredentialLabel)),
+		mutedStyle.Render(wrappedCredentialDisplay(row.CredentialID, row.CredentialLabel)),
 		timeChip("at", now, row.OccurredAt),
 	}
 	if row.ErrorClass != "" {
-		head = append(head, badBadgeStyle.Render(safeDisplay(row.ErrorClass)))
+		head = append(head, wrappedMetricChip("error", row.ErrorClass))
 	}
 	if row.RetryAfter != nil {
 		tail = append(tail, optionalTimeChip("retry", now, row.RetryAfter))
@@ -78,11 +78,11 @@ func quotaSummaryRow(row management.QuotaSummary, now time.Time, width int) stri
 		metricChip("count", fmt.Sprintf("%d", row.Count)),
 	}
 	tail := []string{
-		mutedStyle.Render(credentialDisplay(row.CredentialID, row.CredentialLabel)),
+		mutedStyle.Render(wrappedCredentialDisplay(row.CredentialID, row.CredentialLabel)),
 		timeChip("at", now, row.ObservedAt),
 	}
 	if row.ErrorClass != "" {
-		head = append(head, badBadgeStyle.Render(safeDisplay(row.ErrorClass)))
+		head = append(head, wrappedMetricChip("error", row.ErrorClass))
 	}
 	if row.RetryAfter != nil {
 		tail = append(tail, optionalTimeChip("retry", now, row.RetryAfter))

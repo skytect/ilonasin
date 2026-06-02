@@ -5,15 +5,18 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"ilonasin/internal/management"
 )
 
 func (m Model) writeOAuth(b *strings.Builder) {
-	if m.oauth == nil && m.snapshot == nil {
+	if m.oauth == nil && m.snapshot == nil && len(m.oauthRows) == 0 && len(m.accountRows) == 0 && m.oauthChallenge == nil {
 		return
 	}
 	width := m.viewWidth()
 	now := m.nowTime()
-	b.WriteString(renderSectionBanner(width, "OAuth accounts", fmt.Sprintf("oauth %d", len(m.oauthRows)), fmt.Sprintf("accounts %d", len(m.accountRows))))
+	chips := []string{fmt.Sprintf("oauth %d", len(m.oauthRows)), fmt.Sprintf("accounts %d", len(m.accountRows))}
+	b.WriteString(renderSectionBanner(width, "OAuth accounts", chips...))
 	b.WriteByte('\n')
 	if m.oauthChallenge != nil {
 		fmt.Fprintf(b, "%s %s %s %s\n", warnBadgeStyle.Render("login"), metricChip("provider", m.oauthChallenge.ProviderInstanceID),
@@ -93,4 +96,18 @@ func (m Model) writeOAuth(b *strings.Builder) {
 		b.WriteString(renderMetricCardGrid(width, accountCards))
 		b.WriteByte('\n')
 	}
+}
+
+func primaryOAuthIdentity(rows []management.OAuthCredential, selected int) string {
+	if len(rows) == 0 {
+		return ""
+	}
+	if selected < 0 || selected >= len(rows) {
+		selected = 0
+	}
+	identity := accountIdentity(rows[selected].AccountDisplayLabel, "")
+	if identity == "account" || identity == "OAuth account" {
+		return ""
+	}
+	return identity
 }

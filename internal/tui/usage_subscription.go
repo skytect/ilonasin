@@ -15,6 +15,10 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 	now := m.nowTime()
 	b.WriteString(subscriptionUsageSummary(width, m.subscriptionRows, m.subscriptionPools))
 	b.WriteByte('\n')
+	if summary := subscriptionPoolSummaryLine(m.subscriptionPools); summary != "" {
+		b.WriteString(summary)
+		b.WriteByte('\n')
+	}
 	if len(m.subscriptionRows) == 0 {
 		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("110"), "subscription accounts",
 			metricLine(metricChip("accounts", "0"), metricChip("fresh", "0"), metricChip("stale", "0")),
@@ -126,13 +130,92 @@ func subscriptionUsageSummary(width int, rows []management.SubscriptionUsageRow,
 			fresh++
 		}
 	}
-	return renderSectionBanner(width, "Codex subscription limits",
+	chips := []string{
 		fmt.Sprintf("accounts %d", len(rows)),
 		fmt.Sprintf("fresh %d", fresh),
 		fmt.Sprintf("stale %d", stale),
 		fmt.Sprintf("errors %d", errored),
 		fmt.Sprintf("pools %d", len(pools)),
+	}
+	if label, used, remaining, capacity := firstSubscriptionPoolWindowTotal(pools); capacity > 0 {
+		chips = append(chips,
+			label,
+			"used "+compactPercentPoints(used),
+			"left "+compactPercentPoints(remaining),
+			"cap "+compactPercentPoints(capacity),
+		)
+	}
+	return renderSectionBanner(width, "Codex subscription limits", chips...)
+}
+
+func subscriptionPoolSummaryLine(pools []management.SubscriptionUsageAggregate) string {
+	accounts := 0
+	stale := 0
+	for _, pool := range pools {
+		accounts += pool.AccountCount
+		stale += pool.StaleCount
+	}
+	label, used, remaining, capacity := firstSubscriptionPoolWindowTotal(pools)
+	if accounts == 0 && capacity == 0 {
+		return ""
+	}
+	return metricLine(
+		statusBadge("pooled"),
+		metricChip("window", label),
+		metricChip("acct", fmt.Sprintf("%d", accounts)),
+		metricChip("stale", fmt.Sprintf("%d", stale)),
+		metricChip("sum-used", compactPercentPoints(used)),
+		metricChip("sum-left", compactPercentPoints(remaining)),
+		metricChip("cap", compactPercentPoints(capacity)),
 	)
+}
+
+func subscriptionPoolHeadline(pools []management.SubscriptionUsageAggregate) string {
+	label, used, remaining, capacity := firstSubscriptionPoolWindowTotal(pools)
+	if capacity <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s used %s left %s cap %s", label, compactPercentPoints(used), compactPercentPoints(remaining), compactPercentPoints(capacity))
+}
+
+func firstSubscriptionPoolWindowTotal(pools []management.SubscriptionUsageAggregate) (string, float64, float64, float64) {
+	key := ""
+	used := 0.0
+	remaining := 0.0
+	capacity := 0.0
+	for _, pool := range pools {
+		for _, window := range pool.Windows {
+			if window.TotalCapacityPercentPoints <= 0 {
+				continue
+			}
+			windowKey := subscriptionPoolWindowKey(window)
+			if key == "" {
+				key = windowKey
+			}
+			if windowKey != key {
+				continue
+			}
+			used += window.TotalUsedPercentPoints
+			remaining += window.TotalRemainingPercentPoints
+			capacity += window.TotalCapacityPercentPoints
+		}
+	}
+	if key == "" {
+		return "", 0, 0, 0
+	}
+	return key, used, remaining, capacity
+}
+
+func subscriptionPoolWindowKey(window management.SubscriptionUsagePoolWindow) string {
+	label := windowLabel(window.Label, 0)
+	if label != "" && label != "window" {
+		return label
+	}
+	return safeDisplay(window.Kind)
+}
+
+func compactPercentPoints(value float64) string {
+	return fmt.Sprintf("%.0fpp", value)
 }
 
 func subscriptionAccountWindowLines(row management.SubscriptionUsageRow, width int, now time.Time) []string {

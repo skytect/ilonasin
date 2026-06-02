@@ -32,7 +32,7 @@ func (m Model) logPanes() []dashboardPane {
 	return []dashboardPane{
 		{id: logsPaneRequests, title: "requests", content: m.recentRequestsBody},
 		{id: logsPaneFallbacks, title: "fallbacks", content: m.fallbacksBody},
-		{id: logsPanePruning, title: "retention", content: m.pruningBody},
+		{id: logsPanePruning, title: "metadata and io policy", content: m.pruningBody},
 	}
 }
 

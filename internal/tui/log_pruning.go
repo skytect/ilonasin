@@ -12,7 +12,7 @@ func (m Model) writePruning(b *strings.Builder) {
 		return
 	}
 	width := m.viewWidth()
-	b.WriteString(renderSectionBanner(width, "Logs", "metadata", "IO policy", "retention"))
+	b.WriteString(renderSectionBanner(width, "Metadata and IO", "ledger", "capture policy", "pruning"))
 	b.WriteByte('\n')
 	cards := []string{
 		renderMetricAccentCard(metricCardWidth(width), lipgloss.Color("42"),
@@ -21,7 +21,7 @@ func (m Model) writePruning(b *strings.Builder) {
 			metricLine(metricChip("health", fmt.Sprintf("%d", len(m.healthRows))), metricChip("quota", fmt.Sprintf("%d", len(m.quotaRows)))),
 		),
 		renderMetricAccentCard(metricCardWidth(width), lipgloss.Color("110"),
-			cardTitleStyle.Render("IO capture")+" "+statusBadge(ioCaptureState(m.cfg.Logging.CaptureIO)),
+			cardTitleStyle.Render("capture policy")+" "+statusBadge(ioCaptureState(m.cfg.Logging.CaptureIO)),
 			metricLine(metricChip("capture", ioCaptureMode(m.cfg.Logging.CaptureIO)), metricChip("retention", ioCaptureRetention(m.cfg.Logging.CaptureIO))),
 			metricLine(metricChip("policy", ioCapturePolicy(m.cfg.Logging.CaptureIO)), metricChip("content", ioCaptureContent(m.cfg.Logging.CaptureIO))),
 		),

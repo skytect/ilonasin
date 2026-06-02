@@ -13,7 +13,12 @@ func (m Model) writeFallbacks(b *strings.Builder) {
 	b.WriteString(renderSectionBanner(width, "Fallback metadata", fmt.Sprintf("events %d", len(m.fallbackRows))))
 	b.WriteByte('\n')
 	if len(m.fallbackRows) == 0 {
-		b.WriteString("No fallback metadata.\n")
+		b.WriteString(renderMetricAccentCard(metricCardWidth(width), lipgloss.Color("214"),
+			cardTitleStyle.Render("fallback ledger")+" "+statusBadge("enabled"),
+			metricLine(metricChip("events", "0"), metricChip("visibility", "metadata-only")),
+			metricLine(metricChip("reason", "none"), metricChip("credential", "redacted")),
+		))
+		b.WriteByte('\n')
 	}
 	cards := make([]string, 0, len(m.fallbackRows))
 	for _, row := range m.fallbackRows {

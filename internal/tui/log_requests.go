@@ -46,7 +46,7 @@ func (m Model) writeRecentRequests(b *strings.Builder) {
 func requestSummaryRow(row management.RequestSummary, nowTime time.Time, width int) string {
 	state := statusState(row.HTTPStatus, row.ErrorClass)
 	head := requestTableRow(row, nowTime, state, width)
-	model := requestDetailLine(width, "model", requestModelRoute(row))
+	model := requestWrappedFieldLine(width, "model", requestModelRoute(row))
 	tokens := requestDetailLine(width, "tokens",
 		compactTokenMixLine(row.PromptTokens, row.CompletionTokens, row.ReasoningTokens, row.CacheHitTokens, row.CacheMissTokens, row.CacheWriteTokens, width),
 		metricChip("total", compactInt(row.TotalTokens)),
@@ -67,6 +67,10 @@ func requestSummaryRow(row management.RequestSummary, nowTime time.Time, width i
 		lines = append(lines, extras)
 	}
 	return wrapTargetedLines(width, lines...)
+}
+
+func requestWrappedFieldLine(width int, label, value string) string {
+	return wrappedDisplayField(label, value, width)
 }
 
 func requestDetailLine(width int, label string, parts ...string) string {

@@ -47,7 +47,7 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 	b.WriteByte('\n')
 	for rowIndex, row := range sortedSubscriptionPools(m.subscriptionPools) {
 		if rowIndex > 0 {
-			b.WriteByte('\n')
+			b.WriteString("\n\n")
 		}
 		limit := safeFullWrappedDisplay(row.LimitName)
 		if limit == "" {
@@ -194,9 +194,9 @@ func subscriptionRawGroupKey(value string) string {
 func subscriptionLimitPriority(sortKey string) int {
 	sortKey = strings.ToLower(sortKey)
 	switch {
-	case strings.Contains(sortKey, "gpt-5.5") || strings.Contains(sortKey, "gpt 5.5"):
+	case strings.Contains(sortKey, "gpt-5.5") || strings.Contains(sortKey, "gpt 5.5") || strings.Contains(sortKey, "gpt5.5"):
 		return 0
-	case strings.Contains(sortKey, "gpt-5.4") || strings.Contains(sortKey, "gpt 5.4") || strings.Contains(sortKey, "spark"):
+	case strings.Contains(sortKey, "gpt-5.4") || strings.Contains(sortKey, "gpt 5.4") || strings.Contains(sortKey, "gpt5.4") || strings.Contains(sortKey, "spark"):
 		return 1
 	default:
 		return 2

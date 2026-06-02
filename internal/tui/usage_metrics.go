@@ -24,7 +24,10 @@ func (m Model) writeUsageMetrics(b *strings.Builder) {
 		))
 		b.WriteByte('\n')
 	}
-	for _, row := range m.usageRows {
+	for index, row := range m.usageRows {
+		if index > 0 {
+			b.WriteByte('\n')
+		}
 		b.WriteString(usageSummaryRow(row, width))
 		b.WriteByte('\n')
 	}
@@ -42,11 +45,17 @@ func (m Model) writeUsageMetrics(b *strings.Builder) {
 		))
 		b.WriteByte('\n')
 	}
-	for _, row := range m.latencyRows {
+	for index, row := range m.latencyRows {
+		if index > 0 {
+			b.WriteByte('\n')
+		}
 		b.WriteString(latencySummaryRow(row, width))
 		b.WriteByte('\n')
 	}
-	for _, row := range m.streamRows {
+	for index, row := range m.streamRows {
+		if index > 0 || len(m.latencyRows) > 0 {
+			b.WriteByte('\n')
+		}
 		b.WriteString(streamSummaryRow(row))
 		b.WriteByte('\n')
 	}
@@ -161,13 +170,13 @@ func latencyShapeLines(width int, row management.LatencySummary) []string {
 		return []string{latencyShapeLine(width, row.AverageLatencyMS, row.AverageUpstreamLatencyMS, row.AverageTimeToFirstTokenMS, row.AverageOutputTPS, row.AverageOutputTPSTotal, row.AverageOutputTPSAfterTTFT)}
 	}
 	return []string{
-		metricLine(
+		wrappedMetricLine(width,
 			mutedStyle.Render("time"),
 			durationBar("lat", row.AverageLatencyMS, 10_000, compactMetricBarWidth(width)),
 			durationBar("up", row.AverageUpstreamLatencyMS, 10_000, compactMetricBarWidth(width)),
 			durationBar("ttft", row.AverageTimeToFirstTokenMS, 5_000, compactMetricBarWidth(width)),
 		),
-		metricLine(
+		wrappedMetricLine(width,
 			tpsText("output", row.AverageOutputTPS),
 			tpsText("total", row.AverageOutputTPSTotal),
 			tpsText("post", row.AverageOutputTPSAfterTTFT),

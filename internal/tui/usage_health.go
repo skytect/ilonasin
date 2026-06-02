@@ -22,7 +22,10 @@ func (m Model) writeHealthAndQuota(b *strings.Builder) {
 		))
 		b.WriteByte('\n')
 	}
-	for _, row := range m.healthRows {
+	for index, row := range m.healthRows {
+		if index > 0 {
+			b.WriteByte('\n')
+		}
 		b.WriteString(healthSummaryRow(row, now, width))
 		b.WriteByte('\n')
 	}
@@ -36,7 +39,10 @@ func (m Model) writeHealthAndQuota(b *strings.Builder) {
 		))
 		b.WriteByte('\n')
 	}
-	for _, row := range m.quotaRows {
+	for index, row := range m.quotaRows {
+		if index > 0 {
+			b.WriteByte('\n')
+		}
 		b.WriteString(quotaSummaryRow(row, now, width))
 		b.WriteByte('\n')
 	}
@@ -46,7 +52,6 @@ func healthSummaryRow(row management.HealthSummary, now time.Time, width int) st
 	state := eventState(row.EventClass, row.ErrorClass, row.HTTPStatus)
 	head := []string{
 		statusBadge(state),
-		cardTitleStyle.Render(safeDisplay(row.ProviderInstanceID) + "/" + healthModelDisplay(row.ModelID)),
 		metricChip("event", row.EventClass),
 		metricChip("status", fmt.Sprintf("%d", row.HTTPStatus)),
 	}
@@ -60,17 +65,14 @@ func healthSummaryRow(row management.HealthSummary, now time.Time, width int) st
 	if row.RetryAfter != nil {
 		tail = append(tail, optionalTimeChip("retry", now, row.RetryAfter))
 	}
-	if width < 96 {
-		return strings.Join([]string{metricLine(head...), metricLine(tail...)}, "\n")
-	}
-	return metricLine(append(head, tail...)...)
+	route := wrappedDisplayField("route", healthRouteDisplay(row.ProviderInstanceID, row.ModelID), width)
+	return wrapTargetedLines(width, wrappedMetricLine(width, head...), route, wrappedMetricLine(width, tail...))
 }
 
 func quotaSummaryRow(row management.QuotaSummary, now time.Time, width int) string {
 	state := statusState(row.HTTPStatus, row.ErrorClass)
 	head := []string{
 		statusBadge(state),
-		cardTitleStyle.Render(safeDisplay(row.ProviderInstanceID) + "/" + healthModelDisplay(row.ModelID)),
 		metricChip("source", row.Source),
 		metricChip("status", fmt.Sprintf("%d", row.HTTPStatus)),
 		metricChip("count", fmt.Sprintf("%d", row.Count)),
@@ -88,8 +90,18 @@ func quotaSummaryRow(row management.QuotaSummary, now time.Time, width int) stri
 	if row.ResetAt != nil {
 		tail = append(tail, optionalTimeChip("reset", now, row.ResetAt))
 	}
-	if width < 96 {
-		return strings.Join([]string{metricLine(head...), metricLine(tail...)}, "\n")
+	route := wrappedDisplayField("route", healthRouteDisplay(row.ProviderInstanceID, row.ModelID), width)
+	return wrapTargetedLines(width, wrappedMetricLine(width, head...), route, wrappedMetricLine(width, tail...))
+}
+
+func healthRouteDisplay(providerID, modelID string) string {
+	provider := safeFullWrappedDisplay(providerID)
+	model := safeFullWrappedDisplay(modelID)
+	if model == "" {
+		model = "models"
 	}
-	return metricLine(append(head, tail...)...)
+	if provider == "" {
+		return model
+	}
+	return provider + "/" + model
 }

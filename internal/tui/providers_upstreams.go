@@ -13,7 +13,8 @@ import (
 func (m Model) writeUpstreamCredentials(b *strings.Builder) {
 	width := m.viewWidth()
 	if m.apiKeyMode {
-		fmt.Fprintf(b, "%s %s %s\n", warnBadgeStyle.Render("adding"), metricChip("provider", m.apiKeyProvider), strings.Repeat("*", len(m.apiKeyInput)))
+		b.WriteString(upstreamAPIKeyEntryLine(m.apiKeyProvider, len(m.apiKeyInput), width))
+		b.WriteByte('\n')
 	}
 	enabled, disabled := upstreamCredentialStateCounts(m.credentials)
 	b.WriteString(renderSectionBanner(width, "Upstream API keys",
@@ -53,20 +54,39 @@ func upstreamCredentialRow(cred management.UpstreamCredential, now time.Time, wi
 	if cred.Disabled {
 		state = "disabled"
 	}
-	head := metricLine(
+	head := wrappedMetricLine(width,
 		statusBadge(state),
-		cardTitleStyle.Render(fmt.Sprintf("%d %s", cred.ID, safeDisplay(cred.Label))),
-		metricChip("provider", cred.ProviderInstanceID),
-		metricChip("group", cred.FallbackGroup),
+		cardTitleStyle.Render(upstreamCredentialIdentity(cred.ID, cred.Label)),
+		wrappedMetricChip("provider", cred.ProviderInstanceID),
+		wrappedMetricChip("group", cred.FallbackGroup),
 		machineChip("kind", cred.Kind),
 		fragmentChip("key", cred.SecretPrefix, cred.SecretLast4),
 	)
-	meta := metricLine(timeChip("created", now, cred.CreatedAt), optionalTimeChip("disabled", now, cred.DisabledAt))
+	meta := wrappedMetricLine(width, timeChip("created", now, cred.CreatedAt), optionalTimeChip("disabled", now, cred.DisabledAt))
 	if meta == "" {
-		return head
+		return wrapTargetedLines(width, head)
 	}
 	if width >= 96 {
-		return metricLine(head, meta)
+		return wrapTargetedLines(width, wrappedMetricLine(width, head, meta))
 	}
-	return strings.Join([]string{head, meta}, "\n")
+	return wrapTargetedLines(width, strings.Join([]string{head, meta}, "\n"))
+}
+
+func upstreamAPIKeyEntryLine(providerID string, inputLen int, width int) string {
+	return wrapTargetedLines(width, wrappedMetricLine(width,
+		warnBadgeStyle.Render("adding"),
+		wrappedMetricChip("provider", providerID),
+		strings.Repeat("*", inputLen),
+	))
+}
+
+func upstreamCredentialIdentity(id int64, label string) string {
+	if id == 0 {
+		return "credential none"
+	}
+	safe := safeFullWrappedDisplay(label)
+	if safe == "" {
+		return fmt.Sprintf("credential %d", id)
+	}
+	return fmt.Sprintf("credential %d %s", id, safe)
 }

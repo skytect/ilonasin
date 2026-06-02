@@ -131,7 +131,7 @@ func (s *Server) recordNonStreamingChat(r *http.Request, nc nonStreamContext, ex
 	defer cancel()
 	requestMeta := requestMetadataBase(nc.start, nc.token, nc.address, nc.instance, nc.request, nc.endpoint, nc.stream)
 	if nc.clientModel != "" {
-		requestMeta.RequestedModel = nc.clientModel
+		requestMeta.RequestedModel = safeMetadataAddress(nc.clientModel)
 	}
 	if nc.maxOutputTokens > 0 {
 		requestMeta.MaxOutputTokens = nc.maxOutputTokens

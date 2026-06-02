@@ -24,7 +24,7 @@ type chatMetadataFinalizer struct {
 
 func finalizeChatRequestMetadata(out *metadata.Request, final chatMetadataFinalizer) {
 	out.CredentialID = final.credentialID
-	out.ResolvedModel = resolvedChatModel(final.upstreamModel, final.resolvedModel)
+	out.ResolvedModel = safeMetadataAddress(resolvedChatModel(final.upstreamModel, final.resolvedModel))
 	out.HTTPStatus = final.status
 	out.ErrorClass = final.errorClass
 	out.RetryCount = final.authRetries + len(final.fallbackEvents)

@@ -42,7 +42,7 @@ func (s *Server) handleAnthropicCountTokens(w http.ResponseWriter, r *http.Reque
 	}
 	instance, ok := s.registry.Get(addr.ProviderInstanceID)
 	if !ok {
-		s.recordAnthropicCountTokens(r, start, token, req, addr, provider.Instance{}, http.StatusNotFound, "provider_not_configured", 0)
+		s.recordAnthropicCountTokens(r, start, token, req, routing.ModelAddress{}, provider.Instance{}, http.StatusNotFound, "provider_not_configured", 0)
 		s.logHTTP(r, http.StatusNotFound, "anthropic_count_tokens_route", "provider_not_configured")
 		writeAnthropicError(w, http.StatusNotFound, "provider instance is not configured")
 		return

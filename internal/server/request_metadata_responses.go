@@ -20,10 +20,10 @@ func responsesRequestMetadataBase(start time.Time, token credentials.VerifiedLoc
 		MessageCount:              len(req.Input),
 		ToolCount:                 len(req.Tools),
 		ImageCount:                countResponsesImages(req),
-		RequestedProviderInstance: addr.ProviderInstanceID,
-		RequestedModel:            addr.ProviderModelID,
-		ResolvedProviderInstance:  addr.ProviderInstanceID,
-		ResolvedModel:             addr.ProviderModelID,
+		RequestedProviderInstance: safeMetadataAddress(addr.ProviderInstanceID),
+		RequestedModel:            safeMetadataAddress(addr.ProviderModelID),
+		ResolvedProviderInstance:  safeMetadataAddress(addr.ProviderInstanceID),
+		ResolvedModel:             safeMetadataAddress(addr.ProviderModelID),
 	}
 	if req.ServiceTier != nil {
 		out.RequestedServiceTier = safeServiceTier(*req.ServiceTier)

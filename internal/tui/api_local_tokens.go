@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"ilonasin/internal/management"
 )
 
@@ -18,7 +20,11 @@ func (m Model) writeLocalTokens(b *strings.Builder) {
 	))
 	b.WriteByte('\n')
 	if len(m.tokenRows) == 0 {
-		b.WriteString("No local API tokens.\n")
+		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("110"), "downstream tokens",
+			metricLine(metricChip("enabled", "0"), metricChip("disabled", "0")),
+			metricLine(metricChip("scope", "local-api"), metricChip("upstream", "providers")),
+		))
+		b.WriteByte('\n')
 	}
 	for i, token := range m.tokenRows {
 		cursor := " "

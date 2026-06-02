@@ -16,7 +16,11 @@ func (m Model) writeFallbackPolicies(b *strings.Builder) {
 	b.WriteString(renderSectionBanner(width, "Credential groups", fmt.Sprintf("groups %d", len(m.fallbackPolicies))))
 	b.WriteByte('\n')
 	if len(m.fallbackPolicies) == 0 {
-		b.WriteString("No credential group metadata.\n")
+		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("110"), "credential groups",
+			metricLine(metricChip("groups", "0"), metricChip("policy", "default")),
+			metricLine(metricChip("fallback", "same-provider"), metricChip("scope", "metadata")),
+		))
+		b.WriteByte('\n')
 		return
 	}
 	cards := make([]string, 0, len(m.fallbackPolicies))

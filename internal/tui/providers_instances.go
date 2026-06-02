@@ -12,7 +12,11 @@ func (m Model) writeProviderInstances(b *strings.Builder) {
 	b.WriteString(renderSectionBanner(width, "Provider instances", fmt.Sprintf("providers %d", len(m.providers))))
 	b.WriteByte('\n')
 	if len(m.providers) == 0 {
-		b.WriteString("No provider instances.\n")
+		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("110"), "provider instances",
+			metricLine(metricChip("providers", "0"), metricChip("source", "config")),
+			metricLine(metricChip("auth", "none"), metricChip("routes", "none")),
+		))
+		b.WriteByte('\n')
 		return
 	}
 	cards := make([]string, 0, len(m.providers))

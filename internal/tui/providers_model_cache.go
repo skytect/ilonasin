@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"ilonasin/internal/management"
 )
 
@@ -37,12 +39,20 @@ func modelCacheSummaries(rows []management.ModelMetadata) []modelCacheSummary {
 }
 
 func (m Model) writeModelCache(b *strings.Builder) {
-	b.WriteString("\nModel cache\n")
+	width := m.viewWidth()
 	summaries := modelCacheSummaries(m.modelRows)
+	b.WriteString("\n")
+	b.WriteString(renderSectionBanner(width, "Model cache", fmt.Sprintf("providers %d", len(summaries))))
+	b.WriteByte('\n')
 	if len(summaries) == 0 {
-		b.WriteString("No cached models.\n")
+		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("110"), "model cache",
+			metricLine(metricChip("providers", "0"), metricChip("models", "0")),
+			metricLine(metricChip("status", "empty"), metricChip("source", "discovery")),
+		))
+		b.WriteByte('\n')
+		return
 	}
 	for _, summary := range summaries {
-		fmt.Fprintf(b, "- %s %d models updated %s\n", summary.ProviderInstanceID, summary.Count, summary.UpdatedAt)
+		fmt.Fprintf(b, "- %s %d models updated %s\n", safeDisplay(summary.ProviderInstanceID), summary.Count, safeDisplay(summary.UpdatedAt))
 	}
 }

@@ -21,7 +21,11 @@ func (m Model) writeUpstreamCredentials(b *strings.Builder) {
 	))
 	b.WriteByte('\n')
 	if len(m.credentials) == 0 {
-		b.WriteString("No upstream credentials.\n")
+		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("110"), "upstream credentials",
+			metricLine(metricChip("enabled", "0"), metricChip("disabled", "0")),
+			metricLine(metricChip("scope", "provider-auth"), metricChip("local", "api-tab")),
+		))
+		b.WriteByte('\n')
 		return
 	}
 	cards := make([]string, 0, len(m.credentials))

@@ -20,7 +20,11 @@ func (m Model) writeOAuth(b *strings.Builder) {
 			metricChip("code", m.oauthChallenge.UserCode), safeDisplay(m.oauthChallenge.VerificationURL))
 	}
 	if len(m.oauthRows) == 0 {
-		b.WriteString("No OAuth accounts.\n")
+		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("110"), "oauth credentials",
+			metricLine(metricChip("oauth", "0"), metricChip("accounts", fmt.Sprintf("%d", len(m.accountRows)))),
+			metricLine(metricChip("login", "available"), metricChip("identity", "not-captured")),
+		))
+		b.WriteByte('\n')
 	}
 	cards := make([]string, 0, len(m.oauthRows))
 	for i, row := range m.oauthRows {
@@ -66,7 +70,11 @@ func (m Model) writeOAuth(b *strings.Builder) {
 	b.WriteString(renderSectionBanner(width, "Provider accounts", fmt.Sprintf("accounts %d", len(m.accountRows))))
 	b.WriteByte('\n')
 	if len(m.accountRows) == 0 {
-		b.WriteString("No provider accounts.\n")
+		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("24"), "provider identities",
+			metricLine(metricChip("accounts", "0"), metricChip("email", "not-captured")),
+			metricLine(metricChip("source", "oauth-refresh"), metricChip("privacy", "safe-labels")),
+		))
+		b.WriteByte('\n')
 	}
 	accountCards := make([]string, 0, len(m.accountRows))
 	for _, row := range m.accountRows {

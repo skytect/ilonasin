@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"ilonasin/internal/credentials"
+	"ilonasin/internal/metadata"
 	"ilonasin/internal/provider"
 )
 
@@ -16,7 +17,7 @@ type modelDiscoveryAttempt struct {
 }
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request, _ credentials.VerifiedLocalToken) {
-	cacheByProvider := map[string][]provider.ModelMetadata{}
+	cacheByProvider := map[string][]metadata.ModelCacheRow{}
 	if s.cache != nil {
 		cached, err := s.cache.ListModelCache(r.Context())
 		if err != nil {
@@ -59,13 +60,13 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request, _ credenti
 				failedWithoutCache++
 				continue
 			}
-			all = append(all, cached...)
+			all = append(all, providerModelsFromCacheRows(cached)...)
 			continue
 		}
 		attempt := s.discoverModelsWithCredentials(r.Context(), instance, discoverer, credentialsSet)
 		if attempt.live && len(attempt.models) > 0 {
 			if s.cache != nil {
-				if err := s.cache.ReplaceModelCache(r.Context(), instance.ID, attempt.models); err != nil {
+				if err := s.cache.ReplaceModelCache(r.Context(), instance.ID, modelCacheRowsFromProvider(attempt.models)); err != nil {
 					writeError(w, http.StatusInternalServerError, "model cache is unavailable", "api_error", "model_cache_unavailable")
 					return
 				}
@@ -78,7 +79,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request, _ credenti
 			failedWithoutCache++
 			continue
 		}
-		all = append(all, cached...)
+		all = append(all, providerModelsFromCacheRows(cached)...)
 	}
 	if len(all) == 0 && attempted > 0 && failedWithoutCache == attempted {
 		s.logHTTP(r, http.StatusBadGateway, "models_route", "model_discovery_failed")

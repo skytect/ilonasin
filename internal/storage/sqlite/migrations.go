@@ -310,6 +310,11 @@ var migrations = []migration{
 			UNIQUE(provider_instance_id, credential_id, limit_id)
 		)`),
 	}},
+	{version: 9, name: "model_cache_metadata", steps: []migrationStep{
+		addColumnIfMissing("model_cache", "default_service_tier", `default_service_tier TEXT NOT NULL DEFAULT ''`),
+		addColumnIfMissing("model_cache", "service_tiers_json", `service_tiers_json TEXT NOT NULL DEFAULT '[]'`),
+		addColumnIfMissing("model_cache", "input_modalities_json", `input_modalities_json TEXT NOT NULL DEFAULT '[]'`),
+	}},
 }
 
 func sqlSteps(stmts []string) []migrationStep {

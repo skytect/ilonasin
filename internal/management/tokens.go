@@ -74,7 +74,7 @@ type OAuthMetadataReader interface {
 }
 
 type ModelCacheReader interface {
-	ListModelCache(ctx context.Context) ([]provider.ModelMetadata, error)
+	ListModelCache(ctx context.Context) ([]metadata.ModelCacheRow, error)
 }
 
 type ObservabilityReader interface {

@@ -26,6 +26,6 @@ type ProviderRegistry interface {
 }
 
 type ModelCache interface {
-	ReplaceModelCache(context.Context, string, []provider.ModelMetadata) error
-	ListModelCache(context.Context) ([]provider.ModelMetadata, error)
+	ReplaceModelCache(context.Context, string, []metadata.ModelCacheRow) error
+	ListModelCache(context.Context) ([]metadata.ModelCacheRow, error)
 }

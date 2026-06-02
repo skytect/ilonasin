@@ -55,7 +55,7 @@ func (s Service) LoadManagementSnapshot(ctx context.Context) (ManagementSnapshot
 		if err != nil {
 			return ManagementSnapshotResponse{}, err
 		}
-		out.ModelCache = modelMetadataFromProvider(rows)
+		out.ModelCache = modelMetadataFromMetadata(rows)
 	}
 	if s.Observability != nil {
 		if err := loadObservabilitySnapshot(ctx, s.Observability, &out); err != nil {

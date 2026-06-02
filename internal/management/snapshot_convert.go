@@ -73,7 +73,7 @@ func providerAccountsFromCredentials(rows []credentials.ProviderAccountMetadata)
 	return out
 }
 
-func modelMetadataFromProvider(rows []provider.ModelMetadata) []ModelMetadata {
+func modelMetadataFromMetadata(rows []metadata.ModelCacheRow) []ModelMetadata {
 	out := make([]ModelMetadata, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, ModelMetadata{

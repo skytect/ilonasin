@@ -39,9 +39,9 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request, token c
 	}
 	instance, ok := s.registry.Get(addr.ProviderInstanceID)
 	if !ok {
-		_ = s.record(r.Context(), earlyResponsesRequestMetadata(start, token, responsesReq, http.StatusNotFound, "provider_not_configured"))
-		s.logHTTP(r, http.StatusNotFound, "responses_route", "provider_not_configured")
-		writeError(w, http.StatusNotFound, "provider instance is not configured", "invalid_request_error", "provider_not_configured")
+		s.writeOpenAIProviderNotConfigured(w, r, "responses_route", func(status int, errorClass string) {
+			_ = s.record(r.Context(), earlyResponsesRequestMetadata(start, token, responsesReq, status, errorClass))
+		})
 		return
 	}
 	preflight := s.preflightProviderAdapter(instance)

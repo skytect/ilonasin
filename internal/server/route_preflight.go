@@ -29,6 +29,12 @@ func writeOpenAICredentialUnavailable(w http.ResponseWriter, record func(status 
 	writeError(w, http.StatusUnauthorized, "no eligible upstream credential is available", "invalid_request_error", "credential_unavailable")
 }
 
+func (s *Server) writeOpenAIProviderNotConfigured(w http.ResponseWriter, r *http.Request, routeEvent string, record func(status int, errorClass string)) {
+	record(http.StatusNotFound, "provider_not_configured")
+	s.logHTTP(r, http.StatusNotFound, routeEvent, "provider_not_configured")
+	writeError(w, http.StatusNotFound, "provider instance is not configured", "invalid_request_error", "provider_not_configured")
+}
+
 func (s *Server) preflightProviderAdapter(instance provider.Instance) routePreflightResult {
 	if !instance.Chat || (!instance.APIKey && !instance.OAuth) {
 		return routePreflightResult{

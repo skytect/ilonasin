@@ -32,9 +32,9 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request, token c
 	}
 	addr, err := s.resolveModelAddress(r.Context(), responsesReq.Model)
 	if err != nil {
-		_ = s.record(r.Context(), earlyResponsesRequestMetadata(start, token, responsesReq, http.StatusBadRequest, "invalid_model"))
-		s.logHTTP(r, http.StatusBadRequest, "responses_route", "invalid_model")
-		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "invalid_model")
+		s.writeOpenAIInvalidModel(w, r, "responses_route", err.Error(), func(status int, errorClass string) {
+			_ = s.record(r.Context(), earlyResponsesRequestMetadata(start, token, responsesReq, status, errorClass))
+		})
 		return
 	}
 	instance, ok := s.registry.Get(addr.ProviderInstanceID)

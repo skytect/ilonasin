@@ -37,9 +37,9 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 	}
 	addr, err := s.resolveModelAddress(r.Context(), req.Model)
 	if err != nil {
-		_ = s.record(r.Context(), earlyChatRequestMetadata(start, token, req, metadataEndpointChatCompletions, http.StatusBadRequest, "invalid_model"))
-		s.logHTTP(r, http.StatusBadRequest, "chat_route", "invalid_model")
-		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "invalid_model")
+		s.writeOpenAIInvalidModel(w, r, "chat_route", err.Error(), func(status int, errorClass string) {
+			_ = s.record(r.Context(), earlyChatRequestMetadata(start, token, req, metadataEndpointChatCompletions, status, errorClass))
+		})
 		return
 	}
 	instance, ok := s.registry.Get(addr.ProviderInstanceID)

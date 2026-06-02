@@ -24,6 +24,12 @@ func (s *Server) writeOpenAIPreflightFailure(w http.ResponseWriter, r *http.Requ
 	writeError(w, preflight.Status, preflight.Message, "invalid_request_error", preflight.ErrorClass)
 }
 
+func (s *Server) writeOpenAIInvalidModel(w http.ResponseWriter, r *http.Request, routeEvent, message string, record func(status int, errorClass string)) {
+	record(http.StatusBadRequest, "invalid_model")
+	s.logHTTP(r, http.StatusBadRequest, routeEvent, "invalid_model")
+	writeError(w, http.StatusBadRequest, message, "invalid_request_error", "invalid_model")
+}
+
 func writeOpenAICredentialUnavailable(w http.ResponseWriter, record func(status int, errorClass string)) {
 	record(http.StatusUnauthorized, "credential_unavailable")
 	writeError(w, http.StatusUnauthorized, "no eligible upstream credential is available", "invalid_request_error", "credential_unavailable")

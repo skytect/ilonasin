@@ -56,7 +56,7 @@ func startManagementServer(ctx context.Context, homeDir, configPath, databasePat
 		OAuthMutations:    upstreams,
 		OAuthResolver:     upstreams,
 		SubscriptionUsage: store,
-		UsageClient:       usageClient,
+		UsageClient:       subscriptionUsageProviderAdapter{client: usageClient},
 		Keepalive:         managementKeepaliveSettings(keepalive),
 		ModelCache:        store,
 		Observability:     store,

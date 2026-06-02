@@ -2,25 +2,23 @@ package management
 
 import (
 	"time"
-
-	"ilonasin/internal/provider"
 )
 
-func windowUsed(window *provider.CodexRateLimitWindow) float64 {
+func windowUsed(window *SubscriptionUsageFetchWindow) float64 {
 	if window == nil {
 		return 0
 	}
 	return window.UsedPercent
 }
 
-func windowMinutes(window *provider.CodexRateLimitWindow) int {
+func windowMinutes(window *SubscriptionUsageFetchWindow) int {
 	if window == nil {
 		return 0
 	}
 	return window.WindowMinutes
 }
 
-func windowReset(window *provider.CodexRateLimitWindow) *time.Time {
+func windowReset(window *SubscriptionUsageFetchWindow) *time.Time {
 	if window == nil || window.ResetsAt == nil {
 		return nil
 	}

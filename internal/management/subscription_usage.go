@@ -102,29 +102,16 @@ func (s Service) oauthRows(ctx context.Context) ([]credentials.OAuthCredentialMe
 }
 
 func (s Service) refreshCredentialUsage(ctx context.Context, instance provider.Instance, bearer credentials.ResolvedOAuthBearerCredential, meta credentials.OAuthCredentialMetadata, now time.Time) (int, error) {
-	credential := provider.BearerCredential{
-		ID:                      bearer.ID,
-		ProviderInstanceID:      bearer.ProviderInstanceID,
-		Kind:                    provider.CredentialKindOAuthAccess,
-		BearerToken:             bearer.BearerToken,
-		ChatGPTAccountID:        bearer.ChatGPTAccountID,
-		ChatGPTAccountIsFedRAMP: bearer.ChatGPTAccountIsFedRAMP,
-	}
-	result, err := s.UsageClient.FetchCodexSubscriptionUsage(ctx, provider.CodexSubscriptionUsageRequest{
-		Instance:   instance,
-		Credential: credential,
-	})
+	req := subscriptionUsageFetchRequest(instance, bearer)
+	result, err := s.UsageClient.FetchSubscriptionUsage(ctx, req)
 	if err != nil && (result.ErrorClass == "auth_failed" || result.ErrorClass == "upstream_auth_failed") {
 		_ = s.OAuthResolver.RefreshOAuthCredentialIfBearer(ctx, bearer.ID, bearer.BearerToken)
 		refreshed, refreshErr := s.OAuthResolver.ResolveOAuthBearerByID(ctx, bearer.ID, time.Now().UTC())
 		if refreshErr == nil {
-			credential.BearerToken = refreshed.BearerToken
-			credential.ChatGPTAccountID = refreshed.ChatGPTAccountID
-			credential.ChatGPTAccountIsFedRAMP = refreshed.ChatGPTAccountIsFedRAMP
-			result, err = s.UsageClient.FetchCodexSubscriptionUsage(ctx, provider.CodexSubscriptionUsageRequest{
-				Instance:   instance,
-				Credential: credential,
-			})
+			req.Credential.BearerToken = refreshed.BearerToken
+			req.Credential.ChatGPTAccountID = refreshed.ChatGPTAccountID
+			req.Credential.ChatGPTAccountIsFedRAMP = refreshed.ChatGPTAccountIsFedRAMP
+			result, err = s.UsageClient.FetchSubscriptionUsage(ctx, req)
 		}
 	}
 	if err != nil {
@@ -177,4 +164,28 @@ func (s Service) refreshCredentialUsage(ctx context.Context, instance provider.I
 		count++
 	}
 	return count, nil
+}
+
+func subscriptionUsageFetchRequest(instance provider.Instance, bearer credentials.ResolvedOAuthBearerCredential) SubscriptionUsageFetchRequest {
+	return SubscriptionUsageFetchRequest{
+		Provider: SubscriptionUsageProvider{
+			ID:             instance.ID,
+			Type:           instance.Type,
+			BaseURL:        instance.BaseURL,
+			AuthIssuer:     instance.AuthIssuer,
+			AuthStyle:      instance.AuthStyle,
+			APIKey:         instance.APIKey,
+			OAuth:          instance.OAuth,
+			OAuthRefresh:   instance.OAuthRefresh,
+			Chat:           instance.Chat,
+			ModelDiscovery: instance.ModelDiscovery,
+		},
+		Credential: SubscriptionUsageBearerCredential{
+			ID:                      bearer.ID,
+			ProviderInstanceID:      bearer.ProviderInstanceID,
+			BearerToken:             bearer.BearerToken,
+			ChatGPTAccountID:        bearer.ChatGPTAccountID,
+			ChatGPTAccountIsFedRAMP: bearer.ChatGPTAccountIsFedRAMP,
+		},
+	}
 }

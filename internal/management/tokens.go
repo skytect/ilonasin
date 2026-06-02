@@ -57,7 +57,7 @@ type Service struct {
 	OAuthMutations    OAuthMutationManager
 	OAuthResolver     OAuthBearerRefreshResolver
 	SubscriptionUsage SubscriptionUsageStore
-	UsageClient       provider.CodexSubscriptionUsageClient
+	UsageClient       SubscriptionUsageFetcher
 	Keepalive         SubscriptionKeepaliveSettings
 	ModelCache        ModelCacheReader
 	Observability     ObservabilityReader

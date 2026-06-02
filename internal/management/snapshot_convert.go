@@ -3,21 +3,15 @@ package management
 import (
 	"ilonasin/internal/credentials"
 	"ilonasin/internal/metadata"
-	"ilonasin/internal/provider"
 )
 
-func providerInstanceFromProvider(row provider.Instance) ProviderInstance {
-	return ProviderInstance{
-		ID:             row.ID,
-		Type:           row.Type,
-		BaseURL:        safeBaseURL(row.BaseURL),
-		AuthStyle:      row.AuthStyle,
-		APIKey:         row.APIKey,
-		OAuth:          row.OAuth,
-		OAuthRefresh:   row.OAuthRefresh,
-		Chat:           row.Chat,
-		ModelDiscovery: row.ModelDiscovery,
+func snapshotProviderInstances(rows []ProviderInstance) []ProviderInstance {
+	out := make([]ProviderInstance, 0, len(rows))
+	for _, row := range rows {
+		row.BaseURL = safeBaseURL(row.BaseURL)
+		out = append(out, row)
 	}
+	return out
 }
 
 func upstreamCredentialsFromCredentials(rows []credentials.UpstreamCredentialMetadata) []UpstreamCredential {

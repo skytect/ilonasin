@@ -49,6 +49,7 @@ type LocalTokenClient interface {
 type Service struct {
 	Runtime           RuntimeStatus
 	Tokens            credentials.LocalTokenManager
+	Providers         []ProviderInstance
 	Registry          provider.Registry
 	Upstreams         UpstreamMetadataReader
 	UpstreamMutations UpstreamMutationManager

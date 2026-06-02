@@ -48,6 +48,7 @@ func startManagementServer(ctx context.Context, homeDir, configPath, databasePat
 			CaptureIO: ioLogger != nil,
 		},
 		Tokens:            tokens,
+		Providers:         managementProviderInstances(registry),
 		Registry:          registry,
 		Upstreams:         upstreams,
 		UpstreamMutations: upstreams,
@@ -61,6 +62,25 @@ func startManagementServer(ctx context.Context, homeDir, configPath, databasePat
 		Observability:     store,
 		Pruner:            store,
 	})
+}
+
+func managementProviderInstances(registry provider.Registry) []management.ProviderInstance {
+	rows := registry.List()
+	out := make([]management.ProviderInstance, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, management.ProviderInstance{
+			ID:             row.ID,
+			Type:           row.Type,
+			BaseURL:        row.BaseURL,
+			AuthStyle:      row.AuthStyle,
+			APIKey:         row.APIKey,
+			OAuth:          row.OAuth,
+			OAuthRefresh:   row.OAuthRefresh,
+			Chat:           row.Chat,
+			ModelDiscovery: row.ModelDiscovery,
+		})
+	}
+	return out
 }
 
 func managementKeepaliveSettings(keepalive subscriptionKeepaliveSettings) management.SubscriptionKeepaliveSettings {

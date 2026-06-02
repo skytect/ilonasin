@@ -12,9 +12,7 @@ type SnapshotClient interface {
 
 func (s Service) LoadManagementSnapshot(ctx context.Context) (ManagementSnapshotResponse, error) {
 	out := ManagementSnapshotResponse{Runtime: s.Runtime}
-	for _, row := range s.Registry.List() {
-		out.Providers = append(out.Providers, providerInstanceFromProvider(row))
-	}
+	out.Providers = snapshotProviderInstances(s.Providers)
 	if s.Tokens != nil {
 		tokens, err := s.ListLocalTokens(ctx)
 		if err != nil {
@@ -27,13 +25,13 @@ func (s Service) LoadManagementSnapshot(ctx context.Context) (ManagementSnapshot
 		if err != nil {
 			return ManagementSnapshotResponse{}, err
 		}
-		rows = visibleUpstreamCredentials(rows, s.Registry)
+		rows = visibleUpstreamCredentials(rows, s.Providers)
 		out.UpstreamCredentials = upstreamCredentialsFromCredentials(rows)
 		policies, err := s.Upstreams.ListFallbackPolicies(ctx)
 		if err != nil {
 			return ManagementSnapshotResponse{}, err
 		}
-		policies = visibleFallbackPolicies(policies, s.Registry)
+		policies = visibleFallbackPolicies(policies, s.Providers)
 		out.FallbackPolicies = fallbackPoliciesFromCredentials(policies)
 	}
 	if s.OAuth != nil {
@@ -41,13 +39,13 @@ func (s Service) LoadManagementSnapshot(ctx context.Context) (ManagementSnapshot
 		if err != nil {
 			return ManagementSnapshotResponse{}, err
 		}
-		rows = visibleOAuthCredentials(rows, s.Registry)
+		rows = visibleOAuthCredentials(rows, s.Providers)
 		out.OAuthCredentials = oauthCredentialsFromCredentials(rows)
 		accounts, err := s.OAuth.ListProviderAccounts(ctx)
 		if err != nil {
 			return ManagementSnapshotResponse{}, err
 		}
-		accounts = visibleProviderAccounts(accounts, s.Registry)
+		accounts = visibleProviderAccounts(accounts, s.Providers)
 		out.ProviderAccounts = providerAccountsFromCredentials(accounts)
 	}
 	if s.ModelCache != nil {

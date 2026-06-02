@@ -21,7 +21,7 @@ type managementRuntime struct {
 	server     *http.Server
 }
 
-func startManagementServer(ctx context.Context, homeDir, configPath, databasePath, bind string, registry provider.Registry, store *sqlite.Store, keepalive config.SubscriptionKeepaliveConfig, ioLogger *logging.IOLogger, captureUpstreamIO bool, loggers ...*slog.Logger) (managementRuntime, error) {
+func startManagementServer(ctx context.Context, homeDir, configPath, databasePath, bind string, registry provider.Registry, store *sqlite.Store, keepalive config.SubscriptionKeepaliveConfig, ioLogger *logging.IOLogger, captureUpstreamIO bool, secretRefresh func(context.Context, ...string), loggers ...*slog.Logger) (managementRuntime, error) {
 	logger := firstSlogLogger(loggers)
 	refresher := provider.NewHTTPOAuthRefresher(nil)
 	refresher.Logger = logger
@@ -37,13 +37,18 @@ func startManagementServer(ctx context.Context, homeDir, configPath, databasePat
 		OAuthRefresher: refresher,
 		OAuthLogin:     login,
 		Logger:         logger,
+		SecretsChanged: secretRefresh,
+	}
+	tokens := credentials.Service{Repo: store}
+	if ioLogger != nil {
+		tokens.EphemeralSecretAdded = ioLogger.AddEphemeralSecret
 	}
 	return startManagementServerWithService(ctx, homeDir, configPath, databasePath, management.Service{
 		Runtime: management.RuntimeStatus{
 			Bind:      bind,
 			CaptureIO: ioLogger != nil,
 		},
-		Tokens:            credentials.Service{Repo: store},
+		Tokens:            tokens,
 		Registry:          registry,
 		Upstreams:         upstreams,
 		UpstreamMutations: upstreams,

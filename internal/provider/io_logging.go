@@ -23,7 +23,7 @@ func (a HTTPChatAdapter) recordUpstreamBody(instance Instance, credentialID int6
 		Status:      status,
 		ContentType: contentType,
 		Bytes:       len(body),
-		Body:        logging.ScrubIOBody(body),
+		Body:        a.IOLogger.ScrubBody(body),
 		Meta: map[string]any{
 			"provider_instance": instance.ID,
 			"provider_type":     instance.Type,
@@ -49,7 +49,7 @@ func (a HTTPChatAdapter) recordUpstreamSSE(instance Instance, credentialID int64
 		Status:      status,
 		ContentType: "text/event-stream",
 		Bytes:       len(body),
-		Body:        logging.ScrubIOBody(body),
+		Body:        a.IOLogger.ScrubBody(body),
 		Meta: map[string]any{
 			"provider_instance": instance.ID,
 			"provider_type":     instance.Type,

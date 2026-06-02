@@ -66,8 +66,8 @@ func (s *Server) ioLogInput(r *http.Request, body []byte) {
 		Route:       routeLabel(r),
 		ContentType: r.Header.Get("Content-Type"),
 		Bytes:       len(body),
-		Body:        logging.ScrubIOBody(body),
-		Meta:        ioRequestMeta(body),
+		Body:        s.scrubIOBody(body),
+		Meta:        s.ioRequestMeta(body),
 	})
 }
 
@@ -94,7 +94,7 @@ func (s *Server) ioLogCapturedOutput(r *http.Request, status int, contentType st
 		Status:      status,
 		ContentType: contentType,
 		Bytes:       bytes,
-		Body:        logging.ScrubIOBody(body),
+		Body:        s.scrubIOBody(body),
 	}
 	if truncated {
 		record.Meta = map[string]any{"body_truncated": true}
@@ -114,8 +114,22 @@ func (s *Server) ioLogOutputBody(r *http.Request, status int, contentType string
 		Status:      status,
 		ContentType: contentType,
 		Bytes:       len(body),
-		Body:        logging.ScrubIOBody(body),
+		Body:        s.scrubIOBody(body),
 	})
+}
+
+func (s *Server) scrubIOBody(body []byte) string {
+	if s.ioLogger == nil {
+		return logging.ScrubIOBody(body)
+	}
+	return s.ioLogger.ScrubBody(body)
+}
+
+func (s *Server) scrubIOText(value string) string {
+	if s.ioLogger == nil {
+		return logging.ScrubIOText(value)
+	}
+	return s.ioLogger.ScrubText(value)
 }
 
 func (s *Server) ioLog(r *http.Request, record logging.IORecord) {
@@ -145,7 +159,7 @@ type ioRequestMetadata struct {
 	InputMessageRoles []string `json:"input_message_roles,omitempty"`
 }
 
-func ioRequestMeta(body []byte) *ioRequestMetadata {
+func (s *Server) ioRequestMeta(body []byte) *ioRequestMetadata {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil
@@ -153,6 +167,7 @@ func ioRequestMeta(body []byte) *ioRequestMetadata {
 	meta := &ioRequestMetadata{}
 	if value, ok := raw["model"]; ok {
 		_ = json.Unmarshal(value, &meta.Model)
+		meta.Model = s.scrubIOText(meta.Model)
 	}
 	if value, ok := raw["stream"]; ok {
 		var stream bool
@@ -164,7 +179,7 @@ func ioRequestMeta(body []byte) *ioRequestMetadata {
 	meta.ToolCount = rawArrayLength(raw["tools"])
 	if input, ok := raw["input"]; ok {
 		meta.InputCount = rawArrayLength(input)
-		meta.InputItemTypes, meta.InputMessageRoles = inputShape(input)
+		meta.InputItemTypes, meta.InputMessageRoles = s.inputShape(input)
 	}
 	if meta.Model == "" && meta.Stream == nil && meta.MessageCount == 0 && meta.InputCount == 0 && meta.ToolCount == 0 {
 		return nil
@@ -183,7 +198,7 @@ func rawArrayLength(raw json.RawMessage) int {
 	return len(items)
 }
 
-func inputShape(raw json.RawMessage) ([]string, []string) {
+func (s *Server) inputShape(raw json.RawMessage) ([]string, []string) {
 	var items []struct {
 		Type string `json:"type"`
 		Role string `json:"role"`
@@ -194,13 +209,13 @@ func inputShape(raw json.RawMessage) ([]string, []string) {
 	types := map[string]bool{}
 	roles := map[string]bool{}
 	for _, item := range items {
-		typ := item.Type
+		typ := s.scrubIOText(item.Type)
 		if typ == "" {
 			typ = "<missing>"
 		}
 		types[typ] = true
 		if item.Role != "" {
-			roles[item.Role] = true
+			roles[s.scrubIOText(item.Role)] = true
 		}
 	}
 	return sortedKeys(types), sortedKeys(roles)

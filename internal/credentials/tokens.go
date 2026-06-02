@@ -67,8 +67,9 @@ type LocalTokenVerifier interface {
 var ErrUnauthorized = errors.New("unauthorized")
 
 type Service struct {
-	Repo LocalTokenRepository
-	Now  func() time.Time
+	Repo                 LocalTokenRepository
+	Now                  func() time.Time
+	EphemeralSecretAdded func(string)
 }
 
 func GenerateToken() (string, error) {
@@ -115,6 +116,9 @@ func (s Service) Create(ctx context.Context, label string) (CreatedLocalToken, e
 	})
 	if err != nil {
 		return CreatedLocalToken{}, err
+	}
+	if s.EphemeralSecretAdded != nil {
+		s.EphemeralSecretAdded(token)
 	}
 	return CreatedLocalToken{Token: token, Metadata: meta}, nil
 }

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -19,9 +20,16 @@ import (
 const IOLogFileName = "ilonasin-io.log"
 
 type IOLogger struct {
-	mu   sync.Mutex
-	file *os.File
-	enc  *json.Encoder
+	mu       sync.Mutex
+	file     *os.File
+	enc      *json.Encoder
+	scrubber *IOScrubber
+}
+
+type IOScrubber struct {
+	mu         sync.RWMutex
+	configured []string
+	ephemeral  []string
 }
 
 type IORecord struct {
@@ -49,7 +57,7 @@ func SetupIO(cfg config.Config) (*IOLogger, error) {
 		return nil, err
 	}
 	home.SecureFile(f.Name())
-	return &IOLogger{file: f, enc: json.NewEncoder(f)}, nil
+	return &IOLogger{file: f, enc: json.NewEncoder(f), scrubber: NewIOScrubber(nil)}, nil
 }
 
 func (l *IOLogger) Close() error {
@@ -71,7 +79,81 @@ func (l *IOLogger) Record(record IORecord) {
 	_ = l.enc.Encode(record)
 }
 
+func (l *IOLogger) ReplaceConfiguredSecrets(secrets []string) {
+	if l == nil {
+		return
+	}
+	l.ensureScrubber().ReplaceConfiguredSecrets(secrets)
+}
+
+func (l *IOLogger) AddEphemeralSecret(secret string) {
+	if l == nil {
+		return
+	}
+	l.ensureScrubber().AddEphemeralSecret(secret)
+}
+
+func (l *IOLogger) ScrubBody(body []byte) string {
+	if l == nil {
+		return ScrubIOBody(body)
+	}
+	return l.ensureScrubber().ScrubBody(body)
+}
+
+func (l *IOLogger) ScrubText(value string) string {
+	if l == nil {
+		return ScrubIOText(value)
+	}
+	return l.ensureScrubber().ScrubText(value)
+}
+
+func (l *IOLogger) ensureScrubber() *IOScrubber {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.scrubber == nil {
+		l.scrubber = NewIOScrubber(nil)
+	}
+	return l.scrubber
+}
+
 func ScrubIOBody(body []byte) string {
+	return NewIOScrubber(nil).ScrubBody(body)
+}
+
+func ScrubIOText(value string) string {
+	return NewIOScrubber(nil).ScrubText(value)
+}
+
+func NewIOScrubber(secrets []string) *IOScrubber {
+	s := &IOScrubber{}
+	s.ReplaceConfiguredSecrets(secrets)
+	return s
+}
+
+func (s *IOScrubber) ReplaceConfiguredSecrets(secrets []string) {
+	if s == nil {
+		return
+	}
+	clean := normalizeConfiguredSecrets(secrets)
+	s.mu.Lock()
+	s.configured = clean
+	s.mu.Unlock()
+}
+
+func (s *IOScrubber) AddEphemeralSecret(secret string) {
+	if s == nil {
+		return
+	}
+	clean := normalizeConfiguredSecrets([]string{secret})
+	if len(clean) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ephemeral = appendUniqueSecrets(s.ephemeral, clean)
+}
+
+func (s *IOScrubber) ScrubBody(body []byte) string {
 	if len(body) == 0 {
 		return ""
 	}
@@ -83,19 +165,23 @@ func ScrubIOBody(body []byte) string {
 	dec := json.NewDecoder(bytes.NewReader(trimmed))
 	dec.UseNumber()
 	if err := dec.Decode(&value); err == nil && dec.Decode(&struct{}{}) == io.EOF {
-		clean := scrubJSON(value)
+		clean := s.scrubJSON(value)
 		out, err := json.Marshal(clean)
 		if err == nil {
 			return string(out)
 		}
 	}
-	if clean, ok := scrubFormBody(trimmed); ok {
+	if clean, ok := s.scrubFormBody(trimmed); ok {
 		return clean
 	}
-	return scrubSecretMarkers(string(body))
+	return s.scrubString(string(body))
 }
 
-func scrubJSON(value any) any {
+func (s *IOScrubber) ScrubText(value string) string {
+	return s.scrubString(value)
+}
+
+func (s *IOScrubber) scrubJSON(value any) any {
 	switch v := value.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(v))
@@ -104,15 +190,17 @@ func scrubJSON(value any) any {
 				out[key] = "[redacted]"
 				continue
 			}
-			out[key] = scrubJSON(child)
+			out[key] = s.scrubJSON(child)
 		}
 		return out
 	case []any:
 		out := make([]any, len(v))
 		for i, child := range v {
-			out[i] = scrubJSON(child)
+			out[i] = s.scrubJSON(child)
 		}
 		return out
+	case string:
+		return s.scrubString(v)
 	default:
 		return v
 	}
@@ -126,15 +214,38 @@ func scrubSecretMarkers(value string) string {
 	return value
 }
 
+func (s *IOScrubber) scrubString(value string) string {
+	value = scrubSecretMarkers(value)
+	for _, secret := range s.configuredSecrets() {
+		value = strings.ReplaceAll(value, secret, "[redacted]")
+	}
+	return value
+}
+
+func (s *IOScrubber) configuredSecrets() []string {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]string, 0, len(s.configured)+len(s.ephemeral))
+	out = append(out, s.configured...)
+	out = append(out, s.ephemeral...)
+	sort.SliceStable(out, func(i, j int) bool {
+		return len(out[i]) > len(out[j])
+	})
+	return out
+}
+
 var (
 	bearerPattern     = regexp.MustCompile(`(?i)Bearer\s+[A-Za-z0-9._~+/=-]+`)
 	localTokenPattern = regexp.MustCompile(`iln_[A-Za-z0-9._~+/=-]+`)
 	keyValuePattern   = regexp.MustCompile(`(?i)([A-Za-z][A-Za-z0-9 _.-]{1,64})(\s*[:=]\s*)([^\s&;,]+)`)
 )
 
-func scrubFormBody(body []byte) (string, bool) {
+func (s *IOScrubber) scrubFormBody(body []byte) (string, bool) {
 	text := string(body)
-	if !strings.Contains(text, "=") {
+	if !strings.Contains(text, "=") || strings.ContainsAny(text, "\r\n") {
 		return "", false
 	}
 	values, err := url.ParseQuery(text)
@@ -149,7 +260,7 @@ func scrubFormBody(body []byte) (string, bool) {
 				changed = true
 				continue
 			}
-			clean := scrubSecretMarkers(items[i])
+			clean := s.scrubString(items[i])
 			if clean != items[i] {
 				items[i] = clean
 				changed = true
@@ -161,6 +272,34 @@ func scrubFormBody(body []byte) (string, bool) {
 		return "", false
 	}
 	return values.Encode(), true
+}
+
+func normalizeConfiguredSecrets(secrets []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(secrets))
+	for _, secret := range secrets {
+		secret = strings.TrimSpace(secret)
+		if len(secret) < 8 || seen[secret] {
+			continue
+		}
+		seen[secret] = true
+		out = append(out, secret)
+	}
+	return out
+}
+
+func appendUniqueSecrets(existing, values []string) []string {
+	seen := map[string]bool{}
+	for _, value := range existing {
+		seen[value] = true
+	}
+	for _, value := range values {
+		if !seen[value] {
+			existing = append(existing, value)
+			seen[value] = true
+		}
+	}
+	return existing
 }
 
 func redactHeaderLines(value string) string {

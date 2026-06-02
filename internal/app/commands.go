@@ -22,8 +22,12 @@ func Serve(opts Options) error {
 	}
 	defer rt.cleanup()
 	defer rt.Store.Close()
+	if err := refreshIOConfiguredSecrets(context.Background(), rt.IOLogger, rt.Store); err != nil {
+		return err
+	}
 	captureUpstreamIO := rt.IOLogger != nil && logging.DebugEnabled(rt.Config.Logging.Level)
-	mgmt, err := startManagementServer(context.Background(), rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database, rt.Config.Server.Bind, rt.Registry, rt.Store, rt.Config.SubscriptionKeepalive, rt.IOLogger, captureUpstreamIO, rt.Logger)
+	secretRefresh := ioSecretRefreshHook(context.Background(), rt.IOLogger, rt.Store)
+	mgmt, err := startManagementServer(context.Background(), rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database, rt.Config.Server.Bind, rt.Registry, rt.Store, rt.Config.SubscriptionKeepalive, rt.IOLogger, captureUpstreamIO, secretRefresh, rt.Logger)
 	if err != nil {
 		return err
 	}
@@ -35,11 +39,15 @@ func Serve(opts Options) error {
 	)
 
 	auth := credentials.Service{Repo: rt.Store}
+	if rt.IOLogger != nil {
+		auth.EphemeralSecretAdded = rt.IOLogger.AddEphemeralSecret
+	}
 	upstreams := &credentials.UpstreamService{
 		Registry:       rt.Registry,
 		Repo:           rt.Store,
 		OAuthRefresher: provider.NewHTTPOAuthRefresher(nil),
 		Logger:         rt.Logger,
+		SecretsChanged: secretRefresh,
 	}
 	refresher := provider.NewHTTPOAuthRefresher(nil)
 	refresher.Logger = rt.Logger

@@ -112,6 +112,7 @@ type UpstreamService struct {
 	Now            func() time.Time
 	DeviceLogins   *OAuthDeviceLoginSessions
 	Logger         *slog.Logger
+	SecretsChanged func(context.Context, ...string)
 	refreshMu      sync.Mutex
 	refreshes      *OAuthRefreshCalls
 }
@@ -311,6 +312,7 @@ func (s *UpstreamService) AddAPIKey(ctx context.Context, providerInstanceID, lab
 	}, apiKey)
 	if err == nil {
 		s.logInfo(ctx, "credential_created", slog.String("kind", "api_key"), slog.String("provider_instance", providerInstanceID), slog.Int64("credential_id", meta.ID))
+		s.notifySecretsChanged(ctx, apiKey)
 	}
 	return meta, err
 }
@@ -351,6 +353,7 @@ func (s *UpstreamService) AddOAuthCredential(ctx context.Context, input NewOAuth
 	created, err := s.Repo.UpsertOAuthCredentialForAccountHash(ctx, meta, accessToken, refreshToken)
 	if err == nil {
 		s.logInfo(ctx, "credential_created", slog.String("kind", "oauth"), slog.String("provider_instance", input.ProviderInstanceID), slog.Int64("credential_id", created.ID))
+		s.notifySecretsChanged(ctx, accessToken, refreshToken)
 	}
 	return created, err
 }
@@ -661,6 +664,7 @@ func (s *UpstreamService) refreshOAuthCredential(ctx context.Context, credential
 	}); err != nil {
 		return err
 	}
+	s.notifySecretsChanged(ctx, accessToken, newRefreshToken)
 	if strings.TrimSpace(result.IDToken) != "" {
 		claims, err := parseChatGPTIDTokenClaims(result.IDToken)
 		if err == nil && claims.AccountID != "" && AccountHash(instance.Type, credential.ProviderInstanceID, claims.AccountID) == credential.AccountHash {
@@ -674,6 +678,12 @@ func (s *UpstreamService) refreshOAuthCredential(ctx context.Context, credential
 		}
 	}
 	return nil
+}
+
+func (s *UpstreamService) notifySecretsChanged(ctx context.Context, secrets ...string) {
+	if s.SecretsChanged != nil {
+		s.SecretsChanged(ctx, secrets...)
+	}
 }
 
 func firstNonEmpty(values ...string) string {

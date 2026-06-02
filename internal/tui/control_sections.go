@@ -64,13 +64,6 @@ func (m Model) apiSummaryBody(width int) string {
 		),
 	}
 	b.WriteString(renderMetricCardGrid(width, cards))
-	b.WriteByte('\n')
-	b.WriteString(renderKeyMap(width, []keyHint{
-		{"n", "new local token"},
-		{"d", "disable selected token"},
-		{"[/]", "focus pane"},
-		{"1-4", "jump section"},
-	}))
 	return strings.TrimRight(b.String(), "\n")
 }
 

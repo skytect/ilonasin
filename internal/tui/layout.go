@@ -24,7 +24,7 @@ func (m Model) View() string {
 	}
 	b.WriteString(m.renderDashboard())
 	b.WriteByte('\n')
-	b.WriteString(clipPlainLine(m.footerLine(), width))
+	b.WriteString(clipPlainLine(m.footerLine(width), width))
 	b.WriteByte('\n')
 	return b.String()
 }
@@ -64,17 +64,36 @@ func (m Model) statusLine() string {
 	return ""
 }
 
-func (m Model) footerLine() string {
+func (m Model) footerLine(width int) string {
+	hints := []keyHint{
+		{"tab", "section"},
+		{"1-4", "jump"},
+		{"[/]", "pane"},
+		{"j/k", "move"},
+		{"pg", "page"},
+	}
 	switch m.activeTab {
 	case tabAPI:
-		return "tab switch  [/ ] pane  up/down select token  pgup/pgdown scroll pane  n new token  d disable token  q quit"
+		hints = append(hints,
+			keyHint{"n", "new token"},
+			keyHint{"d", "disable"},
+		)
 	case tabProviders:
-		return "tab switch  [/ ] pane  up/down scroll pane  a add key  x disable key  l login  o/r OAuth  f/F fallback  q quit"
+		hints = append(hints,
+			keyHint{"a", "add key"},
+			keyHint{"x", "disable"},
+			keyHint{"l", "login"},
+			keyHint{"o/r", "oauth"},
+			keyHint{"f/F", "fallback"},
+		)
 	case tabUsage:
-		return "tab switch  [/ ] pane  up/down scroll pane  home/end jump pane  u refresh usage  q quit"
+		hints = append(hints, keyHint{"u", "refresh"})
 	case tabLogs:
-		return "tab switch  [/ ] pane  up/down scroll pane  home/end jump pane  p prune  q quit"
-	default:
-		return "tab switch  up/down scroll  q quit"
+		hints = append(hints, keyHint{"p", "prune"})
 	}
+	hints = append(hints,
+		keyHint{"home/end", "jump"},
+		keyHint{"q", "quit"},
+	)
+	return renderKeyMap(width, hints)
 }

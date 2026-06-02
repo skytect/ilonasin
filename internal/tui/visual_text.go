@@ -1,6 +1,10 @@
 package tui
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/charmbracelet/x/ansi"
+)
 
 func accountMeta(parts ...string) string {
 	out := make([]string, 0, len(parts))
@@ -100,19 +104,26 @@ type keyHint struct {
 
 func renderKeyMap(width int, hints []keyHint) string {
 	parts := make([]string, 0, len(hints))
+	compactParts := make([]string, 0, len(hints))
 	for _, hint := range hints {
 		key := safeChromeDisplay(hint.key)
 		label := safeChromeDisplay(hint.label)
 		if key == "" || label == "" {
 			continue
 		}
-		parts = append(parts, chipStyle.Render(key)+" "+mutedStyle.Render(label))
+		keyChip := chipStyle.Render(key)
+		parts = append(parts, keyChip+" "+mutedStyle.Render(label))
+		compactParts = append(compactParts, keyChip)
 	}
 	line := strings.Join(parts, "  ")
-	if width > 0 && len(line) > width {
-		return mutedStyle.Render("keys") + " " + strings.Join(parts, " ")
+	if width <= 0 || ansi.StringWidth(line) <= width {
+		return line
 	}
-	return line
+	compact := strings.Join(compactParts, " ")
+	if ansi.StringWidth(compact) <= width {
+		return compact
+	}
+	return clipPlainLine(compact, width)
 }
 
 func safeMetricLabel(value string) string {

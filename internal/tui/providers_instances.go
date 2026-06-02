@@ -46,11 +46,4 @@ func (m Model) writeProviderInstances(b *strings.Builder) {
 		cards = append(cards, renderMetricAccentCard(metricCardWidth(width), lipgloss.Color("110"), lines...))
 	}
 	b.WriteString(renderMetricCardGrid(width, cards))
-	b.WriteByte('\n')
-	b.WriteString(renderKeyMap(width, []keyHint{
-		{"a", "add API key"},
-		{"x", "disable key"},
-		{"l", "OAuth login"},
-		{"f/F", "fallback on/off"},
-	}))
 }

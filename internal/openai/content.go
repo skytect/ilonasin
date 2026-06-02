@@ -72,37 +72,36 @@ func validateRawUserContent(raw json.RawMessage, index int) error {
 	}
 	for i, part := range parts {
 		if _, err := parseContentPart(part, i); err != nil {
-			return fmt.Errorf("messages[%d].content[%d] is invalid", index, i)
+			return fmt.Errorf("messages[%d].%w", index, err)
 		}
 	}
 	return nil
 }
 
 func parseContentPart(raw map[string]json.RawMessage, index int) (ChatContentPart, error) {
-	for key := range raw {
-		switch key {
-		case "type", "text", "image_url":
-		default:
-			return ChatContentPart{}, fmt.Errorf("content[%d] contains unsupported fields", index)
-		}
-	}
 	typ, err := requiredRawString(raw["type"], fmt.Sprintf("content[%d].type", index))
 	if err != nil {
 		return ChatContentPart{}, err
 	}
 	switch typ {
 	case "text":
+		if key, ok := firstUnsupportedRawField(raw, "type", "text", "image_url"); ok {
+			return ChatContentPart{}, fmt.Errorf("content[%d].%s is unsupported", index, key)
+		}
 		text, err := requiredRawString(raw["text"], fmt.Sprintf("content[%d].text", index))
 		if err != nil {
 			return ChatContentPart{}, err
 		}
 		if _, ok := raw["image_url"]; ok {
-			return ChatContentPart{}, fmt.Errorf("content[%d] contains unsupported fields", index)
+			return ChatContentPart{}, fmt.Errorf("content[%d].image_url is unsupported", index)
 		}
 		return ChatContentPart{Type: "text", Text: text}, nil
 	case "image_url":
+		if key, ok := firstUnsupportedRawField(raw, "type", "text", "image_url"); ok {
+			return ChatContentPart{}, fmt.Errorf("content[%d].%s is unsupported", index, key)
+		}
 		if _, ok := raw["text"]; ok {
-			return ChatContentPart{}, fmt.Errorf("content[%d] contains unsupported fields", index)
+			return ChatContentPart{}, fmt.Errorf("content[%d].text is unsupported", index)
 		}
 		imageURL, detail, err := parseImageURLPart(raw["image_url"], index)
 		if err != nil {
@@ -122,12 +121,8 @@ func parseImageURLPart(raw json.RawMessage, index int) (string, string, error) {
 	if err := json.Unmarshal(raw, &obj); err != nil {
 		return "", "", fmt.Errorf("content[%d].image_url must be an object", index)
 	}
-	for key := range obj {
-		switch key {
-		case "url", "detail":
-		default:
-			return "", "", fmt.Errorf("content[%d].image_url contains unsupported fields", index)
-		}
+	if key, ok := firstUnsupportedRawField(obj, "url", "detail"); ok {
+		return "", "", fmt.Errorf("content[%d].image_url.%s is unsupported", index, key)
 	}
 	url, err := requiredRawString(obj["url"], fmt.Sprintf("content[%d].image_url.url", index))
 	if err != nil {

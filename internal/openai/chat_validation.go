@@ -84,6 +84,19 @@ func (r ChatCompletionRequest) Validate() error {
 	if !r.Stream && r.StreamOptions != nil {
 		return errors.New("stream_options requires stream: true")
 	}
+	if r.StreamOptions != nil {
+		body, err := json.Marshal(r.StreamOptions)
+		if err != nil {
+			return err
+		}
+		rawStream := []byte("false")
+		if r.Stream {
+			rawStream = []byte("true")
+		}
+		if err := validateRawStreamOptions(map[string]json.RawMessage{"stream": rawStream, "stream_options": body}); err != nil {
+			return err
+		}
+	}
 	if err := validateStop(r.Stop); err != nil {
 		return err
 	}
@@ -133,6 +146,27 @@ func validateTopLevelKeys(raw map[string]json.RawMessage) error {
 		}
 	}
 	return nil
+}
+
+func firstUnsupportedRawField(raw map[string]json.RawMessage, allowed ...string) (string, bool) {
+	if len(raw) == 0 {
+		return "", false
+	}
+	allowedSet := make(map[string]bool, len(allowed))
+	for _, key := range allowed {
+		allowedSet[key] = true
+	}
+	keys := make([]string, 0, len(raw))
+	for key := range raw {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if !allowedSet[key] {
+			return key, true
+		}
+	}
+	return "", false
 }
 
 func validateRawPrediction(raw map[string]json.RawMessage) error {
@@ -391,12 +425,8 @@ func validateRawTool(raw json.RawMessage, index int) (string, error) {
 	if err := json.Unmarshal(raw, &tool); err != nil {
 		return "", fmt.Errorf("tools[%d] must be an object", index)
 	}
-	for key := range tool {
-		switch key {
-		case "type", "function":
-		default:
-			return "", fmt.Errorf("tools[%d] contains unsupported fields", index)
-		}
+	if key, ok := firstUnsupportedRawField(tool, "type", "function"); ok {
+		return "", fmt.Errorf("tools[%d].%s is unsupported", index, key)
 	}
 	if err := requireRawStringValue(tool["type"], "function", fmt.Sprintf("tools[%d].type", index)); err != nil {
 		return "", err
@@ -409,12 +439,8 @@ func validateRawTool(raw json.RawMessage, index int) (string, error) {
 	if err := json.Unmarshal(rawFunction, &function); err != nil {
 		return "", fmt.Errorf("tools[%d].function must be an object", index)
 	}
-	for key := range function {
-		switch key {
-		case "name", "description", "parameters", "strict":
-		default:
-			return "", fmt.Errorf("tools[%d].function contains unsupported fields", index)
-		}
+	if key, ok := firstUnsupportedRawField(function, "name", "description", "parameters", "strict"); ok {
+		return "", fmt.Errorf("tools[%d].function.%s is unsupported", index, key)
 	}
 	name, err := requiredRawString(function["name"], fmt.Sprintf("tools[%d].function.name", index))
 	if err != nil {
@@ -474,12 +500,8 @@ func validateRawToolChoice(raw map[string]json.RawMessage, toolNames map[string]
 	if err := json.Unmarshal(value, &choice); err != nil {
 		return errors.New("tool_choice must be none, auto, required, or a named function")
 	}
-	for key := range choice {
-		switch key {
-		case "type", "function":
-		default:
-			return errors.New("tool_choice contains unsupported fields")
-		}
+	if key, ok := firstUnsupportedRawField(choice, "type", "function"); ok {
+		return fmt.Errorf("tool_choice.%s is unsupported", key)
 	}
 	if err := requireRawStringValue(choice["type"], "function", "tool_choice.type"); err != nil {
 		return err
@@ -492,10 +514,8 @@ func validateRawToolChoice(raw map[string]json.RawMessage, toolNames map[string]
 	if err := json.Unmarshal(rawFunction, &function); err != nil {
 		return errors.New("tool_choice.function must be an object")
 	}
-	for key := range function {
-		if key != "name" {
-			return errors.New("tool_choice.function contains unsupported fields")
-		}
+	if key, ok := firstUnsupportedRawField(function, "name"); ok {
+		return fmt.Errorf("tool_choice.function.%s is unsupported", key)
 	}
 	name, err := requiredRawString(function["name"], "tool_choice.function.name")
 	if err != nil {
@@ -811,8 +831,8 @@ func validateRawStreamOptions(raw map[string]json.RawMessage) error {
 	if err := json.Unmarshal(options, &obj); err != nil {
 		return errors.New("stream_options must be an object")
 	}
-	if len(obj) != 1 {
-		return errors.New("stream_options only supports include_usage")
+	if key, ok := firstUnsupportedRawField(obj, "include_usage"); ok {
+		return fmt.Errorf("stream_options.%s is unsupported", key)
 	}
 	rawInclude, ok := obj["include_usage"]
 	if !ok {
@@ -838,23 +858,21 @@ func validateRawMessages(raw json.RawMessage) error {
 		if err != nil {
 			return err
 		}
-		for key := range msg {
-			switch role {
-			case "system", "user":
-				if key != "role" && key != "content" {
-					return fmt.Errorf("messages[%d] contains unsupported fields", i)
-				}
-			case "assistant":
-				if key != "role" && key != "content" && key != "tool_calls" {
-					return fmt.Errorf("messages[%d] contains unsupported fields", i)
-				}
-			case "tool":
-				if key != "role" && key != "content" && key != "tool_call_id" {
-					return fmt.Errorf("messages[%d] contains unsupported fields", i)
-				}
-			default:
-				return fmt.Errorf("messages[%d].role is unsupported", i)
+		switch role {
+		case "system", "user":
+			if key, ok := firstUnsupportedRawField(msg, "role", "content"); ok {
+				return fmt.Errorf("messages[%d].%s is unsupported", i, key)
 			}
+		case "assistant":
+			if key, ok := firstUnsupportedRawField(msg, "role", "content", "tool_calls"); ok {
+				return fmt.Errorf("messages[%d].%s is unsupported", i, key)
+			}
+		case "tool":
+			if key, ok := firstUnsupportedRawField(msg, "role", "content", "tool_call_id"); ok {
+				return fmt.Errorf("messages[%d].%s is unsupported", i, key)
+			}
+		default:
+			return fmt.Errorf("messages[%d].role is unsupported", i)
 		}
 		switch role {
 		case "system":

@@ -252,12 +252,8 @@ func validateRawAssistantToolCall(raw json.RawMessage, messageIndex, callIndex i
 	if err := json.Unmarshal(raw, &call); err != nil {
 		return fmt.Errorf("messages[%d].tool_calls[%d] must be an object", messageIndex, callIndex)
 	}
-	for key := range call {
-		switch key {
-		case "id", "type", "function":
-		default:
-			return fmt.Errorf("messages[%d].tool_calls[%d] contains unsupported fields", messageIndex, callIndex)
-		}
+	if key, ok := firstUnsupportedRawField(call, "id", "type", "function"); ok {
+		return fmt.Errorf("messages[%d].tool_calls[%d].%s is unsupported", messageIndex, callIndex, key)
 	}
 	id, err := requiredRawString(call["id"], fmt.Sprintf("messages[%d].tool_calls[%d].id", messageIndex, callIndex))
 	if err != nil {
@@ -277,12 +273,8 @@ func validateRawAssistantToolCall(raw json.RawMessage, messageIndex, callIndex i
 	if err := json.Unmarshal(rawFunction, &function); err != nil {
 		return fmt.Errorf("messages[%d].tool_calls[%d].function must be an object", messageIndex, callIndex)
 	}
-	for key := range function {
-		switch key {
-		case "name", "arguments":
-		default:
-			return fmt.Errorf("messages[%d].tool_calls[%d].function contains unsupported fields", messageIndex, callIndex)
-		}
+	if key, ok := firstUnsupportedRawField(function, "name", "arguments"); ok {
+		return fmt.Errorf("messages[%d].tool_calls[%d].function.%s is unsupported", messageIndex, callIndex, key)
 	}
 	name, err := requiredRawString(function["name"], fmt.Sprintf("messages[%d].tool_calls[%d].function.name", messageIndex, callIndex))
 	if err != nil {

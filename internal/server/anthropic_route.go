@@ -36,23 +36,27 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request,
 	}
 	addr, err := s.resolveAnthropicModelAddress(req.Model)
 	if err != nil {
+		_ = s.record(r.Context(), earlyAnthropicRequestMetadata(start, token, req, http.StatusBadRequest, "invalid_model"))
 		s.logHTTP(r, http.StatusBadRequest, "anthropic_route", "invalid_model")
 		writeAnthropicError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	instance, ok := s.registry.Get(addr.ProviderInstanceID)
 	if !ok {
+		_ = s.record(r.Context(), earlyAnthropicRequestMetadata(start, token, req, http.StatusNotFound, "provider_not_configured"))
 		s.logHTTP(r, http.StatusNotFound, "anthropic_route", "provider_not_configured")
 		writeAnthropicError(w, http.StatusNotFound, "provider instance is not configured")
 		return
 	}
 	chatReq, err := req.ToChatCompletion(instance.Type)
 	if err != nil {
+		_ = s.record(r.Context(), earlyAnthropicRequestMetadata(start, token, req, http.StatusBadRequest, "unsupported_request"))
 		s.logHTTP(r, http.StatusBadRequest, "anthropic_route", "unsupported_request")
 		writeAnthropicError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if err := chatReq.Validate(); err != nil {
+		s.recordAnthropicEarly(r, start, token, addr, instance, chatReq, req, http.StatusBadRequest, "unsupported_request")
 		s.logHTTP(r, http.StatusBadRequest, "anthropic_route", "unsupported_request")
 		writeAnthropicError(w, http.StatusBadRequest, err.Error())
 		return
@@ -67,6 +71,7 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request,
 	adapter := preflight.Adapter
 	preflight = preflightAdapterRequest(adapter, instance, chatReq)
 	if preflight.failed() {
+		s.recordAnthropicEarly(r, start, token, addr, instance, chatReq, req, preflight.Status, preflight.ErrorClass)
 		s.logHTTP(r, preflight.Status, "anthropic_route", preflight.ErrorClass)
 		writeAnthropicError(w, preflight.Status, preflight.Message)
 		return
@@ -139,7 +144,6 @@ func (s *Server) resolveAnthropicModelAddress(model string) (routing.ModelAddres
 
 func (s *Server) recordAnthropicEarly(r *http.Request, start time.Time, token credentials.VerifiedLocalToken, addr routing.ModelAddress, instance provider.Instance, chatReq openai.ChatCompletionRequest, req anthropic.Request, status int, errorClass string) {
 	requestMeta := requestMetadataBase(start, token, addr, instance, chatReq, metadataEndpointAnthropicMessages, req.Stream)
-	requestMeta.RequestedModel = req.Model
 	requestMeta.MaxOutputTokens = req.MaxOutputTokens()
 	requestMeta.HTTPStatus = status
 	requestMeta.ErrorClass = errorClass

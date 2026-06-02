@@ -32,12 +32,14 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request, token c
 	}
 	addr, err := s.resolveModelAddress(responsesReq.Model)
 	if err != nil {
+		_ = s.record(r.Context(), earlyResponsesRequestMetadata(start, token, responsesReq, http.StatusBadRequest, "invalid_model"))
 		s.logHTTP(r, http.StatusBadRequest, "responses_route", "invalid_model")
 		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "invalid_model")
 		return
 	}
 	instance, ok := s.registry.Get(addr.ProviderInstanceID)
 	if !ok {
+		_ = s.record(r.Context(), earlyResponsesRequestMetadata(start, token, responsesReq, http.StatusNotFound, "provider_not_configured"))
 		s.logHTTP(r, http.StatusNotFound, "responses_route", "provider_not_configured")
 		writeError(w, http.StatusNotFound, "provider instance is not configured", "invalid_request_error", "provider_not_configured")
 		return
@@ -52,17 +54,20 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request, token c
 	adapter := preflight.Adapter
 	chatReq, err := responsesReq.ToChatCompletionRequest(instance.Type)
 	if err != nil {
+		s.recordResponsesEarly(r, start, token, addr, instance, responsesReq, http.StatusBadRequest, "unsupported_request")
 		s.logHTTP(r, http.StatusBadRequest, "responses_route", "unsupported_request")
 		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "unsupported_request")
 		return
 	}
 	if err := chatReq.Validate(); err != nil {
+		s.recordResponsesEarly(r, start, token, addr, instance, responsesReq, http.StatusBadRequest, "unsupported_request")
 		s.logHTTP(r, http.StatusBadRequest, "responses_route", "unsupported_request")
 		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "unsupported_request")
 		return
 	}
 	preflight = preflightAdapterRequest(adapter, instance, chatReq)
 	if preflight.failed() {
+		s.recordResponsesEarly(r, start, token, addr, instance, responsesReq, preflight.Status, preflight.ErrorClass)
 		s.logHTTP(r, preflight.Status, "responses_route", preflight.ErrorClass)
 		writeError(w, preflight.Status, preflight.Message, "invalid_request_error", preflight.ErrorClass)
 		return

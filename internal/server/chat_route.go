@@ -30,18 +30,22 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 		return
 	}
 	if err := req.Validate(); err != nil {
+		_ = s.record(r.Context(), earlyChatRequestMetadata(start, token, req, metadataEndpointChatCompletions, http.StatusBadRequest, "unsupported_request"))
 		s.logHTTP(r, http.StatusBadRequest, "chat_route", "unsupported_request")
 		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "unsupported_request")
 		return
 	}
 	addr, err := s.resolveModelAddress(req.Model)
 	if err != nil {
+		_ = s.record(r.Context(), earlyChatRequestMetadata(start, token, req, metadataEndpointChatCompletions, http.StatusBadRequest, "invalid_model"))
 		s.logHTTP(r, http.StatusBadRequest, "chat_route", "invalid_model")
 		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "invalid_model")
 		return
 	}
 	instance, ok := s.registry.Get(addr.ProviderInstanceID)
 	if !ok {
+		requestMeta := earlyChatRequestMetadata(start, token, req, metadataEndpointChatCompletions, http.StatusNotFound, "provider_not_configured")
+		_ = s.record(r.Context(), requestMeta)
 		s.logHTTP(r, http.StatusNotFound, "chat_route", "provider_not_configured")
 		writeError(w, http.StatusNotFound, "provider instance is not configured", "invalid_request_error", "provider_not_configured")
 		return
@@ -60,6 +64,11 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 	adapter := preflight.Adapter
 	preflight = preflightAdapterRequest(adapter, instance, req)
 	if preflight.failed() {
+		requestMeta := requestMetadataBase(start, token, addr, instance, req, metadataEndpointChatCompletions, req.Stream)
+		requestMeta.HTTPStatus = preflight.Status
+		requestMeta.ErrorClass = preflight.ErrorClass
+		requestMeta.TotalLatencyMS = time.Since(start).Milliseconds()
+		_ = s.record(r.Context(), requestMeta)
 		s.logHTTP(r, preflight.Status, "chat_route", preflight.ErrorClass)
 		writeError(w, preflight.Status, preflight.Message, "invalid_request_error", preflight.ErrorClass)
 		return

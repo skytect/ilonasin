@@ -102,9 +102,15 @@ type credentialPressureKey struct {
 	credentialID       int64
 }
 
+type credentialPressureScope struct {
+	providerInstanceID string
+	providerModelID    string
+}
+
 type credentialPressureTracker struct {
 	mu       sync.Mutex
 	inFlight map[credentialPressureKey]int
+	next     map[credentialPressureScope]int64
 }
 
 type credentialAttemptSlot struct {
@@ -113,7 +119,10 @@ type credentialAttemptSlot struct {
 }
 
 func newCredentialPressureTracker() *credentialPressureTracker {
-	return &credentialPressureTracker{inFlight: map[credentialPressureKey]int{}}
+	return &credentialPressureTracker{
+		inFlight: map[credentialPressureKey]int{},
+		next:     map[credentialPressureScope]int64{},
+	}
 }
 
 func (t *credentialPressureTracker) acquire(addr routing.ModelAddress, credential provider.BearerCredential) func() {
@@ -138,8 +147,8 @@ func (t *credentialPressureTracker) reserveLeast(addr routing.ModelAddress, slot
 		return 0, provider.BearerCredential{}, func() {}, false
 	}
 	t.mu.Lock()
-	best := -1
-	bestCount := 0
+	bestCount := -1
+	candidates := make([]int, 0, len(slots))
 	for i, slot := range slots {
 		credential := slot.credential
 		count := 0
@@ -150,11 +159,16 @@ func (t *credentialPressureTracker) reserveLeast(addr routing.ModelAddress, slot
 				credentialID:       credential.ID,
 			}]
 		}
-		if best == -1 || count < bestCount {
-			best = i
+		switch {
+		case bestCount == -1 || count < bestCount:
 			bestCount = count
+			candidates = candidates[:0]
+			candidates = append(candidates, i)
+		case count == bestCount:
+			candidates = append(candidates, i)
 		}
 	}
+	best := t.reserveLeastCandidate(addr, slots, candidates)
 	if best == -1 {
 		t.mu.Unlock()
 		return 0, provider.BearerCredential{}, func() {}, false
@@ -175,6 +189,62 @@ func (t *credentialPressureTracker) reserveLeast(addr routing.ModelAddress, slot
 			t.release(key)
 		}
 	}, true
+}
+
+func (t *credentialPressureTracker) reserveLeastCandidate(addr routing.ModelAddress, slots []credentialAttemptSlot, candidates []int) int {
+	if len(candidates) == 0 {
+		return -1
+	}
+	if t.next == nil {
+		t.next = map[credentialPressureScope]int64{}
+	}
+	scope := credentialPressureScope{
+		providerInstanceID: addr.ProviderInstanceID,
+		providerModelID:    addr.ProviderModelID,
+	}
+	nextID := t.next[scope]
+	chosen := candidates[0]
+	if nextID != 0 {
+		if candidate, ok := firstCandidateAtOrAfter(slots, candidates, nextID); ok {
+			chosen = candidate
+		}
+	}
+	t.next[scope] = nextCredentialCursor(slots, chosen)
+	return chosen
+}
+
+func firstCandidateAtOrAfter(slots []credentialAttemptSlot, candidates []int, credentialID int64) (int, bool) {
+	start := -1
+	for i, slot := range slots {
+		if slot.credential.ID == credentialID {
+			start = i
+			break
+		}
+	}
+	if start == -1 {
+		return 0, false
+	}
+	candidateSet := make(map[int]bool, len(candidates))
+	for _, candidate := range candidates {
+		candidateSet[candidate] = true
+	}
+	for offset := 0; offset < len(slots); offset++ {
+		index := (start + offset) % len(slots)
+		if candidateSet[index] {
+			return index, true
+		}
+	}
+	return 0, false
+}
+
+func nextCredentialCursor(slots []credentialAttemptSlot, chosen int) int64 {
+	for offset := 1; offset <= len(slots); offset++ {
+		next := slots[(chosen+offset)%len(slots)].credential.ID
+		if next != 0 {
+			return next
+		}
+	}
+	return 0
 }
 
 func (t *credentialPressureTracker) release(key credentialPressureKey) {

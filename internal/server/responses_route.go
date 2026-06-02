@@ -30,7 +30,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request, token c
 		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "invalid_json")
 		return
 	}
-	addr, err := s.resolveModelAddress(responsesReq.Model)
+	addr, err := s.resolveModelAddress(r.Context(), responsesReq.Model)
 	if err != nil {
 		_ = s.record(r.Context(), earlyResponsesRequestMetadata(start, token, responsesReq, http.StatusBadRequest, "invalid_model"))
 		s.logHTTP(r, http.StatusBadRequest, "responses_route", "invalid_model")

@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 
+	"ilonasin/internal/anthropic"
 	"ilonasin/internal/openai"
 )
 
@@ -11,6 +12,18 @@ func countResponsesImages(req openai.ResponsesRequest) int {
 	for _, item := range req.Input {
 		for _, part := range item.Content {
 			if part.Type == "input_image" {
+				count++
+			}
+		}
+	}
+	return count
+}
+
+func countAnthropicImages(req anthropic.Request) int {
+	count := 0
+	for _, msg := range req.Messages {
+		for _, block := range msg.Content {
+			if block.Type == "image" {
 				count++
 			}
 		}

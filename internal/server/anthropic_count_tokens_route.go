@@ -8,7 +8,6 @@ import (
 
 	"ilonasin/internal/anthropic"
 	"ilonasin/internal/credentials"
-	"ilonasin/internal/metadata"
 	"ilonasin/internal/provider"
 	"ilonasin/internal/routing"
 )
@@ -61,47 +60,4 @@ func (s *Server) recordAnthropicCountTokensInvalid(r *http.Request, start time.T
 func (s *Server) recordAnthropicCountTokens(r *http.Request, start time.Time, token credentials.VerifiedLocalToken, req anthropic.Request, addr routing.ModelAddress, instance provider.Instance, status int, errorClass string, inputTokens int) {
 	m := anthropicCountTokensMetadata(start, token, req, addr, instance, status, errorClass, inputTokens)
 	_ = s.record(r.Context(), m)
-}
-
-func anthropicCountTokensMetadata(start time.Time, token credentials.VerifiedLocalToken, req anthropic.Request, addr routing.ModelAddress, instance provider.Instance, status int, errorClass string, inputTokens int) metadata.Request {
-	return metadata.Request{
-		StartedAt:                 start,
-		ClientTokenID:             token.ID,
-		Endpoint:                  metadataEndpointAnthropicCountTokens,
-		Stream:                    false,
-		ProviderType:              safeMetadataToken(instance.Type),
-		MessageCount:              len(req.Messages),
-		ToolCount:                 len(req.Tools),
-		ImageCount:                countAnthropicImages(req),
-		RequestedProviderInstance: addr.ProviderInstanceID,
-		RequestedModel:            req.Model,
-		ResolvedProviderInstance:  addr.ProviderInstanceID,
-		ResolvedModel:             addr.ProviderModelID,
-		MaxOutputTokens:           req.MaxOutputTokens(),
-		HTTPStatus:                status,
-		ErrorClass:                errorClass,
-		PromptTokens:              inputTokens,
-		TotalTokens:               inputTokens,
-		TotalLatencyMS:            countTokensLatencyMS(start),
-	}
-}
-
-func countTokensLatencyMS(start time.Time) int64 {
-	latency := time.Since(start).Milliseconds()
-	if latency < 1 {
-		return 1
-	}
-	return latency
-}
-
-func countAnthropicImages(req anthropic.Request) int {
-	count := 0
-	for _, msg := range req.Messages {
-		for _, block := range msg.Content {
-			if block.Type == "image" {
-				count++
-			}
-		}
-	}
-	return count
 }

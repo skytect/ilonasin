@@ -13,7 +13,7 @@ func (m Model) writeUsageMetrics(b *strings.Builder) {
 	width := m.viewWidth()
 	b.WriteString(renderPaneSubhead(width, "Token usage", fmt.Sprintf("providers %d", len(m.usageRows))))
 	b.WriteByte('\n')
-	if summary := usageMetricsSummaryLine(m.usageRows, m.latencyRows, m.streamRows); summary != "" {
+	if summary := usageMetricsSummaryLine(width, m.usageRows, m.latencyRows, m.streamRows); summary != "" {
 		b.WriteString(summary)
 		b.WriteByte('\n')
 	}
@@ -52,7 +52,7 @@ func (m Model) writeUsageMetrics(b *strings.Builder) {
 	}
 }
 
-func usageMetricsSummaryLine(usageRows []management.UsageSummary, latencyRows []management.LatencySummary, streamRows []management.StreamSummary) string {
+func usageMetricsSummaryLine(width int, usageRows []management.UsageSummary, latencyRows []management.LatencySummary, streamRows []management.StreamSummary) string {
 	requests := 0
 	promptTokens := 0
 	completionTokens := 0
@@ -98,7 +98,7 @@ func usageMetricsSummaryLine(usageRows []management.UsageSummary, latencyRows []
 	if promptTokens > 0 {
 		cacheRate = float64(cacheHitTokens) / float64(promptTokens) * 100
 	}
-	return metricLine(
+	return wrappedMetricLine(width,
 		statusBadge("fresh"),
 		metricChip("requests", fmt.Sprintf("%d", requests)),
 		metricChip("tokens", compactInt(totalTokens)),
@@ -113,13 +113,13 @@ func usageMetricsSummaryLine(usageRows []management.UsageSummary, latencyRows []
 
 func usageSummaryRow(row management.UsageSummary, width int) string {
 	lines := []string{
-		metricLine(
+		wrapTargetedLines(width, wrappedMetricLine(width,
 			statusBadge("fresh"),
-			cardTitleStyle.Render(safeDisplay(row.ProviderInstanceID)),
+			cardTitleStyle.Render(safeFullWrappedDisplay(row.ProviderInstanceID)),
 			metricChip("requests", fmt.Sprintf("%d", row.RequestCount)),
 			metricChip("total", compactInt(row.TotalTokens)),
 			metricChip("cost", compactInt64(row.CostMicrounits)+"u"),
-		),
+		)),
 		compactTokenMixLine(row.PromptTokens, row.CompletionTokens, row.ReasoningTokens, row.CacheHitTokens, row.CacheMissTokens, row.CacheWriteTokens, width),
 	}
 	lines = append(lines, usageRateLines(width,
@@ -144,14 +144,14 @@ func usageRateLines(width int, rates ...rateMetric) []string {
 func latencySummaryRow(row management.LatencySummary, width int) string {
 	state := latencyState(row.AverageLatencyMS)
 	return strings.Join([]string{
-		metricLine(
+		wrapTargetedLines(width, wrappedMetricLine(width,
 			statusBadge(state),
-			cardTitleStyle.Render(safeDisplay(row.ProviderInstanceID)),
+			cardTitleStyle.Render(safeFullWrappedDisplay(row.ProviderInstanceID)),
 			metricChip("requests", fmt.Sprintf("%d", row.RequestCount)),
 			msText("lat", row.AverageLatencyMS),
 			msText("up", row.AverageUpstreamLatencyMS),
 			msText("ttft", row.AverageTimeToFirstTokenMS),
-		),
+		)),
 		strings.Join(latencyShapeLines(width, row), "\n"),
 	}, "\n")
 }

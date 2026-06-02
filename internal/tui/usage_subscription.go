@@ -17,7 +17,7 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 	now := m.nowTime()
 	b.WriteString(subscriptionUsageSummary(width, m.subscriptionRows, m.subscriptionPools))
 	b.WriteByte('\n')
-	if summary := subscriptionPoolSummaryLine(m.subscriptionPools); summary != "" {
+	if summary := subscriptionPoolSummaryLine(width, m.subscriptionPools); summary != "" {
 		b.WriteString(summary)
 		b.WriteByte('\n')
 	}
@@ -50,12 +50,12 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 		if limit == "" {
 			limit = safeFullWrappedDisplay(row.LimitID)
 		}
-		b.WriteString(wrappedMetricLine(width,
-			cardTitleStyle.Render(safeDisplay(row.ProviderInstanceID)),
+		b.WriteString(wrapTargetedLines(width, wrappedMetricLine(width,
+			cardTitleStyle.Render(safeFullWrappedDisplay(row.ProviderInstanceID)),
 			statusBadge("pooled"),
 			metricChip("accounts", fmt.Sprintf("%d", row.AccountCount)),
 			metricChip("stale", fmt.Sprintf("%d", row.StaleCount)),
-		))
+		)))
 		b.WriteByte('\n')
 		b.WriteString(wrappedDisplayField("limit", limit, width))
 		b.WriteByte('\n')
@@ -226,7 +226,7 @@ func subscriptionAccountRow(row management.SubscriptionUsageRow, width int, now 
 	} else {
 		lines = append(lines, subscriptionAccountWindowLines(row, subscriptionCardWidth(width), now)...)
 	}
-	return subscriptionAccountBlock(lines...)
+	return subscriptionAccountBlock(width, lines...)
 }
 
 func wrappedSubscriptionIdentity(label string, width int) string {
@@ -262,17 +262,8 @@ func safeSubscriptionWrappedAccountDisplay(value string) string {
 	return safeFullWrappedAccountDisplay(value)
 }
 
-func subscriptionAccountBlock(lines ...string) string {
-	out := make([]string, 0, len(lines))
-	for _, line := range lines {
-		for _, part := range strings.Split(strings.TrimRight(line, "\n"), "\n") {
-			part = strings.TrimSpace(part)
-			if part != "" {
-				out = append(out, part)
-			}
-		}
-	}
-	return strings.Join(out, "\n")
+func subscriptionAccountBlock(width int, lines ...string) string {
+	return wrapTargetedLines(width, lines...)
 }
 
 func subscriptionUsageSummary(width int, rows []management.SubscriptionUsageRow, pools []management.SubscriptionUsageAggregate) string {
@@ -299,9 +290,9 @@ func subscriptionUsageSummary(width int, rows []management.SubscriptionUsageRow,
 	if label, used, remaining, capacity := firstSubscriptionPoolWindowTotal(pools); capacity > 0 {
 		chips = append(chips,
 			label,
-			"used "+compactPercentPoints(used),
-			"left "+compactPercentPoints(remaining),
-			"cap "+compactPercentPoints(capacity),
+			"sum used "+compactPercentPoints(used),
+			"sum left "+compactPercentPoints(remaining),
+			"capacity "+compactPercentPoints(capacity),
 		)
 	}
 	parts := []string{heroStyle.Render("Codex subscription limits")}
@@ -314,7 +305,7 @@ func subscriptionUsageSummary(width int, rows []management.SubscriptionUsageRow,
 	return wrappedMetricLine(width, parts...)
 }
 
-func subscriptionPoolSummaryLine(pools []management.SubscriptionUsageAggregate) string {
+func subscriptionPoolSummaryLine(width int, pools []management.SubscriptionUsageAggregate) string {
 	accounts := 0
 	stale := 0
 	for _, pool := range pools {
@@ -325,15 +316,27 @@ func subscriptionPoolSummaryLine(pools []management.SubscriptionUsageAggregate) 
 	if accounts == 0 && capacity == 0 {
 		return ""
 	}
-	return metricLine(
+	return wrappedMetricLine(width,
 		statusBadge("pooled"),
 		metricChip("window", label),
 		metricChip("acct", fmt.Sprintf("%d", accounts)),
 		metricChip("stale", fmt.Sprintf("%d", stale)),
-		metricChip("sum-used", compactPercentPoints(used)),
-		metricChip("sum-left", compactPercentPoints(remaining)),
-		metricChip("cap", compactPercentPoints(capacity)),
+		displayMetricChip("sum used", compactPercentPoints(used)),
+		displayMetricChip("sum left", compactPercentPoints(remaining)),
+		displayMetricChip("capacity", compactPercentPoints(capacity)),
 	)
+}
+
+func displayMetricChip(label, value string) string {
+	label = safeChromeDisplay(label)
+	value = safeDisplay(value)
+	if label == "" {
+		label = "metric"
+	}
+	if value == "" {
+		value = "none"
+	}
+	return chipStyle.Render(label + " " + value)
 }
 
 func firstSubscriptionPoolWindowTotal(pools []management.SubscriptionUsageAggregate) (string, float64, float64, float64) {
@@ -380,7 +383,7 @@ func subscriptionAccountWindowLines(row management.SubscriptionUsageRow, width i
 	windows := row.Windows
 	lines := make([]string, 0, len(windows))
 	for _, window := range windows {
-		lines = append(lines, usageGaugeBlock(windowLabel(window.Label, window.WindowMinutes), window.UsedPercent, window.RemainingPercent, resetLocalText("reset", window.ResetAt, now), gaugeBarWidth(width)))
+		lines = append(lines, usageGaugeBlock(windowLabel(window.Label, window.WindowMinutes), window.UsedPercent, window.RemainingPercent, resetLocalText("reset", window.ResetAt, now), gaugeBarWidth(width), width))
 	}
 	return lines
 }
@@ -398,6 +401,7 @@ func subscriptionPoolWindowLines(row management.SubscriptionUsageAggregate, widt
 			window.StaleCount,
 			resetLocalText("earliest reset", window.EarliestResetAt, now),
 			poolGaugeBarWidth(width),
+			width,
 		))
 	}
 	return lines

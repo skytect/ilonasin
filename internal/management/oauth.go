@@ -105,7 +105,7 @@ func oauthCredentialFromCredentials(row credentials.OAuthCredentialMetadata) OAu
 		ID:                        row.ID,
 		ProviderInstanceID:        safeSnapshotString(row.ProviderInstanceID),
 		Label:                     safeSnapshotString(row.Label),
-		AccountDisplayLabel:       safeSnapshotString(row.AccountDisplayLabel),
+		AccountDisplayLabel:       safeAccountDisplayString(row.AccountDisplayLabel),
 		PlanLabel:                 safeSnapshotString(row.PlanLabel),
 		Scopes:                    safeSnapshotString(row.Scopes),
 		ExpiresAt:                 row.ExpiresAt,

@@ -53,6 +53,7 @@ func (s *Server) planCredentialAttempts(ctx context.Context, addr routing.ModelA
 		return plan
 	}
 	plan.attempts = attempts
+	plan.modelCredential = attempts[0]
 	return plan
 }
 

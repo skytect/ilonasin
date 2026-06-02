@@ -224,17 +224,22 @@ func firstCandidateAtOrAfter(slots []credentialAttemptSlot, candidates []int, cr
 	if start == -1 {
 		return 0, false
 	}
-	candidateSet := make(map[int]bool, len(candidates))
-	for _, candidate := range candidates {
-		candidateSet[candidate] = true
-	}
 	for offset := 0; offset < len(slots); offset++ {
 		index := (start + offset) % len(slots)
-		if candidateSet[index] {
+		if containsCandidateIndex(candidates, index) {
 			return index, true
 		}
 	}
 	return 0, false
+}
+
+func containsCandidateIndex(candidates []int, index int) bool {
+	for _, candidate := range candidates {
+		if candidate == index {
+			return true
+		}
+	}
+	return false
 }
 
 func nextCredentialCursor(slots []credentialAttemptSlot, chosen int) int64 {

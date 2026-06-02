@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+
+	"ilonasin/internal/privacy"
 )
 
 var unsafeSnapshotStringPattern = regexp.MustCompile(`(?i)(bearer|sk-|iln_|oauth|token|secret|authorization|raw|payload|prompt|completion|body|account|acct[-_]|request[_ -]?id|requestid|req[-_]|balance|credit|sse[_ -]?chunk|tool[_ -]?(argument|result)|eyj[a-z0-9_-]*\.[a-z0-9_-]*\.)`)
@@ -157,31 +159,7 @@ func safeEndpointString(value string) string {
 }
 
 func safeRefreshFailureDescription(value string) string {
-	value = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
-			return ' '
-		}
-		return r
-	}, strings.TrimSpace(value))
-	value = strings.Join(strings.Fields(value), " ")
-	if value == "" {
-		return ""
-	}
-	if unsafeRefreshFailureDescription(value) {
-		return "[redacted]"
-	}
-	const maxRunes = 1024
-	runes := []rune(value)
-	if len(runes) > maxRunes {
-		return string(runes[:maxRunes])
-	}
-	return value
-}
-
-var unsafeRefreshFailureDescriptionPattern = regexp.MustCompile(`(?i)(bearer\s+[A-Za-z0-9._~+/=-]+|sk-[A-Za-z0-9._~+/=-]*|iln_[A-Za-z0-9._~+/=-]*|refresh[_-]?token\s*[:=]|access[_-]?token\s*[:=]?|id[_-]?token\s*[:=]?|authorization[_-]?code\s*[:=]?|code[_-]?verifier\s*[:=]?|raw([_:./ -](payload|body))?|payload|request[-_:./ ]?body|response[-_:./ ]?body|prompt[-_:./ ](text|body|payload)|completion[-_:./ ](text|body|payload)|account[_-]?id\s*[:=]?|acct[-_][A-Za-z0-9._~+/=-]+|request[-_ ]?id\s*[:=]?|requestid\s*[:=]?|req[_-][A-Za-z0-9._~+/=-]+|sse[_ -]?chunk|tool[_ -]?(argument|result)|eyj[a-z0-9_-]*\.[a-z0-9_-]*\.)`)
-
-func unsafeRefreshFailureDescription(value string) bool {
-	return unsafeRefreshFailureDescriptionPattern.MatchString(value)
+	return privacy.RefreshFailureDescription(value)
 }
 
 func safeRefreshFailureClass(value string) string {

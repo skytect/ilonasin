@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+
+	"ilonasin/internal/privacy"
 )
 
 var unsafeDisplayPattern = regexp.MustCompile(`(?i)(bearer|sk-|iln_|oauth|token|secret|authorization|raw|payload|prompt|completion|body|account|acct_|request[_ -]?id|requestid|req_|balance|credit|sse[_ -]?chunk|tool[_ -]?(argument|result)|eyj[a-z0-9_-]*\.[a-z0-9_-]*\.)`)
@@ -156,18 +158,9 @@ func safeEndpointDisplay(value string) string {
 }
 
 func safeRefreshFailureDescriptionDisplay(value string) string {
-	value = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
-			return ' '
-		}
-		return r
-	}, strings.TrimSpace(value))
-	value = strings.Join(strings.Fields(value), " ")
+	value = privacy.RefreshFailureDescription(value)
 	if value == "" {
 		return ""
-	}
-	if unsafeDisplayPattern.MatchString(value) {
-		return "[redacted]"
 	}
 	const maxDisplayRunes = 160
 	runes := []rune(value)

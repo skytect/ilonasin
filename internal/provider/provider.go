@@ -6,8 +6,6 @@ import (
 	"sort"
 	"strings"
 	"unicode"
-
-	"ilonasin/internal/config"
 )
 
 type Defaults struct {
@@ -77,7 +75,17 @@ type Instance struct {
 	ModelDiscovery bool
 }
 
-func NewRegistry(cfg config.Config) (Registry, error) {
+type RegistryConfig struct {
+	Providers map[string]ProviderConfig
+}
+
+type ProviderConfig struct {
+	Type       string
+	BaseURL    string
+	AuthIssuer string
+}
+
+func NewRegistry(cfg RegistryConfig) (Registry, error) {
 	ids := make([]string, 0, len(cfg.Providers))
 	for id := range cfg.Providers {
 		ids = append(ids, id)

@@ -91,7 +91,7 @@ func bootstrapCore(ctx context.Context, opts Options, createDefaultConfig bool) 
 		slog.String("config_file", cfgPath),
 		slog.String("log_output", "configured"),
 	)
-	registry, err := provider.NewRegistry(cfg)
+	registry, err := provider.NewRegistry(providerRegistryConfig(cfg))
 	if err != nil {
 		cleanup()
 		return nil, err
@@ -113,6 +113,18 @@ func loggingIOOptions(cfg config.Config) logging.IOOptions {
 		Capture: cfg.Logging.CaptureIO,
 		LogDir:  cfg.Paths.LogDir,
 	}
+}
+
+func providerRegistryConfig(cfg config.Config) provider.RegistryConfig {
+	providers := make(map[string]provider.ProviderConfig, len(cfg.Providers))
+	for id, row := range cfg.Providers {
+		providers[id] = provider.ProviderConfig{
+			Type:       row.Type,
+			BaseURL:    row.BaseURL,
+			AuthIssuer: row.AuthIssuer,
+		}
+	}
+	return provider.RegistryConfig{Providers: providers}
 }
 
 func loadConfig(path, homeDir string, createDefault bool) (config.Config, string, error) {

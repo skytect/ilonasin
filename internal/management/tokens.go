@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	"ilonasin/internal/config"
 	"ilonasin/internal/credentials"
 	"ilonasin/internal/metadata"
 	"ilonasin/internal/provider"
@@ -58,7 +57,7 @@ type Service struct {
 	OAuthResolver     OAuthBearerRefreshResolver
 	SubscriptionUsage SubscriptionUsageStore
 	UsageClient       provider.CodexSubscriptionUsageClient
-	Keepalive         config.SubscriptionKeepaliveConfig
+	Keepalive         SubscriptionKeepaliveSettings
 	ModelCache        ModelCacheReader
 	Observability     ObservabilityReader
 	Pruner            TelemetryPruner

@@ -57,11 +57,23 @@ func startManagementServer(ctx context.Context, homeDir, configPath, databasePat
 		OAuthResolver:     upstreams,
 		SubscriptionUsage: store,
 		UsageClient:       usageClient,
-		Keepalive:         keepalive,
+		Keepalive:         managementKeepaliveSettings(keepalive),
 		ModelCache:        store,
 		Observability:     store,
 		Pruner:            store,
 	})
+}
+
+func managementKeepaliveSettings(keepalive config.SubscriptionKeepaliveConfig) management.SubscriptionKeepaliveSettings {
+	times := config.NormalizeSubscriptionKeepaliveTimes(keepalive.ScheduleTimes)
+	if len(times) == 0 {
+		times = append([]string(nil), config.Default("").SubscriptionKeepalive.ScheduleTimes...)
+	}
+	return management.SubscriptionKeepaliveSettings{
+		Enabled:           keepalive.Enabled,
+		OutputCapVerified: config.SubscriptionKeepaliveOutputCapVerified(keepalive),
+		ScheduleTimes:     times,
+	}
 }
 
 func startManagementServerWithService(ctx context.Context, homeDir, configPath, databasePath string, service management.HandlerService) (managementRuntime, error) {

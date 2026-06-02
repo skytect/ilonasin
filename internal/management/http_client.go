@@ -8,14 +8,29 @@ import (
 	"io"
 	"net/http"
 	"strings"
-
-	"ilonasin/internal/provider"
 )
 
 type Client struct {
 	Client         *http.Client
 	LongPollClient *http.Client
 	BaseURL        string
+}
+
+type ClientError struct {
+	Status  int
+	Class   string
+	EventID string
+}
+
+func (e ClientError) Error() string {
+	class := strings.TrimSpace(e.Class)
+	if class != "" {
+		return "management request failed: " + safeManagementErrorClass(class)
+	}
+	if e.Status > 0 {
+		return "management request failed: " + http.StatusText(e.Status)
+	}
+	return "management request failed"
 }
 
 func NewUnixClient(socketPath string) Client {
@@ -84,12 +99,8 @@ func managementHTTPError(resp *http.Response) error {
 	var body managementErrorResponse
 	_ = json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&body)
 	class := strings.TrimSpace(body.Class)
-	eventID := strings.TrimSpace(body.EventID)
 	if class != "" {
-		if strings.HasPrefix(class, "oauth_login_") || class == "unsupported_credential" || class == "credential_not_found" || class == "invalid_oauth_input" {
-			return provider.OAuthDeviceLoginError{Class: class, EventID: eventID}
-		}
-		return fmt.Errorf("management request failed: %s", class)
+		return ClientError{Status: resp.StatusCode, Class: safeManagementErrorClass(class), EventID: safeEventID(body.EventID)}
 	}
-	return fmt.Errorf("management request failed: %s", http.StatusText(resp.StatusCode))
+	return ClientError{Status: resp.StatusCode}
 }

@@ -139,11 +139,11 @@ func safeOAuthErrorClass(err error) (string, string) {
 	}
 	var loginErr provider.OAuthDeviceLoginError
 	if errors.As(err, &loginErr) && loginErr.Class != "" {
-		return safeErrorToken(loginErr.Class), safeEventID(loginErr.EventID)
+		return safeManagementErrorClass(loginErr.Class), safeEventID(loginErr.EventID)
 	}
 	var refreshErr provider.OAuthRefreshError
 	if errors.As(err, &refreshErr) && refreshErr.Class != "" {
-		return safeErrorToken(refreshErr.Class), ""
+		return safeManagementErrorClass(refreshErr.Class), ""
 	}
 	switch {
 	case errors.Is(err, credentials.ErrCredentialNotFound):
@@ -171,9 +171,23 @@ func safeErrorToken(value string) string {
 	return "details_redacted"
 }
 
+var safeManagementErrorClassWithMarkerPattern = regexp.MustCompile(`^refresh_token_(expired|invalidated|reused)$`)
+var unsafeManagementErrorClassPattern = regexp.MustCompile(`(?i)(^|[_.:-])(bearer|sk|iln|token|secret|authorization|raw|payload|prompt|completion|account|acct|requestid|request[-_.:]id|req|balance|credit|sse|argument|result)($|[_.:-])`)
+
+func safeManagementErrorClass(value string) string {
+	value = safeErrorToken(value)
+	if value == "details_redacted" {
+		return value
+	}
+	if safeManagementErrorClassWithMarkerPattern.MatchString(value) || !unsafeManagementErrorClassPattern.MatchString(value) {
+		return value
+	}
+	return "details_redacted"
+}
+
 func safeEventID(value string) string {
 	value = strings.TrimSpace(value)
-	if safeManagementTokenPattern.MatchString(value) {
+	if safeManagementTokenPattern.MatchString(value) && !unsafeSnapshotStringPattern.MatchString(value) {
 		return value
 	}
 	return ""

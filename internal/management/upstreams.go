@@ -37,6 +37,22 @@ type FallbackPolicyResponse struct {
 	Policy FallbackPolicy `json:"policy"`
 }
 
+const (
+	CredentialKindAPIKey = credentials.CredentialKindAPIKey
+	CredentialKindOAuth  = credentials.CredentialKindOAuth
+)
+
+func ProviderAllowsFallbackCredentialKind(instance ProviderInstance, credentialKind string) bool {
+	switch credentialKind {
+	case CredentialKindAPIKey:
+		return instance.APIKey
+	case CredentialKindOAuth:
+		return instance.OAuth && instance.Type == "codex"
+	default:
+		return false
+	}
+}
+
 type UpstreamCredentialClient interface {
 	AddUpstreamAPIKey(ctx context.Context, req AddUpstreamAPIKeyRequest) (AddUpstreamAPIKeyResponse, error)
 	DisableUpstreamCredential(ctx context.Context, req DisableUpstreamCredentialRequest) (DisableUpstreamCredentialResponse, error)

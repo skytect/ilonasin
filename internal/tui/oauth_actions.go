@@ -7,13 +7,11 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"ilonasin/internal/credentials"
 	"ilonasin/internal/management"
-	"ilonasin/internal/provider"
 )
 
 type oauthLoginStartedMsg struct {
-	challenge credentials.OAuthDeviceLoginChallenge
+	challenge management.OAuthDeviceLoginChallenge
 	err       error
 }
 
@@ -21,19 +19,10 @@ type oauthLoginCompletedMsg struct {
 	err error
 }
 
-func oauthChallengeFromManagement(row management.OAuthDeviceLoginChallenge) credentials.OAuthDeviceLoginChallenge {
-	return credentials.OAuthDeviceLoginChallenge{
-		ProviderInstanceID: row.ProviderInstanceID,
-		VerificationURL:    row.VerificationURL,
-		UserCode:           row.UserCode,
-		Handle:             row.Handle,
-	}
-}
-
 func (m Model) startOAuthLoginCmd(ctx context.Context, providerInstanceID string) tea.Cmd {
 	return func() tea.Msg {
 		resp, err := m.oauth.StartOAuthDeviceLogin(ctx, management.StartOAuthDeviceLoginRequest{ProviderInstanceID: providerInstanceID})
-		return oauthLoginStartedMsg{challenge: oauthChallengeFromManagement(resp.Challenge), err: err}
+		return oauthLoginStartedMsg{challenge: resp.Challenge, err: err}
 	}
 }
 
@@ -125,7 +114,7 @@ func oauthLoginErrorMessage(err error) string {
 	if err == nil {
 		return ""
 	}
-	var loginErr provider.OAuthDeviceLoginError
+	var loginErr management.ClientError
 	if errors.As(err, &loginErr) && loginErr.Class != "" {
 		if loginErr.EventID != "" {
 			return "OAuth login failed: " + loginErr.Class + " event_id=" + loginErr.EventID
@@ -134,9 +123,6 @@ func oauthLoginErrorMessage(err error) string {
 	}
 	if errors.Is(err, context.Canceled) {
 		return "OAuth login failed: oauth_login_canceled"
-	}
-	if errors.Is(err, credentials.ErrNoEligibleCredential) {
-		return "OAuth login failed: oauth_login_expired"
 	}
 	return "OAuth login failed: " + safeErrorMessage(err.Error())
 }

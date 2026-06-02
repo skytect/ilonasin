@@ -8,8 +8,7 @@ import (
 	"time"
 	"unicode"
 
-	"ilonasin/internal/credentials"
-	"ilonasin/internal/provider"
+	"ilonasin/internal/management"
 )
 
 func safeErrorMessage(value string) string {
@@ -59,15 +58,12 @@ func tuiErrorClass(err error) string {
 	if err == nil {
 		return "none"
 	}
-	var loginErr provider.OAuthDeviceLoginError
+	var loginErr management.ClientError
 	if errors.As(err, &loginErr) && loginErr.Class != "" {
 		return loginErr.Class
 	}
 	if errors.Is(err, context.Canceled) {
 		return "canceled"
-	}
-	if errors.Is(err, credentials.ErrNoEligibleCredential) {
-		return "no_eligible_credential"
 	}
 	return "operation_failed"
 }

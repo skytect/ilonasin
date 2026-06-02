@@ -6,7 +6,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"ilonasin/internal/credentials"
 	"ilonasin/internal/management"
 )
 
@@ -85,14 +84,13 @@ func (m *Model) disableFirstFallbackPolicy() error {
 func (m Model) visibleFallbackPolicies(rows []management.FallbackPolicy) []management.FallbackPolicy {
 	allowed := map[string]map[string]bool{}
 	for _, instance := range m.visibleProviderRows() {
-		if instance.APIKey {
-			allowed[instance.ID] = map[string]bool{credentials.CredentialKindAPIKey: true}
-		}
-		if instance.OAuth && instance.Type == "codex" {
-			if allowed[instance.ID] == nil {
-				allowed[instance.ID] = map[string]bool{}
+		for _, kind := range []string{management.CredentialKindAPIKey, management.CredentialKindOAuth} {
+			if management.ProviderAllowsFallbackCredentialKind(instance, kind) {
+				if allowed[instance.ID] == nil {
+					allowed[instance.ID] = map[string]bool{}
+				}
+				allowed[instance.ID][kind] = true
 			}
-			allowed[instance.ID][credentials.CredentialKindOAuth] = true
 		}
 	}
 	out := make([]management.FallbackPolicy, 0, len(rows))

@@ -7,7 +7,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"ilonasin/internal/credentials"
 	"ilonasin/internal/management"
 )
 
@@ -54,7 +53,7 @@ type Model struct {
 	apiKeyMode        bool
 	apiKeyProvider    string
 	apiKeyInput       string
-	oauthChallenge    *credentials.OAuthDeviceLoginChallenge
+	oauthChallenge    *management.OAuthDeviceLoginChallenge
 	oauthCtx          context.Context
 	oauthCancel       context.CancelFunc
 	err               string

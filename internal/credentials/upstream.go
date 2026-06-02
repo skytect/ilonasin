@@ -568,7 +568,7 @@ func (s *UpstreamService) CompleteOAuthDeviceLogin(ctx context.Context, handle s
 		AccessToken:         accessToken,
 		RefreshToken:        refreshToken,
 		AccountID:           claims.AccountID,
-		AccountDisplayLabel: safeOAuthLoginDisplay(claims.Email, "Codex account", accessToken, refreshToken, result.IDToken, claims.AccountID),
+		AccountDisplayLabel: safeOAuthLoginDisplay(claims.Email, "Codex", accessToken, refreshToken, result.IDToken, claims.AccountID),
 		PlanLabel:           safeOAuthLoginDisplay(claims.PlanLabel, "", accessToken, refreshToken, result.IDToken, claims.AccountID),
 		ExpiresAt:           result.ExpiresAt,
 	})
@@ -861,30 +861,52 @@ func parseChatGPTIDTokenClaims(jwt string) (chatGPTIDTokenClaims, error) {
 	if err != nil {
 		return chatGPTIDTokenClaims{}, ErrInvalidOAuthInput
 	}
-	// Mirrors OpenAI Codex rust-v0.135.0:
-	// codex-rs/login/src/token_data.rs parse_chatgpt_jwt_claims.
+	// Mirrors OpenAI Codex rust-v0.135.0 for the durable account and plan
+	// claims, while accepting a few observed email claim locations used by
+	// identity providers and profile payloads.
 	var claims struct {
-		Email   string `json:"email"`
-		Profile struct {
-			Email string `json:"email"`
+		Email          string `json:"email"`
+		PreferredEmail string `json:"preferred_email"`
+		Username       string `json:"username"`
+		Profile        struct {
+			Email          string `json:"email"`
+			PreferredEmail string `json:"preferred_email"`
 		} `json:"https://api.openai.com/profile"`
 		Auth struct {
 			AccountID string `json:"chatgpt_account_id"`
 			Plan      any    `json:"chatgpt_plan_type"`
+			Email     string `json:"email"`
 		} `json:"https://api.openai.com/auth"`
+		OpenAI struct {
+			Email string `json:"email"`
+		} `json:"https://api.openai.com"`
 	}
 	if err := json.Unmarshal(payload, &claims); err != nil {
 		return chatGPTIDTokenClaims{}, ErrInvalidOAuthInput
 	}
-	email := strings.TrimSpace(claims.Email)
-	if email == "" {
-		email = strings.TrimSpace(claims.Profile.Email)
-	}
 	return chatGPTIDTokenClaims{
 		AccountID: strings.TrimSpace(claims.Auth.AccountID),
-		Email:     email,
+		Email: firstEmailLike(
+			claims.Email,
+			claims.Profile.Email,
+			claims.PreferredEmail,
+			claims.Profile.PreferredEmail,
+			claims.Auth.Email,
+			claims.OpenAI.Email,
+			claims.Username,
+		),
 		PlanLabel: planLabelString(claims.Auth.Plan),
 	}, nil
+}
+
+func firstEmailLike(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" && strings.Contains(value, "@") && !strings.ContainsAny(value, " \t\r\n") {
+			return value
+		}
+	}
+	return ""
 }
 
 func planLabelString(value any) string {
@@ -1078,8 +1100,25 @@ func looksStructuredOAuthMaterial(value string) bool {
 }
 
 func looksLikeJWT(value string) bool {
-	lower := strings.ToLower(strings.TrimSpace(value))
-	return strings.HasPrefix(lower, "eyj") || strings.Count(value, ".") >= 2
+	value = strings.TrimSpace(value)
+	parts := strings.Split(value, ".")
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return false
+	}
+	for _, part := range parts {
+		for _, r := range part {
+			switch {
+			case r >= 'a' && r <= 'z':
+			case r >= 'A' && r <= 'Z':
+			case r >= '0' && r <= '9':
+			case r == '-' || r == '_':
+			default:
+				return false
+			}
+		}
+	}
+	lowerHeader := strings.ToLower(parts[0])
+	return strings.HasPrefix(lowerHeader, "eyj")
 }
 
 func containsForbiddenOAuthMarker(value string) bool {

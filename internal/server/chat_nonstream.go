@@ -55,9 +55,28 @@ func (s *Server) executeNonStreamingChat(r *http.Request, nc nonStreamContext) n
 		}
 		return exec
 	}
-	for i, credential := range plan.attempts {
+	used := map[int]bool{}
+	var fallbackFrom provider.BearerCredential
+	pendingRetryReason := ""
+	for len(used) < len(plan.attempts) {
+		remaining := remainingCredentialAttemptSlots(plan.attempts, used)
+		attemptIndex, credential, releaseAttempt, ok := s.reserveCredentialAttempt(nc.address, nc.request.AffinityKey, remaining)
+		if !ok {
+			break
+		}
+		used[attemptIndex] = true
+		if exec.attemptCount == 0 {
+			modelCredential = credential
+		}
+		if pendingRetryReason != "" {
+			exec.fallbackEvents = append(exec.fallbackEvents, chatFallbackEvent(time.Now(), nc.address, fallbackFrom, credential, pendingRetryReason))
+			if pendingRetryReason == "auth_retry" {
+				modelCredential = credential
+			}
+			pendingRetryReason = ""
+		}
 		exec.attemptCount++
-		result, err := nc.adapter.CompleteChat(r.Context(), providerChatRequest(nc.instance, nc.address, nc.request, credential, modelCredential))
+		result, err := s.completeChatAttempt(r, nc, credential, modelCredential, releaseAttempt)
 		if s.shouldRefreshModelCredentialAfterChat401(nc.instance, result, modelCredential) {
 			refreshed, refreshErr := s.refreshOAuthCredentialForRetryIfBearer(r.Context(), modelCredential)
 			if refreshErr != nil {
@@ -71,7 +90,8 @@ func (s *Server) executeNonStreamingChat(r *http.Request, nc nonStreamContext) n
 				}
 				exec.authRetries++
 				exec.attemptCount++
-				result, err = nc.adapter.CompleteChat(r.Context(), providerChatRequest(nc.instance, nc.address, nc.request, credential, modelCredential))
+				releaseAttempt := s.trackCredentialAttempt(nc.address, credential)
+				result, err = s.completeChatAttempt(r, nc, credential, modelCredential, releaseAttempt)
 				if s.shouldRefreshModelCredentialAfterChat401(nc.instance, result, modelCredential) || s.shouldRefreshOAuthAfterChat401(nc.instance, result) {
 					result.StatusCode = http.StatusBadGateway
 					result.ErrorClass = "upstream_auth_failed"
@@ -89,7 +109,8 @@ func (s *Server) executeNonStreamingChat(r *http.Request, nc nonStreamContext) n
 				}
 				exec.authRetries++
 				exec.attemptCount++
-				result, err = nc.adapter.CompleteChat(r.Context(), providerChatRequest(nc.instance, nc.address, nc.request, credential, modelCredential))
+				releaseAttempt := s.trackCredentialAttempt(nc.address, credential)
+				result, err = s.completeChatAttempt(r, nc, credential, modelCredential, releaseAttempt)
 				if s.shouldRefreshOAuthAfterChat401(nc.instance, result) {
 					result.StatusCode = http.StatusBadGateway
 					result.ErrorClass = "upstream_auth_failed"
@@ -114,16 +135,18 @@ func (s *Server) executeNonStreamingChat(r *http.Request, nc nonStreamContext) n
 		case retryableChatAttempt(result, err):
 			retryReason = "availability_retry"
 		}
-		if retryReason == "" || i == len(plan.attempts)-1 {
+		if retryReason == "" || len(used) == len(plan.attempts) {
 			break
 		}
-		next := plan.attempts[i+1]
-		exec.fallbackEvents = append(exec.fallbackEvents, chatFallbackEvent(time.Now(), nc.address, credential, next, retryReason))
-		if retryReason == "auth_retry" {
-			modelCredential = next
-		}
+		fallbackFrom = credential
+		pendingRetryReason = retryReason
 	}
 	return exec
+}
+
+func (s *Server) completeChatAttempt(r *http.Request, nc nonStreamContext, credential provider.BearerCredential, modelCredential provider.BearerCredential, releaseAttempt func()) (provider.ChatResult, error) {
+	defer releaseAttempt()
+	return nc.adapter.CompleteChat(r.Context(), providerChatRequest(nc.instance, nc.address, nc.request, credential, modelCredential))
 }
 
 func (s *Server) recordNonStreamingChat(r *http.Request, nc nonStreamContext, exec nonStreamExecution, status int, errorClass string) int64 {

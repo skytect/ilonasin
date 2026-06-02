@@ -20,6 +20,7 @@ type Server struct {
 	cache     ModelCache
 	meta      MetadataRecorder
 	quota     QuotaReader
+	pressure  *credentialPressureTracker
 	logger    *slog.Logger
 	ioLogger  *logging.IOLogger
 	now       func() time.Time
@@ -35,7 +36,7 @@ func NewWithClock(registry ProviderRegistry, auth credentials.LocalTokenVerifier
 	}
 	refresh, _ := oauth.(credentials.OAuthProviderRefreshController)
 	quota, _ := meta.(QuotaReader)
-	return &Server{registry: registry, auth: auth, upstreams: upstreams, oauth: oauth, refresh: refresh, adapters: adapters, models: models, cache: cache, meta: meta, quota: quota, now: now}
+	return &Server{registry: registry, auth: auth, upstreams: upstreams, oauth: oauth, refresh: refresh, adapters: adapters, models: models, cache: cache, meta: meta, quota: quota, pressure: newCredentialPressureTracker(), now: now}
 }
 
 func (s *Server) WithLogger(logger *slog.Logger) *Server {

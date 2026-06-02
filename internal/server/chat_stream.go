@@ -117,9 +117,28 @@ func (s *Server) executeStreamingChat(r *http.Request, sc streamContext, sink *s
 			RetryAfter:       plan.retryAfter,
 		}}
 	} else {
-		for i, credential := range plan.attempts {
+		used := map[int]bool{}
+		var fallbackFrom provider.BearerCredential
+		pendingRetryReason := ""
+		for len(used) < len(plan.attempts) {
+			remaining := remainingCredentialAttemptSlots(plan.attempts, used)
+			attemptIndex, credential, releaseAttempt, ok := s.reserveCredentialAttempt(sc.address, sc.request.AffinityKey, remaining)
+			if !ok {
+				break
+			}
+			used[attemptIndex] = true
+			if exec.attemptCount == 0 {
+				modelCredential = credential
+			}
+			if pendingRetryReason != "" {
+				exec.fallbackEvents = append(exec.fallbackEvents, chatFallbackEvent(time.Now(), sc.address, fallbackFrom, credential, pendingRetryReason))
+				if pendingRetryReason == "auth_retry" {
+					modelCredential = credential
+				}
+				pendingRetryReason = ""
+			}
 			exec.attemptCount++
-			summary, err := sc.adapter.StreamChat(r.Context(), providerChatRequest(sc.instance, sc.address, sc.request, credential, modelCredential), sink)
+			summary, err := s.streamChatAttempt(r, sc, sink, credential, modelCredential, releaseAttempt)
 			if s.shouldRefreshModelCredentialAfterStream401(sc.instance, summary, modelCredential) {
 				refreshed, refreshErr := s.refreshOAuthCredentialForRetryIfBearer(r.Context(), modelCredential)
 				if refreshErr != nil {
@@ -133,7 +152,8 @@ func (s *Server) executeStreamingChat(r *http.Request, sc streamContext, sink *s
 					}
 					exec.authRetries++
 					exec.attemptCount++
-					summary, err = sc.adapter.StreamChat(r.Context(), providerChatRequest(sc.instance, sc.address, sc.request, credential, modelCredential), sink)
+					releaseAttempt := s.trackCredentialAttempt(sc.address, credential)
+					summary, err = s.streamChatAttempt(r, sc, sink, credential, modelCredential, releaseAttempt)
 					if s.shouldRefreshModelCredentialAfterStream401(sc.instance, summary, modelCredential) || s.shouldRefreshOAuthAfterStream401(sc.instance, summary) {
 						summary.StatusCode = http.StatusBadGateway
 						summary.ErrorClass = "upstream_auth_failed"
@@ -151,7 +171,8 @@ func (s *Server) executeStreamingChat(r *http.Request, sc streamContext, sink *s
 					}
 					exec.authRetries++
 					exec.attemptCount++
-					summary, err = sc.adapter.StreamChat(r.Context(), providerChatRequest(sc.instance, sc.address, sc.request, credential, modelCredential), sink)
+					releaseAttempt := s.trackCredentialAttempt(sc.address, credential)
+					summary, err = s.streamChatAttempt(r, sc, sink, credential, modelCredential, releaseAttempt)
 					if s.shouldRefreshOAuthAfterStream401(sc.instance, summary) {
 						summary.StatusCode = http.StatusBadGateway
 						summary.ErrorClass = "upstream_auth_failed"
@@ -182,17 +203,19 @@ func (s *Server) executeStreamingChat(r *http.Request, sc streamContext, sink *s
 			case retryableStreamAttempt(summary, err, sink.started):
 				retryReason = "availability_retry"
 			}
-			if retryReason == "" || i == len(plan.attempts)-1 {
+			if retryReason == "" || len(used) == len(plan.attempts) {
 				break
 			}
-			next := plan.attempts[i+1]
-			exec.fallbackEvents = append(exec.fallbackEvents, chatFallbackEvent(time.Now(), sc.address, credential, next, retryReason))
-			if retryReason == "auth_retry" {
-				modelCredential = next
-			}
+			fallbackFrom = credential
+			pendingRetryReason = retryReason
 		}
 	}
 	return exec
+}
+
+func (s *Server) streamChatAttempt(r *http.Request, sc streamContext, sink *streamSink, credential provider.BearerCredential, modelCredential provider.BearerCredential, releaseAttempt func()) (provider.ChatStreamSummary, error) {
+	defer releaseAttempt()
+	return sc.adapter.StreamChat(r.Context(), providerChatRequest(sc.instance, sc.address, sc.request, credential, modelCredential), sink)
 }
 
 func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc streamContext) {

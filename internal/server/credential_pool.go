@@ -5,6 +5,7 @@ import (
 	"hash/fnv"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"ilonasin/internal/metadata"
@@ -20,6 +21,7 @@ type credentialAttemptPlan struct {
 }
 
 func (s *Server) planCredentialAttempts(ctx context.Context, addr routing.ModelAddress, tokenID int64, affinityKey string, credentials []provider.BearerCredential) credentialAttemptPlan {
+	affinityKey = strings.TrimSpace(affinityKey)
 	ordered := affinityCredentialOrder(addr, tokenID, affinityKey, credentials)
 	plan := credentialAttemptPlan{attempts: ordered}
 	if len(credentials) == 0 {
@@ -92,6 +94,133 @@ func credentialAffinityStart(addr routing.ModelAddress, tokenID int64, affinityK
 		_, _ = h.Write([]byte(affinityKey))
 	}
 	return int(h.Sum64() % uint64(size))
+}
+
+type credentialPressureKey struct {
+	providerInstanceID string
+	providerModelID    string
+	credentialID       int64
+}
+
+type credentialPressureTracker struct {
+	mu       sync.Mutex
+	inFlight map[credentialPressureKey]int
+}
+
+type credentialAttemptSlot struct {
+	index      int
+	credential provider.BearerCredential
+}
+
+func newCredentialPressureTracker() *credentialPressureTracker {
+	return &credentialPressureTracker{inFlight: map[credentialPressureKey]int{}}
+}
+
+func (t *credentialPressureTracker) acquire(addr routing.ModelAddress, credential provider.BearerCredential) func() {
+	if t == nil || credential.ID == 0 {
+		return func() {}
+	}
+	key := credentialPressureKey{
+		providerInstanceID: addr.ProviderInstanceID,
+		providerModelID:    addr.ProviderModelID,
+		credentialID:       credential.ID,
+	}
+	t.mu.Lock()
+	t.inFlight[key]++
+	t.mu.Unlock()
+	return func() {
+		t.release(key)
+	}
+}
+
+func (t *credentialPressureTracker) reserveLeast(addr routing.ModelAddress, slots []credentialAttemptSlot) (int, provider.BearerCredential, func(), bool) {
+	if t == nil || len(slots) == 0 {
+		return 0, provider.BearerCredential{}, func() {}, false
+	}
+	t.mu.Lock()
+	best := -1
+	bestCount := 0
+	for i, slot := range slots {
+		credential := slot.credential
+		count := 0
+		if credential.ID != 0 {
+			count = t.inFlight[credentialPressureKey{
+				providerInstanceID: addr.ProviderInstanceID,
+				providerModelID:    addr.ProviderModelID,
+				credentialID:       credential.ID,
+			}]
+		}
+		if best == -1 || count < bestCount {
+			best = i
+			bestCount = count
+		}
+	}
+	if best == -1 {
+		t.mu.Unlock()
+		return 0, provider.BearerCredential{}, func() {}, false
+	}
+	slot := slots[best]
+	credential := slot.credential
+	key := credentialPressureKey{
+		providerInstanceID: addr.ProviderInstanceID,
+		providerModelID:    addr.ProviderModelID,
+		credentialID:       credential.ID,
+	}
+	if credential.ID != 0 {
+		t.inFlight[key]++
+	}
+	t.mu.Unlock()
+	return slot.index, credential, func() {
+		if credential.ID != 0 {
+			t.release(key)
+		}
+	}, true
+}
+
+func (t *credentialPressureTracker) release(key credentialPressureKey) {
+	t.mu.Lock()
+	if count := t.inFlight[key]; count <= 1 {
+		delete(t.inFlight, key)
+	} else {
+		t.inFlight[key] = count - 1
+	}
+	t.mu.Unlock()
+}
+
+func (s *Server) trackCredentialAttempt(addr routing.ModelAddress, credential provider.BearerCredential) func() {
+	if s == nil || s.pressure == nil {
+		return func() {}
+	}
+	return s.pressure.acquire(addr, credential)
+}
+
+func (s *Server) reserveCredentialAttempt(addr routing.ModelAddress, affinityKey string, slots []credentialAttemptSlot) (int, provider.BearerCredential, func(), bool) {
+	if len(slots) == 0 {
+		return 0, provider.BearerCredential{}, func() {}, false
+	}
+	if strings.TrimSpace(affinityKey) != "" || s == nil || s.pressure == nil {
+		slot := slots[0]
+		return slot.index, slot.credential, s.trackCredentialAttempt(addr, slot.credential), true
+	}
+	return s.pressure.reserveLeast(addr, slots)
+}
+
+func remainingCredentialAttemptSlots(credentials []provider.BearerCredential, used map[int]bool) []credentialAttemptSlot {
+	if len(used) == 0 {
+		out := make([]credentialAttemptSlot, 0, len(credentials))
+		for i, credential := range credentials {
+			out = append(out, credentialAttemptSlot{index: i, credential: credential})
+		}
+		return out
+	}
+	out := make([]credentialAttemptSlot, 0, len(credentials))
+	for i, credential := range credentials {
+		if used[i] {
+			continue
+		}
+		out = append(out, credentialAttemptSlot{index: i, credential: credential})
+	}
+	return out
 }
 
 func quotaRetryAfter(a, b *time.Time) *time.Time {

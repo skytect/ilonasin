@@ -1163,19 +1163,32 @@ func (s *UpstreamService) setFallbackGroup(ctx context.Context, providerInstance
 	if !ok {
 		return ErrCredentialNotFound
 	}
+	if !ProviderAllowsFallbackCredentialKind(instance, credentialKind) {
+		return unsupportedFallbackCredentialKindError(providerInstanceID, credentialKind)
+	}
+	return s.Repo.SetFallbackGroupEnabled(ctx, providerInstanceID, credentialKind, groupLabel, enabled, s.now())
+}
+
+func ProviderAllowsFallbackCredentialKind(instance provider.Instance, credentialKind string) bool {
 	switch credentialKind {
 	case CredentialKindAPIKey:
-		if !instance.APIKey {
-			return fmt.Errorf("%w: provider %q does not support api-key fallback groups", ErrUnsupportedCredential, providerInstanceID)
-		}
+		return instance.APIKey
 	case CredentialKindOAuth:
-		if !instance.OAuth || instance.Type != "codex" {
-			return fmt.Errorf("%w: provider %q does not support oauth fallback groups", ErrUnsupportedCredential, providerInstanceID)
-		}
+		return instance.OAuth && instance.Type == "codex"
+	default:
+		return false
+	}
+}
+
+func unsupportedFallbackCredentialKindError(providerInstanceID, credentialKind string) error {
+	switch credentialKind {
+	case CredentialKindAPIKey:
+		return fmt.Errorf("%w: provider %q does not support api-key fallback groups", ErrUnsupportedCredential, providerInstanceID)
+	case CredentialKindOAuth:
+		return fmt.Errorf("%w: provider %q does not support oauth fallback groups", ErrUnsupportedCredential, providerInstanceID)
 	default:
 		return fmt.Errorf("%w: provider %q does not support fallback groups", ErrUnsupportedCredential, providerInstanceID)
 	}
-	return s.Repo.SetFallbackGroupEnabled(ctx, providerInstanceID, credentialKind, groupLabel, enabled, s.now())
 }
 
 func (s *UpstreamService) now() time.Time {

@@ -82,24 +82,7 @@ func (m *Model) disableFirstFallbackPolicy() error {
 }
 
 func (m Model) visibleFallbackPolicies(rows []management.FallbackPolicy) []management.FallbackPolicy {
-	allowed := map[string]map[string]bool{}
-	for _, instance := range m.visibleProviderRows() {
-		for _, kind := range []string{management.CredentialKindAPIKey, management.CredentialKindOAuth} {
-			if management.ProviderAllowsFallbackCredentialKind(instance, kind) {
-				if allowed[instance.ID] == nil {
-					allowed[instance.ID] = map[string]bool{}
-				}
-				allowed[instance.ID][kind] = true
-			}
-		}
-	}
-	out := make([]management.FallbackPolicy, 0, len(rows))
-	for _, row := range rows {
-		if allowed[row.ProviderInstanceID][row.CredentialKind] && row.CredentialCount >= 2 {
-			out = append(out, row)
-		}
-	}
-	return out
+	return management.VisibleFallbackPolicies(rows, m.visibleProviderRows())
 }
 
 func fallbackPolicyEnabled(rows []management.FallbackPolicy, providerInstanceID, credentialKind, groupLabel string) bool {

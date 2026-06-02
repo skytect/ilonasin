@@ -16,30 +16,7 @@ func visibleUpstreamCredentials(rows []credentials.UpstreamCredentialMetadata, p
 }
 
 func visibleFallbackPolicies(rows []credentials.FallbackPolicyMetadata, providers []ProviderInstance) []credentials.FallbackPolicyMetadata {
-	allowed := fallbackPolicyProviderKinds(providers)
-	out := rows[:0]
-	for _, row := range rows {
-		if allowed[row.ProviderInstanceID][row.CredentialKind] && row.CredentialCount >= 2 {
-			out = append(out, row)
-		}
-	}
-	return out
-}
-
-func fallbackPolicyProviderKinds(providers []ProviderInstance) map[string]map[string]bool {
-	allowed := map[string]map[string]bool{}
-	for _, instance := range providers {
-		if instance.APIKey {
-			allowed[instance.ID] = map[string]bool{credentials.CredentialKindAPIKey: true}
-		}
-		if instance.OAuth && instance.Type == "codex" {
-			if allowed[instance.ID] == nil {
-				allowed[instance.ID] = map[string]bool{}
-			}
-			allowed[instance.ID][credentials.CredentialKindOAuth] = true
-		}
-	}
-	return allowed
+	return visibleFallbackPolicyMetadata(rows, providers)
 }
 
 func apiKeyProviderIDs(providers []ProviderInstance) map[string]bool {

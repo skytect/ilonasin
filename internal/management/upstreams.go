@@ -43,14 +43,51 @@ const (
 )
 
 func ProviderAllowsFallbackCredentialKind(instance ProviderInstance, credentialKind string) bool {
-	switch credentialKind {
-	case CredentialKindAPIKey:
-		return instance.APIKey
-	case CredentialKindOAuth:
-		return instance.OAuth && instance.Type == "codex"
-	default:
-		return false
+	return fallbackCredentialKinds(instance)[credentialKind]
+}
+
+func fallbackCredentialKinds(instance ProviderInstance) map[string]bool {
+	out := map[string]bool{}
+	if instance.APIKey {
+		out[CredentialKindAPIKey] = true
 	}
+	if instance.OAuth && instance.Type == "codex" {
+		out[CredentialKindOAuth] = true
+	}
+	return out
+}
+
+func allowedFallbackCredentialKindsByProvider(providers []ProviderInstance) map[string]map[string]bool {
+	allowed := map[string]map[string]bool{}
+	for _, instance := range providers {
+		kinds := fallbackCredentialKinds(instance)
+		if len(kinds) > 0 {
+			allowed[instance.ID] = kinds
+		}
+	}
+	return allowed
+}
+
+func VisibleFallbackPolicies(rows []FallbackPolicy, providers []ProviderInstance) []FallbackPolicy {
+	allowed := allowedFallbackCredentialKindsByProvider(providers)
+	out := make([]FallbackPolicy, 0, len(rows))
+	for _, row := range rows {
+		if allowed[row.ProviderInstanceID][row.CredentialKind] && row.CredentialCount >= 2 {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+func visibleFallbackPolicyMetadata(rows []credentials.FallbackPolicyMetadata, providers []ProviderInstance) []credentials.FallbackPolicyMetadata {
+	allowed := allowedFallbackCredentialKindsByProvider(providers)
+	out := rows[:0]
+	for _, row := range rows {
+		if allowed[row.ProviderInstanceID][row.CredentialKind] && row.CredentialCount >= 2 {
+			out = append(out, row)
+		}
+	}
+	return out
 }
 
 type UpstreamCredentialClient interface {

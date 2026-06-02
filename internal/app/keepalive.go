@@ -112,7 +112,7 @@ func (r *keepaliveRunner) runCredential(ctx context.Context, now time.Time, slot
 	}
 	r.mu.Unlock()
 
-	req := keepaliveRequest(r.settings.Model)
+	req := keepaliveRequest(r.settings.Model, r.settings.MaxOutputTokens)
 	credential := provider.ChatCredential{
 		ID:                      bearer.ID,
 		ProviderInstanceID:      bearer.ProviderInstanceID,
@@ -148,14 +148,22 @@ func (r *keepaliveRunner) runCredential(ctx context.Context, now time.Time, slot
 	r.refreshUsage(ctx, instance, bearer)
 }
 
-func keepaliveRequest(model string) openai.ChatCompletionRequest {
+func keepaliveRequest(model string, maxOutputTokens int) openai.ChatCompletionRequest {
 	model = strings.TrimSpace(model)
 	if model == "" {
 		model = "gpt-5.5"
 	}
+	if maxOutputTokens <= 0 {
+		maxOutputTokens = 1
+	}
 	content, _ := json.Marshal(keepalivePrompt)
 	return openai.ChatCompletionRequest{
-		Model: model,
+		Model:     model,
+		MaxTokens: &maxOutputTokens,
+		PresentFields: map[string]bool{
+			"max_tokens":       true,
+			"provider_options": true,
+		},
 		Messages: []openai.Message{{
 			Role:    "user",
 			Content: content,
@@ -165,9 +173,6 @@ func keepaliveRequest(model string) openai.ChatCompletionRequest {
 				"reasoning": map[string]any{"effort": "minimal"},
 				"verbosity": "low",
 			},
-		},
-		PresentFields: map[string]bool{
-			"provider_options": true,
 		},
 	}
 }

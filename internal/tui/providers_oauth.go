@@ -49,10 +49,10 @@ func (m Model) writeOAuth(b *strings.Builder) {
 		lines := []string{
 			cardTitleStyle.Render(title) + " " + statusBadge(state),
 			highlightedIdentity(row.AccountDisplayLabel, "OAuth account"),
-			accountMeta(
-				fmt.Sprintf("credential %d", row.ID),
-				safeDisplay(row.ProviderInstanceID),
-				accountMetaField("plan", row.PlanLabel),
+			metricLine(
+				metricChip("credential", fmt.Sprintf("%d", row.ID)),
+				metricChip("provider", row.ProviderInstanceID),
+				metricChip("plan", row.PlanLabel),
 				expires,
 				metricChip("refresh", refresh),
 			),
@@ -81,10 +81,10 @@ func (m Model) writeOAuth(b *strings.Builder) {
 		lines := []string{
 			cardTitleStyle.Render(accountIdentity(row.DisplayLabel, "provider account")),
 			highlightedIdentity(row.DisplayLabel, "provider account"),
-			accountMeta(
-				safeDisplay(row.ProviderInstanceID),
-				fmt.Sprintf("credential %d", row.CredentialID),
-				accountMetaField("plan", row.PlanLabel),
+			metricLine(
+				metricChip("provider", row.ProviderInstanceID),
+				metricChip("credential", fmt.Sprintf("%d", row.CredentialID)),
+				metricChip("plan", row.PlanLabel),
 			),
 		}
 		accountCards = append(accountCards, renderMetricAccentCard(metricCardWidth(width), lipgloss.Color("24"), lines...))

@@ -76,8 +76,8 @@ func usageGaugeBlock(label string, used, remaining float64, resetLabel string, w
 	}
 	line := windowStyle.Render(label) + " " +
 		balancedUsageBar(used, remaining, width) + " " +
-		valueStyle.Render("used "+percentText(used)) + " " +
-		mutedStyle.Render("left "+percentText(remaining)) + " " +
+		valueStyle.Render(percentText(used)+" used") + " " +
+		mutedStyle.Render(percentText(remaining)+" left") + " " +
 		statusBadge(status)
 	if resetLabel != "" {
 		line += "  " + mutedStyle.Render(resetLabel)
@@ -107,7 +107,7 @@ func poolGaugeBlock(label string, usedPoints, remainingPoints, capacityPoints fl
 	if width < 16 {
 		line := windowStyle.Render(label) + " " +
 			balancedUsageBar(usedPercent, remainingPercent, width) + " " +
-			valueStyle.Render(fmt.Sprintf("%.1f/%.1f", usedPoints, remainingPoints))
+			valueStyle.Render(fmt.Sprintf("u%.1fpp l%.1fpp c%.1fpp", usedPoints, remainingPoints, capacityPoints))
 		if resetLabel != "" {
 			line += "  " + mutedStyle.Render(compactResetText(resetLabel))
 		}
@@ -115,9 +115,9 @@ func poolGaugeBlock(label string, usedPoints, remainingPoints, capacityPoints fl
 	}
 	line := windowStyle.Render(label) + " " +
 		balancedUsageBar(usedPercent, remainingPercent, width) + " " +
-		valueStyle.Render(fmt.Sprintf("sum used %.1f", usedPoints)) + " " +
-		mutedStyle.Render(fmt.Sprintf("sum left %.1f", remainingPoints)) + " " +
-		mutedStyle.Render(fmt.Sprintf("sum cap %.1f", capacityPoints)) + " " +
+		valueStyle.Render(fmt.Sprintf("used %.1fpp", usedPoints)) + " " +
+		mutedStyle.Render(fmt.Sprintf("left %.1fpp", remainingPoints)) + " " +
+		mutedStyle.Render(fmt.Sprintf("cap %.1fpp", capacityPoints)) + " " +
 		statusBadge(remainingRiskLabel(remainingPercent))
 	if resetLabel != "" {
 		line += "  " + mutedStyle.Render(resetLabel)

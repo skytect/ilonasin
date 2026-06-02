@@ -39,25 +39,23 @@ func requestSummaryRow(row management.RequestSummary, nowTime time.Time, width i
 		streamChip(row.Stream),
 		cardTitleStyle.Render(requestModelDisplay(row)),
 	)
-	mid := metricLine(
-		mutedStyle.Render(credentialDisplay(row.CredentialID, row.CredentialLabel)),
-		metricChip("attempts", fmt.Sprintf("%d", row.AttemptCount)),
-		metricChip("auth", fmt.Sprintf("%d", row.AuthRetryCount)),
-		metricChip("fallback", fmt.Sprintf("%d", row.FallbackCount)),
-	)
 	tokens := metricLine(
 		compactTokenMixLine(row.PromptTokens, row.CompletionTokens, row.ReasoningTokens, row.CacheHitTokens, row.CacheMissTokens, row.CacheWriteTokens, width),
 		metricChip("total", compactInt(row.TotalTokens)),
 		compactPercentMetric("hit", row.CacheHitRate*100),
 	)
 	timing := metricLine(
+		mutedStyle.Render(credentialDisplay(row.CredentialID, row.CredentialLabel)),
+		metricChip("try", fmt.Sprintf("%d", row.AttemptCount)),
+		metricChip("auth", fmt.Sprintf("%d", row.AuthRetryCount)),
+		metricChip("fb", fmt.Sprintf("%d", row.FallbackCount)),
 		msText("lat", row.TotalLatencyMS),
 		msText("up", row.UpstreamLatencyMS),
 		msText("ttft", row.TimeToFirstTokenMS),
 		tpsText("tps", row.OutputTokensPerSecondTotal),
 	)
 	extras := requestSummaryExtras(row, width)
-	lines := []string{head, mid, tokens, timing}
+	lines := []string{head, tokens, timing}
 	if extras != "" {
 		lines = append(lines, extras)
 	}

@@ -22,7 +22,6 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 		))
 		b.WriteByte('\n')
 	}
-	accountCards := make([]string, 0, len(m.subscriptionRows))
 	for _, row := range m.subscriptionRows {
 		state := "fresh"
 		accent := lipgloss.Color("42")
@@ -34,66 +33,49 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 			state = "error"
 			accent = lipgloss.Color("160")
 		}
-		account := accountIdentity(row.AccountDisplayLabel, "subscription")
-		identityLine := highlightedIdentity(row.AccountDisplayLabel, "subscription")
-		if safeAccountDisplay(row.AccountDisplayLabel) == account {
-			identityLine = ""
-		}
+		account := highlightedIdentity(row.AccountDisplayLabel, "subscription")
 		lines := []string{
-			cardTitleStyle.Render(account) + " " + statusBadge(state),
-			accountMeta(
+			metricLine(
+				cardTitleStyle.Render(accountIdentity(row.AccountDisplayLabel, "subscription")),
+				statusBadge(state),
 				metricChip("provider", row.ProviderInstanceID),
 				metricChip("credential", fmt.Sprintf("%d", row.CredentialID)),
-				metricChip("source", row.Source),
 			),
-			accountMeta(
+			account,
+			metricLine(
 				metricChip("plan", row.PlanLabel),
 				metricChip("limit", subscriptionLimitLabel(row.LimitName, row.LimitID)),
 				timeChip("observed", now, row.ObservedAt),
-				metricChip("state", state),
 			),
-		}
-		if identityLine != "" {
-			lines = append(lines[:1], append([]string{identityLine}, lines[1:]...)...)
 		}
 		if row.ErrorClass != "" {
 			lines = append(lines, badBadgeStyle.Render("error")+" "+safeDisplay(row.ErrorClass))
 		} else {
 			lines = append(lines, subscriptionAccountWindowLines(row, subscriptionCardWidth(width), now)...)
 		}
-		accountCards = append(accountCards, renderAccentCard(subscriptionCardWidth(width), accent, lines...))
-	}
-	if len(accountCards) > 0 {
-		b.WriteString(renderCardGrid(width, accountCards))
+		b.WriteString(subscriptionAccountBlock(width, accent, lines...))
 		b.WriteByte('\n')
 	}
 	b.WriteString("\n")
 	b.WriteString(renderSectionBanner(width, "Subscription pools", fmt.Sprintf("pools %d", len(m.subscriptionPools))))
 	b.WriteByte('\n')
-	poolCards := make([]string, 0, len(m.subscriptionPools))
 	for _, row := range m.subscriptionPools {
-		accent := lipgloss.Color("42")
-		if row.StaleCount > 0 {
-			accent = lipgloss.Color("214")
-		}
 		limit := safeDisplay(row.LimitName)
 		if limit == "" {
 			limit = safeDisplay(row.LimitID)
 		}
-		lines := []string{
-			cardTitleStyle.Render(safeDisplay(row.ProviderInstanceID)) + " " + statusBadge("pooled"),
-			accountMeta(
-				metricChip("limit", limit),
-				metricChip("accounts", fmt.Sprintf("%d", row.AccountCount)),
-				metricChip("stale", fmt.Sprintf("%d", row.StaleCount)),
-			),
-		}
-		lines = append(lines, subscriptionPoolWindowLines(row, width, now)...)
-		poolCards = append(poolCards, renderAccentCard(width, accent, lines...))
-	}
-	if len(poolCards) > 0 {
-		b.WriteString(renderCardGrid(width, poolCards))
+		b.WriteString(metricLine(
+			cardTitleStyle.Render(safeDisplay(row.ProviderInstanceID)),
+			statusBadge("pooled"),
+			metricChip("limit", limit),
+			metricChip("accounts", fmt.Sprintf("%d", row.AccountCount)),
+			metricChip("stale", fmt.Sprintf("%d", row.StaleCount)),
+		))
 		b.WriteByte('\n')
+		for _, line := range subscriptionPoolWindowLines(row, width, now) {
+			b.WriteString(line)
+			b.WriteByte('\n')
+		}
 	}
 	b.WriteString("\n")
 	b.WriteString(renderSectionBanner(width, "Subscription keepalive"))
@@ -103,16 +85,31 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 		schedule = "none"
 	}
 	lines := []string{
-		cardTitleStyle.Render("keepalive") + " " + statusBadge(subscriptionKeepaliveState(m.keepaliveStatus)),
-		accountMeta(
+		metricLine(
+			cardTitleStyle.Render("keepalive"),
+			statusBadge(subscriptionKeepaliveState(m.keepaliveStatus)),
 			metricChip("enabled", fmt.Sprintf("%t", m.keepaliveStatus.Enabled)),
 			metricChip("cap", fmt.Sprintf("%t", m.keepaliveStatus.OutputCapVerified)),
 			metricChip("status", m.keepaliveStatus.Status),
 		),
-		labelStyle.Render("schedule") + " " + valueStyle.Render(safeDisplay(schedule)),
+		metricLine(labelStyle.Render("schedule"), valueStyle.Render(safeDisplay(schedule))),
 	}
-	b.WriteString(renderAccentCard(width, lipgloss.Color("238"), lines...))
+	b.WriteString(strings.Join(lines, "\n"))
 	b.WriteByte('\n')
+}
+
+func subscriptionAccountBlock(width int, accent lipgloss.Color, lines ...string) string {
+	if width >= 96 {
+		return renderMetricAccentCard(metricCardWidth(width), accent, lines...)
+	}
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			out = append(out, line)
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 func subscriptionUsageSummary(width int, rows []management.SubscriptionUsageRow, pools []management.SubscriptionUsageAggregate) string {

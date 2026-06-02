@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"fmt"
 )
 
 type migrationStep func(context.Context, *sql.Tx) error
@@ -15,9 +16,15 @@ func sqlStep(stmt string) migrationStep {
 }
 
 func addColumnIfMissing(table, column, definition string) migrationStep {
-	table = migrationIdentifier(table)
-	column = migrationIdentifier(column)
+	table, tableErr := validateMigrationIdentifier(table)
+	column, columnErr := validateMigrationIdentifier(column)
 	return func(ctx context.Context, tx *sql.Tx) error {
+		if tableErr != nil {
+			return tableErr
+		}
+		if columnErr != nil {
+			return columnErr
+		}
 		exists, err := columnExists(ctx, tx, table, column)
 		if err != nil {
 			return err
@@ -52,17 +59,17 @@ func columnExists(ctx context.Context, tx *sql.Tx, table, column string) (bool, 
 	return false, rows.Err()
 }
 
-func migrationIdentifier(value string) string {
+func validateMigrationIdentifier(value string) (string, error) {
 	if value == "" {
-		panic("empty migration identifier")
+		return "", fmt.Errorf("empty migration identifier")
 	}
 	for i, r := range value {
 		if r == '_' || r >= 'a' && r <= 'z' || i > 0 && r >= '0' && r <= '9' {
 			continue
 		}
-		panic("invalid migration identifier: " + value)
+		return "", fmt.Errorf("invalid migration identifier: %s", value)
 	}
-	return value
+	return value, nil
 }
 
 // migration001, migration002, and migration003 are historical compatibility

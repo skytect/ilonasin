@@ -29,27 +29,21 @@ func (m Model) writeUsageMetrics(b *strings.Builder) {
 		b.WriteByte('\n')
 	}
 	b.WriteString("\n")
-	b.WriteString(renderPaneSubhead(width, "Performance", fmt.Sprintf("providers %d", len(m.latencyRows))))
+	b.WriteString(renderPaneSubhead(width, "Performance",
+		fmt.Sprintf("providers %d", len(m.latencyRows)),
+		fmt.Sprintf("streams %d", totalStreamCount(m.streamRows)),
+		fmt.Sprintf("chunks %s", compactInt(totalStreamChunks(m.streamRows))),
+	))
 	b.WriteByte('\n')
-	if len(m.latencyRows) == 0 {
+	if len(m.latencyRows) == 0 && len(m.streamRows) == 0 {
 		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("110"), "performance ledger",
 			metricLine(metricChip("providers", "0"), metricChip("requests", "0")),
-			metricLine(msText("lat", 0), msText("ttft", 0), tpsText("tps", 0)),
+			metricLine(msText("lat", 0), msText("ttft", 0), tpsText("tps", 0), metricChip("streams", "0")),
 		))
 		b.WriteByte('\n')
 	}
 	for _, row := range m.latencyRows {
 		b.WriteString(latencySummaryRow(row, width))
-		b.WriteByte('\n')
-	}
-	b.WriteString("\n")
-	b.WriteString(renderPaneSubhead(width, "Streams", fmt.Sprintf("states %d", len(m.streamRows))))
-	b.WriteByte('\n')
-	if len(m.streamRows) == 0 {
-		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("110"), "stream ledger",
-			metricLine(metricChip("states", "0"), metricChip("streams", "0")),
-			metricLine(metricChip("chunks", "0"), metricChip("status", "none")),
-		))
 		b.WriteByte('\n')
 	}
 	for _, row := range m.streamRows {
@@ -192,4 +186,20 @@ func streamSummaryRow(row management.StreamSummary) string {
 		metricChip("streams", fmt.Sprintf("%d", row.StreamCount)),
 		metricChip("chunks", compactInt(row.ChunkCount)),
 	)
+}
+
+func totalStreamCount(rows []management.StreamSummary) int {
+	total := 0
+	for _, row := range rows {
+		total += row.StreamCount
+	}
+	return total
+}
+
+func totalStreamChunks(rows []management.StreamSummary) int {
+	total := 0
+	for _, row := range rows {
+		total += row.ChunkCount
+	}
+	return total
 }

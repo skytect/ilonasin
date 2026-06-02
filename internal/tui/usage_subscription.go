@@ -40,13 +40,9 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 				highlightedIdentity(row.AccountDisplayLabel, "subscription"),
 				metricChip("provider", row.ProviderInstanceID),
 				metricChip("credential", fmt.Sprintf("%d", row.CredentialID)),
-			),
-			metricLine(
 				metricChip("plan", row.PlanLabel),
-				metricChip("limit", subscriptionLimitLabel(row.LimitName, row.LimitID)),
-				metricChip("source", row.Source),
-				timeChip("observed", now, row.ObservedAt),
 			),
+			subscriptionAccountMetaLine(row, now),
 		}
 		if row.ErrorClass != "" {
 			lines = append(lines, badBadgeStyle.Render("error")+" "+safeDisplay(row.ErrorClass))
@@ -221,11 +217,31 @@ func subscriptionPoolWindowLines(row management.SubscriptionUsageAggregate, widt
 			window.TotalUsedPercentPoints,
 			window.TotalRemainingPercentPoints,
 			window.TotalCapacityPercentPoints,
+			window.AccountCount,
+			window.StaleCount,
 			resetLocalText("earliest reset", window.EarliestResetAt, now),
 			gaugeBarWidth(width),
 		))
 	}
 	return lines
+}
+
+func subscriptionAccountMetaLine(row management.SubscriptionUsageRow, now time.Time) string {
+	parts := []string{}
+	if limit := subscriptionLimitLabel(row.LimitName, row.LimitID); limit != "" {
+		parts = append(parts, metricChip("limit", limit))
+	}
+	if row.Source != "" {
+		parts = append(parts, metricChip("source", row.Source))
+	}
+	if row.ReachedType != "" {
+		parts = append(parts, metricChip("reached", row.ReachedType))
+	}
+	if row.PlanType != "" {
+		parts = append(parts, metricChip("type", row.PlanType))
+	}
+	parts = append(parts, timeChip("observed", now, row.ObservedAt))
+	return metricLine(parts...)
 }
 
 func gaugeBarWidth(width int) int {

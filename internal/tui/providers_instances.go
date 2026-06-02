@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"ilonasin/internal/management"
 )
 
 func (m Model) writeProviderInstances(b *strings.Builder) {
@@ -19,35 +21,29 @@ func (m Model) writeProviderInstances(b *strings.Builder) {
 		b.WriteByte('\n')
 		return
 	}
-	cards := make([]string, 0, len(m.providers))
 	for _, instance := range m.providers {
-		apiKey := "off"
-		if instance.APIKey {
-			apiKey = "on"
-		}
-		oauth := "off"
-		if instance.OAuth {
-			oauth = "on"
-		}
-		refresh := "off"
-		if instance.OAuthRefresh {
-			refresh = "on"
-		}
-		chat := "off"
-		if instance.Chat {
-			chat = "on"
-		}
-		models := "off"
-		if instance.ModelDiscovery {
-			models = "on"
-		}
-		lines := []string{
-			cardTitleStyle.Render(safeDisplay(instance.ID)) + " " + machineChip("type", instance.Type),
-			metricLine(machineChip("auth", instance.AuthStyle), metricChip("route", chat), metricChip("discover", models)),
-			metricLine(metricChip("api", apiKey), metricChip("oauth", oauth), metricChip("refresh", refresh)),
-			mutedStyle.Render(safeDisplay(instance.BaseURL)),
-		}
-		cards = append(cards, renderMetricAccentCard(metricCardWidth(width), lipgloss.Color("110"), lines...))
+		b.WriteString(providerInstanceRow(instance))
+		b.WriteByte('\n')
 	}
-	b.WriteString(renderMetricCardGrid(width, cards))
+}
+
+func providerInstanceRow(instance management.ProviderInstance) string {
+	return metricLine(
+		cardTitleStyle.Render(safeDisplay(instance.ID)),
+		machineChip("type", instance.Type),
+		machineChip("auth", instance.AuthStyle),
+		metricChip("route", onOff(instance.Chat)),
+		metricChip("discover", onOff(instance.ModelDiscovery)),
+		metricChip("api", onOff(instance.APIKey)),
+		metricChip("oauth", onOff(instance.OAuth)),
+		metricChip("refresh", onOff(instance.OAuthRefresh)),
+		mutedStyle.Render(safeDisplay(instance.BaseURL)),
+	)
+}
+
+func onOff(enabled bool) string {
+	if enabled {
+		return "on"
+	}
+	return "off"
 }

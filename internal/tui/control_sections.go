@@ -46,6 +46,14 @@ func (m Model) apiSummaryBody(width int) string {
 	))
 	b.WriteByte('\n')
 	enabledTokens, disabledTokens := localTokenStateCounts(m.tokenRows)
+	b.WriteString(metricLine(
+		metricChip("bind", m.runtime.Bind),
+		metricChip("downstream", "local"),
+		metricChip("enabled", fmt.Sprintf("%d", enabledTokens)),
+		metricChip("disabled", fmt.Sprintf("%d", disabledTokens)),
+		metricChip("total", fmt.Sprintf("%d", len(m.tokenRows))),
+	))
+	b.WriteString("\n\n")
 	b.WriteString(apiRouteLine("Chat Completions", "/v1/chat/completions", "chat_completions"))
 	b.WriteByte('\n')
 	b.WriteString(apiRouteLine("Responses", "/responses  /v1/responses", "responses"))
@@ -53,17 +61,6 @@ func (m Model) apiSummaryBody(width int) string {
 	b.WriteString(apiRouteLine("Anthropic Messages", "/v1/messages", "anthropic_messages"))
 	b.WriteByte('\n')
 	b.WriteString(apiRouteLine("Anthropic Count", "/v1/messages/count_tokens", "anthropic_count_tokens"))
-	b.WriteString("\n\n")
-	b.WriteString(metricLine(
-		metricChip("downstream", "local"),
-		metricChip("enabled", fmt.Sprintf("%d", enabledTokens)),
-		metricChip("disabled", fmt.Sprintf("%d", disabledTokens)),
-		metricChip("total", fmt.Sprintf("%d", len(m.tokenRows))),
-	))
-	b.WriteByte('\n')
-	b.WriteString(metricLine(metricChip("bind", m.runtime.Bind), metricChip("upstream", "providers")))
-	b.WriteByte('\n')
-	b.WriteString(mutedStyle.Render("Provider API keys, OAuth accounts, and fallback groups are managed in providers."))
 	return strings.TrimRight(b.String(), "\n")
 }
 

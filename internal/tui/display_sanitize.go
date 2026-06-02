@@ -38,10 +38,6 @@ func safeAccountDisplay(value string) string {
 	return safeDisplayWithPattern(value, unsafeAccountDisplayPattern)
 }
 
-func safeWrappedDisplay(value string) string {
-	return safeWrappedDisplayWithPattern(value, unsafeDisplayPattern)
-}
-
 func safeWrappedChromeDisplay(value string) string {
 	value = strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) {

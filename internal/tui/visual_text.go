@@ -64,6 +64,10 @@ func wrappedMetricLine(width int, parts ...string) string {
 	return strings.Join(lines, "\n")
 }
 
+func wrappedMetricBlock(width int, parts ...string) string {
+	return wrapTargetedLines(width, wrappedMetricLine(width, parts...))
+}
+
 func wrappedDisplayField(label, value string, width int) string {
 	label = safeMetricLabel(label)
 	value = strings.TrimSpace(value)
@@ -134,6 +138,18 @@ func statusBadge(state string) string {
 func metricChip(label, value string) string {
 	label = safeMetricLabel(label)
 	value = safeDisplay(value)
+	if label == "" {
+		label = "metric"
+	}
+	if value == "" {
+		value = "none"
+	}
+	return chipStyle.Render(label + " " + value)
+}
+
+func wrappedMetricChip(label, value string) string {
+	label = safeMetricLabel(label)
+	value = safeFullWrappedDisplay(value)
 	if label == "" {
 		label = "metric"
 	}

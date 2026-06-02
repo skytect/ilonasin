@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/x/ansi"
 )
 
 func metricCardWidth(width int) int {
@@ -52,7 +51,7 @@ func renderMetricAccentCard(width int, accent lipgloss.Color, lines ...string) s
 	bodyLines := make([]string, 0, len(lines))
 	for _, line := range lines {
 		for _, part := range strings.Split(strings.TrimRight(line, "\n"), "\n") {
-			bodyLines = append(bodyLines, ansi.Truncate(part, innerWidth, "..."))
+			bodyLines = append(bodyLines, wrapStyledLine(part, innerWidth)...)
 		}
 	}
 	body := strings.TrimRight(strings.Join(bodyLines, "\n"), "\n")

@@ -4,7 +4,6 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/x/ansi"
 )
 
 func renderCard(width int, lines ...string) string {
@@ -17,41 +16,33 @@ func renderCompactCard(width int, lines ...string) string {
 }
 
 func renderSectionBanner(width int, title string, chips ...string) string {
-	title = safeChromeDisplay(title)
+	title = safeWrappedChromeDisplay(title)
 	if title == "" {
 		title = "section"
 	}
 	parts := []string{heroStyle.Render(title)}
 	for _, chip := range chips {
-		chip = safeChromeDisplay(chip)
+		chip = safeWrappedChromeDisplay(chip)
 		if chip != "" {
 			parts = append(parts, chipStyle.Render(chip))
 		}
 	}
-	line := strings.Join(parts, " ")
-	if width <= 0 || lipgloss.Width(line) <= width {
-		return line
-	}
-	return ansi.Truncate(line, width, "...")
+	return wrapContainerLine(width, strings.Join(parts, " "))
 }
 
 func renderPaneSubhead(width int, title string, chips ...string) string {
-	title = safeChromeDisplay(title)
+	title = safeWrappedChromeDisplay(title)
 	if title == "" {
 		title = "group"
 	}
 	parts := []string{paneTitleStyle.Render(title)}
 	for _, chip := range chips {
-		chip = safeChromeDisplay(chip)
+		chip = safeWrappedChromeDisplay(chip)
 		if chip != "" {
 			parts = append(parts, chipStyle.Render(chip))
 		}
 	}
-	line := strings.Join(parts, " ")
-	if width <= 0 || ansi.StringWidth(line) <= width {
-		return line
-	}
-	return ansi.Truncate(line, width, "...")
+	return wrapContainerLine(width, strings.Join(parts, " "))
 }
 
 func renderCardGrid(width int, cards []string) string {
@@ -90,7 +81,7 @@ func renderAccentCard(width int, accent lipgloss.Color, lines ...string) string 
 }
 
 func renderEmptyMetricCard(width int, accent lipgloss.Color, title string, lines ...string) string {
-	cardLines := []string{cardTitleStyle.Render(safeChromeDisplay(title)) + " " + statusBadge("disabled")}
+	cardLines := []string{cardTitleStyle.Render(safeWrappedChromeDisplay(title)) + " " + statusBadge("disabled")}
 	cardLines = append(cardLines, lines...)
 	return renderMetricAccentCard(metricCardWidth(width), accent, cardLines...)
 }
@@ -106,9 +97,13 @@ func renderCardWithStyle(style lipgloss.Style, width int, lines ...string) strin
 	bodyLines := make([]string, 0, len(lines))
 	for _, line := range lines {
 		for _, part := range strings.Split(strings.TrimRight(line, "\n"), "\n") {
-			bodyLines = append(bodyLines, ansi.Truncate(part, innerWidth, "..."))
+			bodyLines = append(bodyLines, wrapStyledLine(part, innerWidth)...)
 		}
 	}
 	body := strings.TrimRight(strings.Join(bodyLines, "\n"), "\n")
 	return style.Width(innerWidth).Render(body)
+}
+
+func wrapContainerLine(width int, line string) string {
+	return strings.Join(wrapStyledLine(line, width), "\n")
 }

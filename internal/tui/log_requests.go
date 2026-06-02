@@ -64,7 +64,7 @@ func requestSummaryRow(row management.RequestSummary, nowTime time.Time, width i
 
 func requestTableHeader(width int) string {
 	columns := requestTableColumns(width)
-	labels := []string{"status", "route", "http", "time", "io", "cred", "try", "lat", "total"}
+	labels := []string{"st", "rt", "http", "time", "io", "cred", "try", "lat", "tok"}
 	cells := make([]string, 0, len(columns))
 	for i, column := range columns {
 		cells = append(cells, fitPlainCell(labels[i], column))
@@ -80,7 +80,7 @@ func requestTableRow(row management.RequestSummary, nowTime time.Time, state str
 	}
 	route := shortEndpointDisplay(row.Endpoint)
 	cells := []string{
-		state,
+		shortRequestState(state),
 		route,
 		fmt.Sprintf("%d", row.HTTPStatus),
 		formatRelativeTimeNoClock(nowTime, row.StartedAt),
@@ -103,11 +103,24 @@ func shortEndpointDisplay(value string) string {
 	case "responses":
 		return "resp"
 	case "anthropic_messages":
-		return "messages"
+		return "msg"
 	case "anthropic_count_tokens":
 		return "count"
 	default:
 		return "unknown"
+	}
+}
+
+func shortRequestState(state string) string {
+	switch state {
+	case "fresh":
+		return "ok"
+	case "warning":
+		return "warn"
+	case "error":
+		return "err"
+	default:
+		return safeMetricLabel(state)
 	}
 }
 
@@ -184,13 +197,13 @@ func fitPlainCell(value string, width int) string {
 func requestSummaryExtras(row management.RequestSummary, width int) string {
 	parts := []string{}
 	if row.FallbackReason != "" {
-		parts = append(parts, metricChip("fallback-reason", row.FallbackReason))
+		parts = append(parts, wrappedMetricChip("fallback-reason", row.FallbackReason))
 	}
 	if endpoint := safeEndpointDisplay(row.Endpoint); endpoint != "" {
 		parts = append(parts, metricChip("endpoint", endpoint))
 	}
 	if row.ErrorClass != "" {
-		parts = append(parts, badBadgeStyle.Render(safeDisplay(row.ErrorClass)))
+		parts = append(parts, badBadgeStyle.Render(safeFullWrappedDisplay(row.ErrorClass)))
 	}
 	if !narrowMetrics(width) {
 		parts = append(parts,
@@ -203,18 +216,18 @@ func requestSummaryExtras(row management.RequestSummary, width int) string {
 		parts = append(parts, msText("up", row.UpstreamLatencyMS))
 	}
 	if row.RequestedServiceTier != "" {
-		parts = append(parts, metricChip("tier", row.RequestedServiceTier))
+		parts = append(parts, wrappedMetricChip("tier", row.RequestedServiceTier))
 	}
 	if row.EffectiveServiceTier != "" && row.EffectiveServiceTier != row.RequestedServiceTier {
-		parts = append(parts, metricChip("effective", row.EffectiveServiceTier))
+		parts = append(parts, wrappedMetricChip("effective", row.EffectiveServiceTier))
 	}
 	if row.ReasoningEffort != "" {
-		parts = append(parts, metricChip("reasoning", row.ReasoningEffort))
+		parts = append(parts, wrappedMetricChip("reasoning", row.ReasoningEffort))
 	}
 	if row.ThinkingType != "" {
-		parts = append(parts, metricChip("thinking", row.ThinkingType))
+		parts = append(parts, wrappedMetricChip("thinking", row.ThinkingType))
 	}
-	return wrappedMetricLine(width, parts...)
+	return wrappedMetricBlock(width, parts...)
 }
 
 func requestModelRoute(row management.RequestSummary) string {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 )
 
@@ -143,9 +144,14 @@ func validateResponsesTopLevelKeys(raw map[string]json.RawMessage) error {
 		"service_tier":        true,
 		"text":                true,
 	}
+	keys := make([]string, 0, len(raw))
 	for key := range raw {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
 		if !allowed[key] {
-			return errors.New("request contains unsupported fields")
+			return fmt.Errorf("%s is unsupported", key)
 		}
 	}
 	return nil

@@ -4,6 +4,7 @@ import (
 	"context"
 	"hash/fnv"
 	"strconv"
+	"strings"
 	"time"
 
 	"ilonasin/internal/metadata"
@@ -18,8 +19,8 @@ type credentialAttemptPlan struct {
 	retryAfter      *time.Time
 }
 
-func (s *Server) planCredentialAttempts(ctx context.Context, addr routing.ModelAddress, tokenID int64, credentials []provider.BearerCredential) credentialAttemptPlan {
-	ordered := affinityCredentialOrder(addr, tokenID, credentials)
+func (s *Server) planCredentialAttempts(ctx context.Context, addr routing.ModelAddress, tokenID int64, affinityKey string, credentials []provider.BearerCredential) credentialAttemptPlan {
+	ordered := affinityCredentialOrder(addr, tokenID, affinityKey, credentials)
 	plan := credentialAttemptPlan{attempts: ordered}
 	if len(credentials) == 0 {
 		return plan
@@ -60,11 +61,11 @@ func (s *Server) planCredentialAttempts(ctx context.Context, addr routing.ModelA
 	return plan
 }
 
-func affinityCredentialOrder(addr routing.ModelAddress, tokenID int64, credentials []provider.BearerCredential) []provider.BearerCredential {
+func affinityCredentialOrder(addr routing.ModelAddress, tokenID int64, affinityKey string, credentials []provider.BearerCredential) []provider.BearerCredential {
 	if len(credentials) < 2 {
 		return credentials
 	}
-	start := credentialAffinityStart(addr, tokenID, len(credentials))
+	start := credentialAffinityStart(addr, tokenID, affinityKey, len(credentials))
 	if start == 0 {
 		return credentials
 	}
@@ -74,10 +75,11 @@ func affinityCredentialOrder(addr routing.ModelAddress, tokenID int64, credentia
 	return out
 }
 
-func credentialAffinityStart(addr routing.ModelAddress, tokenID int64, size int) int {
+func credentialAffinityStart(addr routing.ModelAddress, tokenID int64, affinityKey string, size int) int {
 	if size <= 1 {
 		return 0
 	}
+	affinityKey = strings.TrimSpace(affinityKey)
 	h := fnv.New64a()
 	_, _ = h.Write([]byte("ilonasin-credential-affinity-v1\x00"))
 	_, _ = h.Write([]byte(strconv.FormatInt(tokenID, 10)))
@@ -85,6 +87,10 @@ func credentialAffinityStart(addr routing.ModelAddress, tokenID int64, size int)
 	_, _ = h.Write([]byte(addr.ProviderInstanceID))
 	_, _ = h.Write([]byte{0})
 	_, _ = h.Write([]byte(addr.ProviderModelID))
+	if affinityKey != "" {
+		_, _ = h.Write([]byte{0})
+		_, _ = h.Write([]byte(affinityKey))
+	}
 	return int(h.Sum64() % uint64(size))
 }
 

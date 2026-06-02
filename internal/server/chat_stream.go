@@ -106,7 +106,7 @@ func shouldRecordStreamHealth(summary provider.ChatStreamSummary) bool {
 
 func (s *Server) executeStreamingChat(r *http.Request, sc streamContext, sink *streamSink) streamExecution {
 	exec := streamExecution{}
-	plan := s.planCredentialAttempts(r.Context(), sc.address, sc.token.ID, sc.credentials)
+	plan := s.planCredentialAttempts(r.Context(), sc.address, sc.token.ID, sc.request.AffinityKey, sc.credentials)
 	modelCredential := plan.modelCredential
 	if plan.exhausted {
 		exec.final = streamAttempt{summary: provider.ChatStreamSummary{

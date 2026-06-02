@@ -39,6 +39,7 @@ type ChatCompletionRequest struct {
 	TopLogprobs         *int                   `json:"top_logprobs,omitempty"`
 	LogitBias           map[string]json.Number `json:"logit_bias,omitempty"`
 	ReasoningOptions    map[string]any         `json:"provider_options,omitempty"`
+	AffinityKey         string                 `json:"-"`
 	PresentFields       map[string]bool        `json:"-"`
 	CodexResponsesInput []json.RawMessage      `json:"-"`
 	CodexResponsesTools []json.RawMessage      `json:"-"`
@@ -136,7 +137,22 @@ func DecodeChatCompletion(r io.Reader) (ChatCompletionRequest, error) {
 	for key := range raw {
 		req.PresentFields[key] = true
 	}
+	req.AffinityKey = chatAffinityKey(req)
 	return req, nil
+}
+
+func chatAffinityKey(req ChatCompletionRequest) string {
+	if req.SessionID != nil {
+		if value := strings.TrimSpace(*req.SessionID); value != "" {
+			return value
+		}
+	}
+	if req.User != nil {
+		if value := strings.TrimSpace(*req.User); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (r ChatCompletionRequest) HasField(key string) bool {

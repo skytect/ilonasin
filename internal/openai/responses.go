@@ -8,6 +8,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 type ResponsesRequest struct {
@@ -21,6 +22,7 @@ type ResponsesRequest struct {
 	Reasoning         map[string]any
 	ServiceTier       *string
 	Text              map[string]any
+	PromptCacheKey    string
 }
 
 type ResponseInputItem struct {
@@ -109,6 +111,7 @@ func DecodeResponses(r io.Reader) (ResponsesRequest, error) {
 	if err != nil {
 		return ResponsesRequest{}, err
 	}
+	promptCacheKey := responseAffinityPromptCacheKey(raw["prompt_cache_key"])
 	if err := validateResponsesInclude(raw["include"], reasoning != nil); err != nil {
 		return ResponsesRequest{}, err
 	}
@@ -123,7 +126,23 @@ func DecodeResponses(r io.Reader) (ResponsesRequest, error) {
 		Reasoning:         reasoning,
 		ServiceTier:       serviceTier,
 		Text:              text,
+		PromptCacheKey:    promptCacheKey,
 	}, nil
+}
+
+func responseAffinityPromptCacheKey(raw json.RawMessage) string {
+	if len(bytes.TrimSpace(raw)) == 0 || isJSONNull(raw) {
+		return ""
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return ""
+	}
+	value = strings.TrimSpace(value)
+	if value == "" || utf8.RuneCountInString(value) > 256 {
+		return ""
+	}
+	return value
 }
 
 func validateResponsesTopLevelKeys(raw map[string]json.RawMessage) error {
@@ -649,6 +668,7 @@ func (r ResponsesRequest) ToChatCompletionRequest(providerType string) (ChatComp
 		Model:               r.Model,
 		Messages:            messages,
 		Stream:              false,
+		AffinityKey:         r.PromptCacheKey,
 		PresentFields:       map[string]bool{"model": true, "messages": true},
 		CodexInstructions:   codexInstructions,
 		CodexResponsesInput: nil,

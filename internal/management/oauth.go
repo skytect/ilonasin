@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"ilonasin/internal/credentials"
-	"ilonasin/internal/provider"
 )
 
 type StartOAuthDeviceLoginRequest struct {
@@ -137,13 +136,14 @@ func safeOAuthErrorClass(err error) (string, string) {
 	if err == nil {
 		return "", ""
 	}
-	var loginErr provider.OAuthDeviceLoginError
-	if errors.As(err, &loginErr) && loginErr.Class != "" {
-		return safeManagementErrorClass(loginErr.Class), safeEventID(loginErr.EventID)
+	if class := credentials.OAuthDeviceLoginErrorClass(err); class != "" {
+		return safeManagementErrorClass(class), safeEventID(credentials.OAuthDeviceLoginErrorEventID(err))
 	}
-	var refreshErr provider.OAuthRefreshError
-	if errors.As(err, &refreshErr) && refreshErr.Class != "" {
-		return safeManagementErrorClass(refreshErr.Class), ""
+	if errors.Is(err, credentials.ErrOAuthRefreshFailed) {
+		return "oauth_refresh_failed", ""
+	}
+	if class := credentials.OAuthRefreshErrorClass(err); class != "" {
+		return safeManagementErrorClass(class), ""
 	}
 	switch {
 	case errors.Is(err, credentials.ErrCredentialNotFound):
@@ -154,8 +154,6 @@ func safeOAuthErrorClass(err error) (string, string) {
 		return "unsupported_credential", ""
 	case errors.Is(err, credentials.ErrInvalidOAuthInput):
 		return "invalid_oauth_input", ""
-	case errors.Is(err, credentials.ErrOAuthRefreshFailed):
-		return "oauth_refresh_failed", ""
 	default:
 		return "oauth_unavailable", ""
 	}

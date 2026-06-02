@@ -941,6 +941,58 @@ func refreshFailureDescription(err error) string {
 	return ""
 }
 
+func OAuthDeviceLoginErrorClass(err error) string {
+	type classified interface {
+		OAuthDeviceLoginErrorClass() string
+	}
+	var c classified
+	if errors.As(err, &c) {
+		return strings.TrimSpace(c.OAuthDeviceLoginErrorClass())
+	}
+	var loginErr provider.OAuthDeviceLoginError
+	if errors.As(err, &loginErr) {
+		return strings.TrimSpace(loginErr.Class)
+	}
+	return ""
+}
+
+func OAuthDeviceLoginErrorEventID(err error) string {
+	type identified interface {
+		OAuthDeviceLoginErrorEventID() string
+	}
+	var i identified
+	if errors.As(err, &i) {
+		return strings.TrimSpace(i.OAuthDeviceLoginErrorEventID())
+	}
+	var loginErr provider.OAuthDeviceLoginError
+	if errors.As(err, &loginErr) {
+		return strings.TrimSpace(loginErr.EventID)
+	}
+	return ""
+}
+
+func OAuthRefreshErrorClass(err error) string {
+	type classified interface {
+		OAuthRefreshErrorClass() string
+	}
+	var c classified
+	if errors.As(err, &c) {
+		return strings.TrimSpace(c.OAuthRefreshErrorClass())
+	}
+	var refreshErr provider.OAuthRefreshError
+	if errors.As(err, &refreshErr) {
+		return strings.TrimSpace(refreshErr.Class)
+	}
+	type refreshClassified interface {
+		RefreshFailureClass() string
+	}
+	var r refreshClassified
+	if errors.As(err, &r) {
+		return strings.TrimSpace(r.RefreshFailureClass())
+	}
+	return ""
+}
+
 func safeRefreshFailureDescription(value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" {

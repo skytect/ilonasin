@@ -203,6 +203,11 @@ codex/gpt-5.5
 The first path segment identifies a configured provider instance, not a provider
 class.
 
+Generic OpenAI-compatible routes may also accept a bare provider model ID as a
+compatibility alias when the model cache has exactly one exact match for that
+ID. If zero providers match, or more than one provider matches, the request must
+fail with `invalid_model`; the router must not guess across providers.
+
 For `openrouter/deepseek/deepseek-v4-pro`:
 
 - provider instance ID: `openrouter`

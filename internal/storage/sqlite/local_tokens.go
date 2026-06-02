@@ -73,13 +73,12 @@ func (s *Store) DisableLocalToken(ctx context.Context, id int64, disabledAt time
 
 func (s *Store) FindLocalTokenByHash(ctx context.Context, hash string) (credentials.LocalTokenAuthRecord, error) {
 	row := s.DB.QueryRowContext(ctx, `
-		SELECT id, label, token_hash, token_prefix, token_last4, disabled_at IS NOT NULL
+		SELECT id, label, token_hash, disabled_at IS NOT NULL
 		FROM client_tokens
 		WHERE token_hash = ?
 	`, hash)
 	var rec credentials.LocalTokenAuthRecord
-	var unusedPrefix, unusedLast4 string
-	if err := row.Scan(&rec.ID, &rec.Label, &rec.TokenHash, &unusedPrefix, &unusedLast4, &rec.Disabled); err != nil {
+	if err := row.Scan(&rec.ID, &rec.Label, &rec.TokenHash, &rec.Disabled); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return credentials.LocalTokenAuthRecord{}, fmt.Errorf("client token not found")
 		}

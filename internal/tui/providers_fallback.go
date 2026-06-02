@@ -14,12 +14,12 @@ func (m Model) writeFallbackPolicies(b *strings.Builder) {
 		return
 	}
 	width := m.viewWidth()
-	b.WriteString(renderSectionBanner(width, "Credential groups", fmt.Sprintf("groups %d", len(m.fallbackPolicies))))
+	b.WriteString(renderSectionBanner(width, "Credential fallback metadata", fmt.Sprintf("groups %d", len(m.fallbackPolicies))))
 	b.WriteByte('\n')
 	if len(m.fallbackPolicies) == 0 {
 		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("110"), "credential groups",
 			metricLine(metricChip("groups", "0"), metricChip("policy", "default")),
-			metricLine(metricChip("fallback", "same-provider"), metricChip("scope", "metadata")),
+			metricLine(metricChip("pool", "same-provider"), metricChip("scope", "metadata")),
 		))
 		b.WriteByte('\n')
 		return
@@ -45,5 +45,6 @@ func fallbackPolicyRow(row management.FallbackPolicy) string {
 		metricChip("kind", row.CredentialKind),
 		metricChip("keys", fmt.Sprintf("%d", row.CredentialCount)),
 		metricChip("policy", explicit),
+		metricChip("scope", "same-provider"),
 	)
 }

@@ -30,7 +30,7 @@ func (m Model) writeUpstreamCredentials(b *strings.Builder) {
 		return
 	}
 	for _, cred := range m.credentials {
-		b.WriteString(upstreamCredentialRow(cred, m.nowTime()))
+		b.WriteString(upstreamCredentialRow(cred, m.nowTime(), width))
 		b.WriteByte('\n')
 	}
 }
@@ -48,21 +48,25 @@ func upstreamCredentialStateCounts(rows []management.UpstreamCredential) (int, i
 	return enabled, disabled
 }
 
-func upstreamCredentialRow(cred management.UpstreamCredential, now time.Time) string {
+func upstreamCredentialRow(cred management.UpstreamCredential, now time.Time, width int) string {
 	state := "enabled"
 	if cred.Disabled {
 		state = "disabled"
 	}
-	line := metricLine(
+	head := metricLine(
 		statusBadge(state),
 		cardTitleStyle.Render(fmt.Sprintf("%d %s", cred.ID, safeDisplay(cred.Label))),
 		metricChip("provider", cred.ProviderInstanceID),
 		metricChip("group", cred.FallbackGroup),
+		machineChip("kind", cred.Kind),
 		fragmentChip("key", cred.SecretPrefix, cred.SecretLast4),
 	)
-	meta := metricLine(machineChip("kind", cred.Kind), timeChip("created", now, cred.CreatedAt), optionalTimeChip("disabled", now, cred.DisabledAt))
+	meta := metricLine(timeChip("created", now, cred.CreatedAt), optionalTimeChip("disabled", now, cred.DisabledAt))
 	if meta == "" {
-		return line
+		return head
 	}
-	return strings.Join([]string{line, meta}, "\n")
+	if width >= 96 {
+		return metricLine(head, meta)
+	}
+	return strings.Join([]string{head, meta}, "\n")
 }

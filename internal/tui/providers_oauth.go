@@ -31,7 +31,7 @@ func (m Model) writeOAuth(b *strings.Builder) {
 		b.WriteByte('\n')
 	}
 	for i, row := range m.oauthRows {
-		b.WriteString(oauthCredentialRow(row, i == m.oauthSelected, now))
+		b.WriteString(oauthCredentialRow(row, i == m.oauthSelected, now, width))
 		b.WriteByte('\n')
 	}
 	b.WriteString("\n")
@@ -45,12 +45,12 @@ func (m Model) writeOAuth(b *strings.Builder) {
 		b.WriteByte('\n')
 	}
 	for _, row := range m.accountRows {
-		b.WriteString(providerAccountRow(row))
+		b.WriteString(providerAccountRow(row, width))
 		b.WriteByte('\n')
 	}
 }
 
-func oauthCredentialRow(row management.OAuthCredential, selected bool, now time.Time) string {
+func oauthCredentialRow(row management.OAuthCredential, selected bool, now time.Time, width int) string {
 	cursor := " "
 	if selected {
 		cursor = ">"
@@ -67,7 +67,7 @@ func oauthCredentialRow(row management.OAuthCredential, selected bool, now time.
 	if refresh == "" {
 		refresh = "none"
 	}
-	line := metricLine(
+	head := metricLine(
 		statusBadge(state),
 		cardTitleStyle.Render(cursor+" oauth "+fmt.Sprintf("%d", row.ID)),
 		metricChip("provider", row.ProviderInstanceID),
@@ -76,19 +76,36 @@ func oauthCredentialRow(row management.OAuthCredential, selected bool, now time.
 		metricChip("refresh", refresh),
 	)
 	identity := highlightedIdentity(row.AccountDisplayLabel, "OAuth account")
-	if refreshDescription := safeRefreshFailureDescriptionDisplay(row.RefreshFailureDescription); refreshDescription != "" {
-		return strings.Join([]string{line, identity, mutedStyle.Render(refreshDescription)}, "\n")
+	if width >= 118 {
+		head = metricLine(head, identity)
+		identity = ""
 	}
-	return strings.Join([]string{line, identity}, "\n")
+	if refreshDescription := safeRefreshFailureDescriptionDisplay(row.RefreshFailureDescription); refreshDescription != "" {
+		return compactProviderLines(head, identity, mutedStyle.Render(refreshDescription))
+	}
+	return compactProviderLines(head, identity)
 }
 
-func providerAccountRow(row management.ProviderAccount) string {
-	return strings.Join([]string{
-		highlightedIdentity(row.DisplayLabel, "provider account"),
-		metricLine(
-			metricChip("provider", row.ProviderInstanceID),
-			metricChip("credential", fmt.Sprintf("%d", row.CredentialID)),
-			metricChip("plan", row.PlanLabel),
-		),
-	}, "\n")
+func providerAccountRow(row management.ProviderAccount, width int) string {
+	identity := highlightedIdentity(row.DisplayLabel, "provider account")
+	meta := metricLine(
+		metricChip("provider", row.ProviderInstanceID),
+		metricChip("credential", fmt.Sprintf("%d", row.CredentialID)),
+		metricChip("plan", row.PlanLabel),
+	)
+	if width >= 112 {
+		return metricLine(identity, meta)
+	}
+	return compactProviderLines(identity, meta)
+}
+
+func compactProviderLines(lines ...string) string {
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			out = append(out, line)
+		}
+	}
+	return strings.Join(out, "\n")
 }

@@ -31,17 +31,13 @@ func (m Model) writeFallbacks(b *strings.Builder) {
 }
 
 func fallbackSummaryRow(row management.FallbackSummary, now time.Time) string {
-	return strings.Join([]string{
-		metricLine(
-			statusBadge("warning"),
-			cardTitleStyle.Render(safeDisplay(row.ProviderInstanceID)),
-			metricChip("model", row.ModelID),
-			timeChip("at", now, row.OccurredAt),
-			metricChip("reason", row.Reason),
-		),
-		metricLine(
-			metricChip("from", credentialDisplay(row.FromCredentialID, row.FromCredentialLabel)),
-			metricChip("to", credentialDisplay(row.ToCredentialID, row.ToCredentialLabel)),
-		),
-	}, "\n")
+	return metricLine(
+		statusBadge("warning"),
+		cardTitleStyle.Render(safeDisplay(row.ProviderInstanceID)),
+		metricChip("model", row.ModelID),
+		timeChip("at", now, row.OccurredAt),
+		metricChip("reason", row.Reason),
+		metricChip("from", credentialDisplay(row.FromCredentialID, row.FromCredentialLabel)),
+		metricChip("to", credentialDisplay(row.ToCredentialID, row.ToCredentialLabel)),
+	)
 }

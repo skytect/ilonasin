@@ -44,20 +44,21 @@ func requestSummaryRow(row management.RequestSummary, nowTime time.Time, width i
 		compactTokenMixLine(row.PromptTokens, row.CompletionTokens, row.ReasoningTokens, row.CacheHitTokens, row.CacheMissTokens, row.CacheWriteTokens, width),
 		metricChip("total", compactInt(row.TotalTokens)),
 	)
-	timing := metricLine(
+	route := metricLine(
 		mutedStyle.Render(credentialDisplay(row.CredentialID, row.CredentialLabel)),
 		metricChip("try", fmt.Sprintf("%d", row.AttemptCount)),
 		metricChip("auth", fmt.Sprintf("%d", row.AuthRetryCount)),
 		metricChip("fb", fmt.Sprintf("%d", row.FallbackCount)),
-	)
-	performance := metricLine(
 		msText("lat", row.TotalLatencyMS),
 		msText("ttft", row.TimeToFirstTokenMS),
 		tpsText("tps", row.OutputTokensPerSecondTotal),
-		compactRateBars(width, rateMetric{"hit", row.CacheHitRate * 100}),
 	)
+	performance := metricLine(compactRateBars(width, rateMetric{"hit", row.CacheHitRate * 100}))
 	extras := requestSummaryExtras(row, width)
-	lines := []string{head, tokens, timing, performance}
+	lines := []string{head, tokens, route}
+	if performance != "" {
+		lines = append(lines, performance)
+	}
 	if extras != "" {
 		lines = append(lines, extras)
 	}

@@ -78,16 +78,28 @@ func wrappedDisplayField(label, value string, width int) string {
 		value = "none"
 	}
 	prefix := mutedStyle.Render(label)
-	available := width - len(label) - 1
-	if available < 12 {
+	prefixWidth := ansi.StringWidth(prefix)
+	available := width - prefixWidth - 1
+	if width < 1 {
 		available = width
+	}
+	if available < 1 {
+		chunks := wrapDisplayChunks(value, width)
+		if len(chunks) == 0 {
+			return prefix
+		}
+		lines := []string{prefix}
+		for _, chunk := range chunks {
+			lines = append(lines, cardTitleStyle.Render(chunk))
+		}
+		return strings.Join(lines, "\n")
 	}
 	chunks := wrapDisplayChunks(value, available)
 	if len(chunks) == 0 {
 		return prefix
 	}
 	lines := []string{prefix + " " + cardTitleStyle.Render(chunks[0])}
-	indent := strings.Repeat(" ", len(label)+1)
+	indent := strings.Repeat(" ", prefixWidth+1)
 	for _, chunk := range chunks[1:] {
 		lines = append(lines, indent+cardTitleStyle.Render(chunk))
 	}
@@ -105,6 +117,45 @@ func wrapDisplayChunks(value string, width int) []string {
 	if width < 1 {
 		width = 1
 	}
+	if strings.ContainsAny(value, " \t") {
+		return wrapDisplayWords(value, width)
+	}
+	return hardWrapDisplayValue(value, width)
+}
+
+func wrapDisplayWords(value string, width int) []string {
+	chunks := []string{}
+	var b strings.Builder
+	for _, word := range strings.Fields(value) {
+		if ansi.StringWidth(word) > width {
+			if b.Len() > 0 {
+				chunks = append(chunks, b.String())
+				b.Reset()
+			}
+			chunks = append(chunks, hardWrapDisplayValue(word, width)...)
+			continue
+		}
+		if b.Len() == 0 {
+			b.WriteString(word)
+			continue
+		}
+		candidate := b.String() + " " + word
+		if ansi.StringWidth(candidate) > width {
+			chunks = append(chunks, b.String())
+			b.Reset()
+			b.WriteString(word)
+			continue
+		}
+		b.WriteString(" ")
+		b.WriteString(word)
+	}
+	if b.Len() > 0 {
+		chunks = append(chunks, b.String())
+	}
+	return chunks
+}
+
+func hardWrapDisplayValue(value string, width int) []string {
 	chunks := []string{}
 	var b strings.Builder
 	for _, r := range value {

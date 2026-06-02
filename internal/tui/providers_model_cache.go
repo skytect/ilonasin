@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -13,7 +14,7 @@ import (
 type modelCacheSummary struct {
 	ProviderInstanceID string
 	Count              int
-	UpdatedAt          string
+	UpdatedAt          time.Time
 }
 
 func modelCacheSummaries(rows []management.ModelMetadata) []modelCacheSummary {
@@ -22,9 +23,8 @@ func modelCacheSummaries(rows []management.ModelMetadata) []modelCacheSummary {
 		summary := byProvider[row.ProviderInstanceID]
 		summary.ProviderInstanceID = row.ProviderInstanceID
 		summary.Count++
-		updated := row.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z")
-		if updated > summary.UpdatedAt {
-			summary.UpdatedAt = updated
+		if row.UpdatedAt.After(summary.UpdatedAt) {
+			summary.UpdatedAt = row.UpdatedAt
 		}
 		byProvider[row.ProviderInstanceID] = summary
 	}
@@ -52,7 +52,19 @@ func (m Model) writeModelCache(b *strings.Builder) {
 		b.WriteByte('\n')
 		return
 	}
+	now := m.nowTime()
 	for _, summary := range summaries {
-		fmt.Fprintf(b, "- %s %d models updated %s\n", safeDisplay(summary.ProviderInstanceID), summary.Count, safeDisplay(summary.UpdatedAt))
+		b.WriteString(modelCacheSummaryRow(summary, now))
+		b.WriteByte('\n')
 	}
+}
+
+func modelCacheSummaryRow(summary modelCacheSummary, now time.Time) string {
+	return metricLine(
+		statusBadge("fresh"),
+		cardTitleStyle.Render(safeDisplay(summary.ProviderInstanceID)),
+		metricChip("models", fmt.Sprintf("%d", summary.Count)),
+		timeChip("updated", now, summary.UpdatedAt),
+		metricChip("source", "discovery"),
+	)
 }

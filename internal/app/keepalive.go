@@ -30,7 +30,14 @@ type keepaliveRunner struct {
 }
 
 func startSubscriptionKeepalive(ctx context.Context, cfg config.SubscriptionKeepaliveConfig, registry provider.Registry, resolver credentials.OAuthBearerResolver, usage provider.CodexSubscriptionUsageClient, adapter provider.ChatAdapter, logger *slog.Logger) func() {
-	if !cfg.Enabled || resolver == nil || adapter == nil {
+	if !cfg.Enabled {
+		return func() {}
+	}
+	if !config.SubscriptionKeepaliveOutputCapVerified(cfg) {
+		logKeepaliveUnavailable(ctx, logger)
+		return func() {}
+	}
+	if resolver == nil || adapter == nil {
 		return func() {}
 	}
 	ctx, cancel := context.WithCancel(ctx)
@@ -63,6 +70,9 @@ func (r *keepaliveRunner) loop(ctx context.Context) {
 }
 
 func (r *keepaliveRunner) runDue(ctx context.Context) {
+	if !config.SubscriptionKeepaliveOutputCapVerified(r.cfg) {
+		return
+	}
 	now := r.now()
 	slot := keepaliveSlot(now, r.cfg.ScheduleTimes)
 	if slot == "" {
@@ -192,6 +202,16 @@ func (r *keepaliveRunner) log(ctx context.Context, level slog.Level, event strin
 	}
 	attrs = append([]slog.Attr{slog.String("event", event)}, attrs...)
 	r.logger.LogAttrs(ctx, level, event, attrs...)
+}
+
+func logKeepaliveUnavailable(ctx context.Context, logger *slog.Logger) {
+	if logger == nil {
+		return
+	}
+	logger.LogAttrs(ctx, slog.LevelWarn, "subscription_keepalive_unavailable",
+		slog.String("event", "subscription_keepalive_unavailable"),
+		slog.String("status", "unavailable_output_cap_unverified"),
+	)
 }
 
 func firstNonEmpty(values ...string) string {

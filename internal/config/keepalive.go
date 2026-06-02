@@ -47,3 +47,7 @@ func validKeepaliveClock(hour, minute string) string {
 	}
 	return hour + ":" + minute
 }
+
+func SubscriptionKeepaliveOutputCapVerified(_ SubscriptionKeepaliveConfig) bool {
+	return false
+}

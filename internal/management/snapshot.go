@@ -11,7 +11,7 @@ type SnapshotClient interface {
 }
 
 func (s Service) LoadManagementSnapshot(ctx context.Context) (ManagementSnapshotResponse, error) {
-	var out ManagementSnapshotResponse
+	out := ManagementSnapshotResponse{Runtime: s.Runtime}
 	for _, row := range s.Registry.List() {
 		out.Providers = append(out.Providers, providerInstanceFromProvider(row))
 	}

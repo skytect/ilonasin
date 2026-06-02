@@ -11,6 +11,7 @@ var unsafeSnapshotStringPattern = regexp.MustCompile(`(?i)(bearer|sk-|iln_|oauth
 var unsafeAccountDisplayPattern = regexp.MustCompile(`(?i)(bearer|sk-|iln_|token|secret|authorization|raw|payload|prompt|completion|body|acct[-_]|request[_ -]?id|requestid|req[-_]|balance|credit|sse[_ -]?chunk|tool[_ -]?(argument|result)|eyj[a-z0-9_-]*\.[a-z0-9_-]*\.)`)
 
 func sanitizeSnapshot(out *ManagementSnapshotResponse) {
+	out.Runtime.Bind = safeSnapshotString(out.Runtime.Bind)
 	for i := range out.Providers {
 		out.Providers[i].ID = safeMachineString(out.Providers[i].ID)
 		out.Providers[i].Type = safeSnapshotString(out.Providers[i].Type)

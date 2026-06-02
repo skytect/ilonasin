@@ -3,6 +3,7 @@ package management
 import "time"
 
 type ManagementSnapshotResponse struct {
+	Runtime             RuntimeStatus             `json:"runtime"`
 	Providers           []ProviderInstance        `json:"providers"`
 	LocalTokens         []LocalToken              `json:"local_tokens"`
 	UpstreamCredentials []UpstreamCredential      `json:"upstream_credentials"`
@@ -19,6 +20,11 @@ type ManagementSnapshotResponse struct {
 	Quotas              []QuotaSummary            `json:"quotas"`
 	SubscriptionUsage   SubscriptionUsageResponse `json:"subscription_usage"`
 	PruningAvailable    bool                      `json:"pruning_available"`
+}
+
+type RuntimeStatus struct {
+	Bind      string `json:"bind"`
+	CaptureIO bool   `json:"capture_io"`
 }
 
 type ProviderInstance struct {

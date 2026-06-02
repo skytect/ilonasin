@@ -23,7 +23,7 @@ func Serve(opts Options) error {
 	defer rt.cleanup()
 	defer rt.Store.Close()
 	captureUpstreamIO := rt.IOLogger != nil && logging.DebugEnabled(rt.Config.Logging.Level)
-	mgmt, err := startManagementServer(context.Background(), rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database, rt.Registry, rt.Store, rt.Config.SubscriptionKeepalive, rt.IOLogger, captureUpstreamIO, rt.Logger)
+	mgmt, err := startManagementServer(context.Background(), rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database, rt.Config.Server.Bind, rt.Registry, rt.Store, rt.Config.SubscriptionKeepalive, rt.IOLogger, captureUpstreamIO, rt.Logger)
 	if err != nil {
 		return err
 	}
@@ -75,5 +75,5 @@ func Manage(opts Options) error {
 	if _, err := managementClient.LoadManagementSnapshot(context.Background()); err != nil {
 		return err
 	}
-	return tui.Run(rt.Config, managementClient, managementClient, managementClient, managementClient, managementClient, rt.Logger)
+	return tui.Run(managementClient, managementClient, managementClient, managementClient, managementClient, rt.Logger)
 }

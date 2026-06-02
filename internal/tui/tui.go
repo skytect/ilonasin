@@ -6,11 +6,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"ilonasin/internal/config"
 	"ilonasin/internal/management"
 )
 
-func Run(cfg config.Config, snapshot management.SnapshotClient, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, oauth management.OAuthClient, pruner management.TelemetryPruneClient, loggers ...*slog.Logger) error {
+func Run(snapshot management.SnapshotClient, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, oauth management.OAuthClient, pruner management.TelemetryPruneClient, loggers ...*slog.Logger) error {
 	if snapshot == nil {
 		return fmt.Errorf("management snapshot client is required")
 	}
@@ -18,7 +17,7 @@ func Run(cfg config.Config, snapshot management.SnapshotClient, tokens managemen
 	if client, ok := snapshot.(management.SubscriptionUsageClient); ok {
 		subscriptionUsage = client
 	}
-	model := NewModel(cfg, tokens, upstreams, oauth, pruner, subscriptionUsage, nil, loggers...)
+	model := NewModel(tokens, upstreams, oauth, pruner, subscriptionUsage, nil, loggers...)
 	model.snapshot = snapshot
 	if err := model.reload(); err != nil {
 		return err

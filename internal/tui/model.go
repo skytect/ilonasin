@@ -7,13 +7,11 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"ilonasin/internal/config"
 	"ilonasin/internal/credentials"
 	"ilonasin/internal/management"
 )
 
 type Model struct {
-	cfg               config.Config
 	snapshot          management.SnapshotClient
 	tokens            management.LocalTokenClient
 	upstreams         management.UpstreamCredentialClient
@@ -22,6 +20,7 @@ type Model struct {
 	subscriptionUsage management.SubscriptionUsageClient
 	logger            *slog.Logger
 	now               func() time.Time
+	runtime           management.RuntimeStatus
 	tokenRows         []management.LocalToken
 	providers         []management.ProviderInstance
 	credentials       []management.UpstreamCredential
@@ -81,8 +80,8 @@ var tuiTabs = []struct {
 	{tabLogs, "logs"},
 }
 
-func NewModel(cfg config.Config, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, oauth management.OAuthClient, pruner management.TelemetryPruneClient, subscriptionUsage management.SubscriptionUsageClient, now func() time.Time, loggers ...*slog.Logger) Model {
-	m := Model{cfg: cfg, tokens: tokens, upstreams: upstreams, oauth: oauth, pruner: pruner, subscriptionUsage: subscriptionUsage, now: now, logger: firstLogger(loggers)}
+func NewModel(tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, oauth management.OAuthClient, pruner management.TelemetryPruneClient, subscriptionUsage management.SubscriptionUsageClient, now func() time.Time, loggers ...*slog.Logger) Model {
+	m := Model{tokens: tokens, upstreams: upstreams, oauth: oauth, pruner: pruner, subscriptionUsage: subscriptionUsage, now: now, logger: firstLogger(loggers)}
 	m.paneFocus[tabAPI] = apiPaneTokens
 	return m
 }

@@ -23,6 +23,7 @@ func (m *Model) reload() error {
 }
 
 func (m *Model) applySnapshot(snapshot management.ManagementSnapshotResponse) {
+	m.runtime = snapshot.Runtime
 	m.tokenRows = snapshot.LocalTokens
 	m.providers = append([]management.ProviderInstance(nil), snapshot.Providers...)
 	m.credentials = m.visibleUpstreamCredentials(snapshot.UpstreamCredentials)

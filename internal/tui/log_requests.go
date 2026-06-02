@@ -16,7 +16,7 @@ func (m Model) writeRecentRequests(b *strings.Builder) {
 		b.WriteString(renderMetricAccentCard(metricCardWidth(width), lipgloss.Color("42"),
 			cardTitleStyle.Render("metadata ledger")+" "+statusBadge("enabled"),
 			metricLine(metricChip("recent", "0"), metricChip("visibility", "metadata-only")),
-			metricLine(metricChip("content", "redacted"), metricChip("io", ioCaptureMode(m.cfg.Logging.CaptureIO))),
+			metricLine(metricChip("content", "redacted"), metricChip("io", ioCaptureMode(m.runtime.CaptureIO))),
 		))
 		b.WriteByte('\n')
 	}

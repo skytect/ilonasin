@@ -55,7 +55,7 @@ func (m Model) apiSummaryBody(width int) string {
 		renderCompactCard(metricCardWidth(width),
 			cardTitleStyle.Render("downstream keys"),
 			metricLine(metricChip("enabled", fmt.Sprintf("%d", enabledTokens)), metricChip("disabled", fmt.Sprintf("%d", disabledTokens))),
-			metricLine(metricChip("total", fmt.Sprintf("%d", len(m.tokenRows))), metricChip("bind", m.cfg.Server.Bind)),
+			metricLine(metricChip("total", fmt.Sprintf("%d", len(m.tokenRows))), metricChip("bind", m.runtime.Bind)),
 		),
 		renderCompactCard(metricCardWidth(width),
 			cardTitleStyle.Render("upstream boundary"),

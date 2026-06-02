@@ -9,6 +9,9 @@ import (
 )
 
 const maxDashboardPanes = 4
+const paneColumnGap = 2
+const paneRowGap = 1
+const minPaneColumnWidth = 52
 
 const (
 	apiPaneSummary = iota
@@ -41,10 +44,10 @@ type dashboardPane struct {
 
 type panePlacement struct {
 	pane   dashboardPane
-	x      int
 	y      int
 	width  int
 	height int
+	limit  int
 }
 
 func (m Model) activeTabPanes() []dashboardPane {
@@ -74,47 +77,28 @@ func (m Model) renderDashboard() string {
 		return strings.Repeat("\n", maxInt(0, height-1))
 	}
 	focus := m.validPaneFocus(m.validActiveTab())
-	if width < 92 || len(panes) == 1 {
-		return m.renderPaneColumn(width, height, panes, focus)
+	columns := paneLayout(width, height, panes)
+	rendered := make([]string, 0, len(columns)*2-1)
+	for i, column := range columns {
+		rendered = append(rendered, m.renderPaneColumn(column, focus))
+		if i < len(columns)-1 {
+			rendered = append(rendered, strings.Repeat(" ", paneColumnGap))
+		}
 	}
-	gap := 2
-	leftWidth := (width - gap) / 2
-	rightWidth := width - gap - leftWidth
-	leftCount := (len(panes) + 1) / 2
-	left := m.renderPaneColumn(leftWidth, height, panes[:leftCount], focus)
-	right := ""
-	if leftCount < len(panes) {
-		right = m.renderPaneColumn(rightWidth, height, panes[leftCount:], focus)
-	}
-	if right == "" {
-		return left
-	}
-	return lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", gap), right)
+	return lipgloss.JoinHorizontal(lipgloss.Top, rendered...)
 }
 
-func (m Model) renderPaneColumn(width, height int, panes []dashboardPane, focus int) string {
-	if len(panes) == 0 {
+func (m Model) renderPaneColumn(placements []panePlacement, focus int) string {
+	if len(placements) == 0 {
 		return ""
 	}
-	gap := 1
-	available := height - gap*(len(panes)-1)
-	if available < len(panes)*3 {
-		available = len(panes) * 3
-	}
-	base := available / len(panes)
-	extra := available % len(panes)
-	rendered := make([]string, 0, len(panes)*2-1)
-	for i, pane := range panes {
-		paneHeight := base
-		if i < extra {
-			paneHeight++
-		}
-		if paneHeight < 3 {
-			paneHeight = 3
-		}
-		rendered = append(rendered, m.renderPane(panePlacement{pane: pane, width: width, height: paneHeight}, pane.id == focus))
-		if i < len(panes)-1 {
-			rendered = append(rendered, strings.Repeat("\n", gap))
+	width := placements[0].width
+	height := placements[0].limit
+	rendered := make([]string, 0, len(placements)*2-1)
+	for i, placement := range placements {
+		rendered = append(rendered, m.renderPane(placement, placement.pane.id == focus))
+		if i < len(placements)-1 {
+			rendered = append(rendered, strings.Repeat("\n", paneRowGap))
 		}
 	}
 	column := strings.Join(rendered, "")
@@ -278,53 +262,113 @@ func (m Model) focusedPaneScrollMax() int {
 }
 
 func (m Model) paneScrollMax(tab tuiTab, paneID int) int {
-	height := m.paneContentHeight(tab, paneID)
-	contentLines := splitBodyLines(m.paneContent(tab, paneID))
+	placement, ok := m.panePlacement(tab, paneID)
+	if !ok {
+		return 0
+	}
+	height := paneVisibleContentHeight(placement)
+	contentLines := splitBodyLines(m.paneContentForWidth(placement.pane, paneInnerWidth(placement)))
 	return maxInt(0, len(contentLines)-height)
 }
 
 func (m Model) paneContentHeight(tab tuiTab, paneID int) int {
-	placements := panePlacementsForScroll(m.viewWidth(), m.viewportHeight(), m.tabPanes(tab))
-	for _, placement := range placements {
-		if placement.pane.id == paneID {
-			style := paneStyle
-			innerHeight := placement.height - style.GetVerticalFrameSize() - 1
-			if innerHeight < 1 {
-				return 1
-			}
-			return innerHeight
-		}
+	placement, ok := m.panePlacement(tab, paneID)
+	if !ok {
+		return 1
 	}
-	return 1
+	return paneVisibleContentHeight(placement)
 }
 
 func panePlacementsForScroll(width, height int, panes []dashboardPane) []panePlacement {
-	if width < 92 || len(panes) == 1 {
-		return paneColumnPlacementsForScroll(width, height, panes)
-	}
-	gap := 2
-	leftWidth := (width - gap) / 2
-	rightWidth := width - gap - leftWidth
-	leftCount := (len(panes) + 1) / 2
-	placements := paneColumnPlacementsForScroll(leftWidth, height, panes[:leftCount])
-	if leftCount < len(panes) {
-		placements = append(placements, paneColumnPlacementsForScroll(rightWidth, height, panes[leftCount:])...)
+	columns := paneLayout(width, height, panes)
+	placements := make([]panePlacement, 0, len(panes))
+	for _, column := range columns {
+		placements = append(placements, column...)
 	}
 	return placements
 }
 
-func paneColumnPlacementsForScroll(width, height int, panes []dashboardPane) []panePlacement {
+func paneLayout(width, height int, panes []dashboardPane) [][]panePlacement {
 	if len(panes) == 0 {
 		return nil
 	}
-	gap := 1
-	available := height - gap*(len(panes)-1)
+	columnCount := paneColumnCount(width, len(panes))
+	columnWidths := paneColumnWidths(width, columnCount)
+	columns := make([][]panePlacement, 0, columnCount)
+	paneIndex := 0
+	for columnIndex := 0; columnIndex < columnCount; columnIndex++ {
+		count := panesInColumn(len(panes), columnCount, columnIndex)
+		columnPanes := panes[paneIndex : paneIndex+count]
+		column := paneColumnPlacements(columnWidths[columnIndex], height, columnPanes)
+		columns = append(columns, column)
+		paneIndex += count
+	}
+	return columns
+}
+
+func paneColumnCount(width, paneCount int) int {
+	if paneCount <= 1 {
+		return maxInt(1, paneCount)
+	}
+	maxColumns := (width + paneColumnGap) / (minPaneColumnWidth + paneColumnGap)
+	if maxColumns < 1 {
+		maxColumns = 1
+	}
+	if maxColumns > 3 {
+		maxColumns = 3
+	}
+	if maxColumns > paneCount {
+		maxColumns = paneCount
+	}
+	return maxColumns
+}
+
+func paneColumnWidths(width, columnCount int) []int {
+	if columnCount < 1 {
+		return nil
+	}
+	totalGap := paneColumnGap * (columnCount - 1)
+	available := width - totalGap
+	if available < columnCount {
+		available = columnCount
+	}
+	base := available / columnCount
+	extra := available % columnCount
+	widths := make([]int, columnCount)
+	for i := 0; i < columnCount; i++ {
+		widths[i] = base
+		if i < extra {
+			widths[i]++
+		}
+	}
+	return widths
+}
+
+func panesInColumn(paneCount, columnCount, columnIndex int) int {
+	if columnCount <= 0 {
+		return 0
+	}
+	base := paneCount / columnCount
+	extra := paneCount % columnCount
+	count := base
+	if columnIndex < extra {
+		count++
+	}
+	return count
+}
+
+func paneColumnPlacements(width, height int, panes []dashboardPane) []panePlacement {
+	if len(panes) == 0 {
+		return nil
+	}
+	available := height - paneRowGap*(len(panes)-1)
 	if available < len(panes)*3 {
 		available = len(panes) * 3
 	}
 	base := available / len(panes)
 	extra := available % len(panes)
 	placements := make([]panePlacement, 0, len(panes))
+	y := 0
 	for i, pane := range panes {
 		paneHeight := base
 		if i < extra {
@@ -333,18 +377,36 @@ func paneColumnPlacementsForScroll(width, height int, panes []dashboardPane) []p
 		if paneHeight < 3 {
 			paneHeight = 3
 		}
-		placements = append(placements, panePlacement{pane: pane, width: width, height: paneHeight})
+		placements = append(placements, panePlacement{pane: pane, y: y, width: width, height: paneHeight, limit: height})
+		y += paneHeight + paneRowGap
 	}
 	return placements
 }
 
-func (m Model) paneContent(tab tuiTab, paneID int) string {
-	for _, pane := range m.tabPanes(tab) {
-		if pane.id == paneID {
-			return m.paneContentForWidth(pane, m.paneBodyWidth())
+func (m Model) panePlacement(tab tuiTab, paneID int) (panePlacement, bool) {
+	placements := panePlacementsForScroll(m.viewWidth(), m.viewportHeight(), m.tabPanes(tab))
+	for _, placement := range placements {
+		if placement.pane.id == paneID {
+			return placement, true
 		}
 	}
-	return ""
+	return panePlacement{}, false
+}
+
+func paneInnerWidth(placement panePlacement) int {
+	innerWidth := placement.width - paneStyle.GetHorizontalFrameSize()
+	if innerWidth < 4 {
+		return 4
+	}
+	return innerWidth
+}
+
+func paneVisibleContentHeight(placement panePlacement) int {
+	innerHeight := placement.height - paneStyle.GetVerticalFrameSize() - 1
+	if innerHeight < 1 {
+		return 1
+	}
+	return innerHeight
 }
 
 func (m Model) paneContentForWidth(pane dashboardPane, width int) string {

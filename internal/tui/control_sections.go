@@ -152,14 +152,3 @@ func (m Model) withRenderWidth(width int) Model {
 	}
 	return m
 }
-
-func (m Model) paneBodyWidth() int {
-	width := m.viewWidth()
-	if width >= 92 {
-		width = (width - 2) / 2
-	}
-	if width < 20 {
-		return 20
-	}
-	return width - 4
-}

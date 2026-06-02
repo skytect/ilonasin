@@ -64,7 +64,6 @@ func usageGaugeBlock(label string, used, remaining float64, resetLabel string, b
 	if barWidth <= 0 {
 		barWidth = 22
 	}
-	status := riskLabel(used)
 	if barWidth < 16 {
 		line := windowStyle.Render(label) + " " +
 			balancedUsageBar(used, remaining, barWidth) + " " +
@@ -78,8 +77,7 @@ func usageGaugeBlock(label string, used, remaining float64, resetLabel string, b
 		line := windowStyle.Render(label) + " " +
 			balancedUsageBar(used, remaining, barWidth) + " " +
 			valueStyle.Render(compactPercentText(used)+" used") + " " +
-			mutedStyle.Render(compactPercentText(remaining)+" left") + " " +
-			statusBadge(status)
+			mutedStyle.Render(compactPercentText(remaining)+" left")
 		if resetLabel != "" {
 			line += "  " + mutedStyle.Render(compactResetTimeOnly(resetLabel))
 		}
@@ -88,8 +86,7 @@ func usageGaugeBlock(label string, used, remaining float64, resetLabel string, b
 	line := windowStyle.Render(label) + " " +
 		balancedUsageBar(used, remaining, barWidth) + " " +
 		valueStyle.Render(percentText(used)+" used") + " " +
-		mutedStyle.Render(percentText(remaining)+" left") + " " +
-		statusBadge(status)
+		mutedStyle.Render(percentText(remaining)+" left")
 	if resetLabel != "" {
 		line += "  " + mutedStyle.Render(resetLabel)
 	}

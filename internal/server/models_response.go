@@ -59,7 +59,6 @@ func modelsResponseFromMetadata(rows []provider.ModelMetadata) modelsResponse {
 	rows = sortedModelMetadata(rows)
 	data := make([]modelListItem, 0, len(rows))
 	codexModels := make([]codexModelInfo, 0, len(rows))
-	codexModelCounts := codexResponseModelCounts(rows)
 	for _, row := range rows {
 		id := row.ProviderInstanceID + "/" + row.ModelID
 		data = append(data, modelListItem{
@@ -67,7 +66,7 @@ func modelsResponseFromMetadata(rows []provider.ModelMetadata) modelsResponse {
 			Object:  "model",
 			OwnedBy: row.ProviderInstanceID,
 		})
-		if codex, ok := codexModelInfoFromMetadata(row, id, codexModelCounts); ok {
+		if codex, ok := codexModelInfoFromMetadata(row, id); ok {
 			codexModels = append(codexModels, codex)
 		}
 	}
@@ -85,25 +84,12 @@ func sortedModelMetadata(rows []provider.ModelMetadata) []provider.ModelMetadata
 	return out
 }
 
-func codexResponseModelCounts(rows []provider.ModelMetadata) map[string]int {
-	counts := map[string]int{}
-	for _, row := range rows {
-		if hasCapability(capabilityList(row.CapabilityFlags), "responses") {
-			counts[row.ModelID]++
-		}
-	}
-	return counts
-}
-
-func codexModelInfoFromMetadata(row provider.ModelMetadata, namespacedID string, counts map[string]int) (codexModelInfo, bool) {
+func codexModelInfoFromMetadata(row provider.ModelMetadata, namespacedID string) (codexModelInfo, bool) {
 	capabilities := capabilityList(row.CapabilityFlags)
 	if !hasCapability(capabilities, "responses") {
 		return codexModelInfo{}, false
 	}
 	codexSlug := namespacedID
-	if counts[row.ModelID] == 1 {
-		codexSlug = row.ModelID
-	}
 	serviceTiers := row.ServiceTiers
 	if len(serviceTiers) == 0 && hasCapability(capabilities, "service_tier") {
 		serviceTiers = []provider.ModelServiceTier{codexFastServiceTier()}

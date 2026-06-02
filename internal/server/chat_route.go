@@ -34,7 +34,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "unsupported_request")
 		return
 	}
-	addr, err := s.resolveModelAddress(r.Context(), req.Model)
+	addr, err := s.resolveModelAddress(req.Model)
 	if err != nil {
 		s.logHTTP(r, http.StatusBadRequest, "chat_route", "invalid_model")
 		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "invalid_model")

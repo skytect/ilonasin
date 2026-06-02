@@ -70,7 +70,18 @@ func usageGaugeBlock(label string, used, remaining float64, resetLabel string, w
 			balancedUsageBar(used, remaining, width) + " " +
 			valueStyle.Render(compactPercentText(used)+"/"+compactPercentText(remaining))
 		if resetLabel != "" {
-			line += "  " + mutedStyle.Render(compactResetText(resetLabel))
+			line += "  " + mutedStyle.Render(compactResetTimeOnly(resetLabel))
+		}
+		return line
+	}
+	if width < 30 {
+		line := windowStyle.Render(label) + " " +
+			balancedUsageBar(used, remaining, width) + " " +
+			valueStyle.Render(compactPercentText(used)+" used") + " " +
+			mutedStyle.Render(compactPercentText(remaining)+" left") + " " +
+			statusBadge(status)
+		if resetLabel != "" {
+			line += "  " + mutedStyle.Render(compactResetTimeOnly(resetLabel))
 		}
 		return line
 	}
@@ -110,6 +121,18 @@ func poolGaugeBlock(label string, usedPoints, remainingPoints, capacityPoints fl
 			valueStyle.Render(fmt.Sprintf("sum %.1f/%.1fpp cap %.1fpp", usedPoints, remainingPoints, capacityPoints))
 		if resetLabel != "" {
 			line += "  " + mutedStyle.Render(compactResetText(resetLabel))
+		}
+		return line
+	}
+	if width < 30 {
+		line := windowStyle.Render(label) + " " +
+			balancedUsageBar(usedPercent, remainingPercent, width) + " " +
+			valueStyle.Render(fmt.Sprintf("used %.0fpp", usedPoints)) + " " +
+			mutedStyle.Render(fmt.Sprintf("left %.0fpp", remainingPoints)) + " " +
+			mutedStyle.Render(fmt.Sprintf("cap %.0fpp", capacityPoints)) + " " +
+			statusBadge(remainingRiskLabel(remainingPercent))
+		if resetLabel != "" {
+			line += "  " + mutedStyle.Render(compactResetTimeOnly(resetLabel))
 		}
 		return line
 	}
@@ -188,6 +211,21 @@ func compactResetText(value string) string {
 		return parts[0] + " " + parts[len(parts)-1]
 	}
 	return value
+}
+
+func compactResetTimeOnly(value string) string {
+	value = compactResetText(value)
+	parts := strings.Fields(value)
+	if len(parts) == 0 {
+		return ""
+	}
+	if len(parts) >= 2 && parts[len(parts)-1] == "ago" {
+		return strings.Join(parts[len(parts)-2:], " ")
+	}
+	if len(parts) >= 2 && parts[len(parts)-2] == "in" {
+		return strings.Join(parts[len(parts)-2:], " ")
+	}
+	return parts[len(parts)-1]
 }
 
 func riskLabel(used float64) string {

@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"ilonasin/internal/management"
 )
 
 func (m Model) writeUsageMetrics(b *strings.Builder) {
@@ -18,31 +20,8 @@ func (m Model) writeUsageMetrics(b *strings.Builder) {
 		))
 		b.WriteByte('\n')
 	}
-	usageCards := make([]string, 0, len(m.usageRows))
 	for _, row := range m.usageRows {
-		lines := []string{
-			cardTitleStyle.Render(safeDisplay(row.ProviderInstanceID)) + " " + statusBadge("fresh"),
-			metricLine(
-				metricChip("requests", fmt.Sprintf("%d", row.RequestCount)),
-				metricChip("total", compactInt(row.TotalTokens)),
-				metricChip("cost", compactInt64(row.CostMicrounits)+"u"),
-			),
-			compactTokenMixLine(row.PromptTokens, row.CompletionTokens, row.ReasoningTokens, row.CacheHitTokens, row.CacheMissTokens, row.CacheWriteTokens, width),
-			metricLine(
-				metricChip("miss", compactInt(row.CacheMissTokens)),
-				metricChip("write", compactInt(row.CacheWriteTokens)),
-			),
-		}
-		lines = append(lines, compactRateBars(width,
-			rateMetric{"hit", row.CacheHitRate * 100},
-			rateMetric{"miss", row.CacheMissRate * 100},
-			rateMetric{"write", row.CacheWriteRate * 100},
-			rateMetric{"reason", row.ReasoningTokenRate * 100},
-		))
-		usageCards = append(usageCards, renderMetricAccentCard(metricCardWidth(width), lipgloss.Color("42"), lines...))
-	}
-	if len(usageCards) > 0 {
-		b.WriteString(renderMetricCardGrid(width, usageCards))
+		b.WriteString(usageSummaryRow(row, width))
 		b.WriteByte('\n')
 	}
 	b.WriteString("\n")
@@ -55,30 +34,8 @@ func (m Model) writeUsageMetrics(b *strings.Builder) {
 		))
 		b.WriteByte('\n')
 	}
-	latencyCards := make([]string, 0, len(m.latencyRows))
 	for _, row := range m.latencyRows {
-		state := latencyState(row.AverageLatencyMS)
-		accent := lipgloss.Color("42")
-		if state == "warning" {
-			accent = lipgloss.Color("214")
-		}
-		if state == "error" {
-			accent = lipgloss.Color("160")
-		}
-		lines := []string{
-			cardTitleStyle.Render(safeDisplay(row.ProviderInstanceID)) + " " + statusBadge(state),
-			metricLine(
-				metricChip("requests", fmt.Sprintf("%d", row.RequestCount)),
-				msText("lat", row.AverageLatencyMS),
-				msText("up", row.AverageUpstreamLatencyMS),
-				msText("ttft", row.AverageTimeToFirstTokenMS),
-			),
-			latencyShapeLine(width, row.AverageLatencyMS, row.AverageUpstreamLatencyMS, row.AverageTimeToFirstTokenMS, row.AverageOutputTPS, row.AverageOutputTPSTotal, row.AverageOutputTPSAfterTTFT),
-		}
-		latencyCards = append(latencyCards, renderMetricAccentCard(metricCardWidth(width), accent, lines...))
-	}
-	if len(latencyCards) > 0 {
-		b.WriteString(renderMetricCardGrid(width, latencyCards))
+		b.WriteString(latencySummaryRow(row, width))
 		b.WriteByte('\n')
 	}
 	b.WriteString("\n")
@@ -91,23 +48,85 @@ func (m Model) writeUsageMetrics(b *strings.Builder) {
 		))
 		b.WriteByte('\n')
 	}
-	streamCards := make([]string, 0, len(m.streamRows))
 	for _, row := range m.streamRows {
-		state := "fresh"
-		if row.CompletionStatus != "completed" {
-			state = "warning"
-		}
-		lines := []string{
-			cardTitleStyle.Render(safeDisplay(row.CompletionStatus)) + " " + statusBadge(state),
-			metricLine(
-				metricChip("streams", fmt.Sprintf("%d", row.StreamCount)),
-				metricChip("chunks", compactInt(row.ChunkCount)),
-			),
-		}
-		streamCards = append(streamCards, renderMetricAccentCard(metricCardWidth(width), lipgloss.Color("110"), lines...))
-	}
-	if len(streamCards) > 0 {
-		b.WriteString(renderMetricCardGrid(width, streamCards))
+		b.WriteString(streamSummaryRow(row))
 		b.WriteByte('\n')
 	}
+}
+
+func usageSummaryRow(row management.UsageSummary, width int) string {
+	lines := []string{
+		metricLine(
+			statusBadge("fresh"),
+			cardTitleStyle.Render(safeDisplay(row.ProviderInstanceID)),
+			metricChip("requests", fmt.Sprintf("%d", row.RequestCount)),
+			metricChip("total", compactInt(row.TotalTokens)),
+			metricChip("cost", compactInt64(row.CostMicrounits)+"u"),
+		),
+		compactTokenMixLine(row.PromptTokens, row.CompletionTokens, row.ReasoningTokens, row.CacheHitTokens, row.CacheMissTokens, row.CacheWriteTokens, width),
+	}
+	lines = append(lines, usageRateLines(width,
+		rateMetric{"hit", row.CacheHitRate * 100},
+		rateMetric{"miss", row.CacheMissRate * 100},
+		rateMetric{"write", row.CacheWriteRate * 100},
+		rateMetric{"reason", row.ReasoningTokenRate * 100},
+	)...)
+	return strings.Join(lines, "\n")
+}
+
+func usageRateLines(width int, rates ...rateMetric) []string {
+	if width >= 88 || len(rates) <= 2 {
+		return []string{compactRateBars(width, rates...)}
+	}
+	return []string{
+		compactRateBars(width, rates[:2]...),
+		compactRateBars(width, rates[2:]...),
+	}
+}
+
+func latencySummaryRow(row management.LatencySummary, width int) string {
+	state := latencyState(row.AverageLatencyMS)
+	return strings.Join([]string{
+		metricLine(
+			statusBadge(state),
+			cardTitleStyle.Render(safeDisplay(row.ProviderInstanceID)),
+			metricChip("requests", fmt.Sprintf("%d", row.RequestCount)),
+			msText("lat", row.AverageLatencyMS),
+			msText("up", row.AverageUpstreamLatencyMS),
+			msText("ttft", row.AverageTimeToFirstTokenMS),
+		),
+		strings.Join(latencyShapeLines(width, row), "\n"),
+	}, "\n")
+}
+
+func latencyShapeLines(width int, row management.LatencySummary) []string {
+	if width >= 128 {
+		return []string{latencyShapeLine(width, row.AverageLatencyMS, row.AverageUpstreamLatencyMS, row.AverageTimeToFirstTokenMS, row.AverageOutputTPS, row.AverageOutputTPSTotal, row.AverageOutputTPSAfterTTFT)}
+	}
+	return []string{
+		metricLine(
+			mutedStyle.Render("time"),
+			durationBar("lat", row.AverageLatencyMS, 10_000, compactMetricBarWidth(width)),
+			durationBar("up", row.AverageUpstreamLatencyMS, 10_000, compactMetricBarWidth(width)),
+			durationBar("ttft", row.AverageTimeToFirstTokenMS, 5_000, compactMetricBarWidth(width)),
+		),
+		metricLine(
+			tpsText("output", row.AverageOutputTPS),
+			tpsText("total", row.AverageOutputTPSTotal),
+			tpsText("post", row.AverageOutputTPSAfterTTFT),
+		),
+	}
+}
+
+func streamSummaryRow(row management.StreamSummary) string {
+	state := "fresh"
+	if row.CompletionStatus != "completed" {
+		state = "warning"
+	}
+	return metricLine(
+		statusBadge(state),
+		cardTitleStyle.Render(safeDisplay(row.CompletionStatus)),
+		metricChip("streams", fmt.Sprintf("%d", row.StreamCount)),
+		metricChip("chunks", compactInt(row.ChunkCount)),
+	)
 }

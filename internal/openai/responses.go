@@ -53,6 +53,9 @@ func DecodeResponses(r io.Reader) (ResponsesRequest, error) {
 	if dec.Decode(&struct{}{}) != io.EOF {
 		return ResponsesRequest{}, errors.New("request body must contain a single JSON object")
 	}
+	if err := rejectUnsupportedResponsesFields(raw, "prompt_cache_key", "client_metadata"); err != nil {
+		return ResponsesRequest{}, err
+	}
 	if err := validateResponsesTopLevelKeys(raw); err != nil {
 		return ResponsesRequest{}, err
 	}
@@ -138,9 +141,7 @@ func validateResponsesTopLevelKeys(raw map[string]json.RawMessage) error {
 		"stream":              true,
 		"include":             true,
 		"service_tier":        true,
-		"prompt_cache_key":    true,
 		"text":                true,
-		"client_metadata":     true,
 	}
 	for key := range raw {
 		if !allowed[key] {
@@ -161,14 +162,13 @@ func validateResponsesStatelessFields(raw map[string]json.RawMessage) error {
 	} else if store != nil && *store {
 		return errors.New("store: true is not supported")
 	}
-	if value, ok := raw["client_metadata"]; ok && !isJSONNull(value) {
-		if _, err := optionalRawStringMap(value, "client_metadata"); err != nil {
-			return err
-		}
-	}
-	if value, ok := raw["prompt_cache_key"]; ok && !isJSONNull(value) {
-		if _, err := requiredRawString(value, "prompt_cache_key"); err != nil {
-			return err
+	return nil
+}
+
+func rejectUnsupportedResponsesFields(raw map[string]json.RawMessage, fields ...string) error {
+	for _, field := range fields {
+		if _, ok := raw[field]; ok {
+			return fmt.Errorf("%s is unsupported", field)
 		}
 	}
 	return nil

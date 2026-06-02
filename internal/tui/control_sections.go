@@ -41,13 +41,6 @@ func (m Model) apiSummaryBody(width int) string {
 	var b strings.Builder
 	b.WriteString(renderSectionBanner(width, "Local API surfaces", "surfaces 3"))
 	b.WriteByte('\n')
-	b.WriteString(metricLine(
-		cardTitleStyle.Render("OpenAI Chat"),
-		cardTitleStyle.Render("OpenAI Responses"),
-		cardTitleStyle.Render("Anthropic Messages"),
-		metricChip("count", "usage"),
-	))
-	b.WriteByte('\n')
 	enabledTokens, disabledTokens := localTokenStateCounts(m.tokenRows)
 	b.WriteString(metricLine(
 		metricChip("bind", m.runtime.Bind),
@@ -55,31 +48,50 @@ func (m Model) apiSummaryBody(width int) string {
 		metricChip("on", fmt.Sprintf("%d", enabledTokens)),
 		metricChip("off", fmt.Sprintf("%d", disabledTokens)),
 	))
-	b.WriteString("\n\n")
-	b.WriteString(apiRouteLine("OpenAI Chat Completions", "/v1/chat/completions", "chat_completions"))
 	b.WriteByte('\n')
-	b.WriteString(apiRouteLine("OpenAI Responses", "/v1/responses  /responses", "responses"))
-	b.WriteByte('\n')
-	b.WriteString(apiRouteLine("Anthropic Messages", "/v1/messages", "anthropic_messages"))
-	b.WriteByte('\n')
-	b.WriteString(apiRouteLine("Anthropic Count Tokens", "/v1/messages/count_tokens", "anthropic_count_tokens"))
-	b.WriteString("\n\n")
 	b.WriteString(metricLine(
-		statusBadge("enabled"),
-		cardTitleStyle.Render("downstream key management"),
-		metricChip("create", "n"),
-		metricChip("disable", "d"),
-		metricChip("managed", "daemon"),
+		apiChromeChip("models", "/v1/models"),
+		apiChromeChip("keys", "n/d"),
 	))
+	b.WriteString("\n\n")
+	b.WriteString(apiSurfaceLine(width, "OpenAI Chat", "/v1/chat/completions", "stream"))
+	b.WriteByte('\n')
+	b.WriteString(apiSurfaceLine(width, "OpenAI Responses", "/v1/responses", "sse", "tools"))
+	b.WriteByte('\n')
+	b.WriteString(apiSurfaceLine(width, "Anthropic Messages", "/v1/messages", "count-tokens"))
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func apiRouteLine(label, path, endpoint string) string {
-	return metricLine(
+func apiSurfaceLine(width int, label, path string, capabilities ...string) string {
+	parts := []string{
+		metricChip("surface", "api"),
 		cardTitleStyle.Render(safeChromeDisplay(label)),
-		endpointMetricChip("endpoint", endpoint),
-		mutedStyle.Render(safeChromeDisplay(path)),
+	}
+	if width >= 70 {
+		parts = append(parts, apiChromeChip("route", path))
+	}
+	for _, capability := range capabilities {
+		capability = safeChromeDisplay(capability)
+		if capability == "" {
+			continue
+		}
+		parts = append(parts, apiChromeChip("cap", capability))
+	}
+	return metricLine(
+		parts...,
 	)
+}
+
+func apiChromeChip(label, value string) string {
+	label = safeMetricLabel(label)
+	value = safeChromeDisplay(value)
+	if label == "" {
+		label = "api"
+	}
+	if value == "" {
+		value = "none"
+	}
+	return chipStyle.Render(label + " " + value)
 }
 
 func (m Model) localTokensBody(width int) string {

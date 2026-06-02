@@ -46,40 +46,22 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 		writeError(w, http.StatusNotFound, "provider instance is not configured", "invalid_request_error", "provider_not_configured")
 		return
 	}
-	if !instance.Chat || (!instance.APIKey && !instance.OAuth) {
+	preflight := s.preflightProviderAdapter(instance)
+	if preflight.failed() {
 		requestMeta := requestMetadataBase(start, token, addr, instance, req, metadataEndpointChatCompletions, req.Stream)
-		requestMeta.HTTPStatus = http.StatusNotImplemented
-		requestMeta.ErrorClass = "provider_unimplemented"
+		requestMeta.HTTPStatus = preflight.Status
+		requestMeta.ErrorClass = preflight.ErrorClass
 		requestMeta.TotalLatencyMS = time.Since(start).Milliseconds()
 		_ = s.record(r.Context(), requestMeta)
-		s.logHTTP(r, http.StatusNotImplemented, "chat_route", "provider_unimplemented")
-		writeError(w, http.StatusNotImplemented, providerUnsupportedCapabilityMessage, "invalid_request_error", "provider_unimplemented")
+		s.logHTTP(r, preflight.Status, "chat_route", preflight.ErrorClass)
+		writeError(w, preflight.Status, preflight.Message, "invalid_request_error", preflight.ErrorClass)
 		return
 	}
-	if s.adapters == nil {
-		requestMeta := requestMetadataBase(start, token, addr, instance, req, metadataEndpointChatCompletions, req.Stream)
-		requestMeta.HTTPStatus = http.StatusNotImplemented
-		requestMeta.ErrorClass = "provider_unimplemented"
-		requestMeta.TotalLatencyMS = time.Since(start).Milliseconds()
-		_ = s.record(r.Context(), requestMeta)
-		s.logHTTP(r, http.StatusNotImplemented, "chat_route", "provider_unimplemented")
-		writeError(w, http.StatusNotImplemented, providerUnavailableMessage, "invalid_request_error", "provider_unimplemented")
-		return
-	}
-	adapter, ok := s.adapters.ForProvider(instance.Type)
-	if !ok {
-		requestMeta := requestMetadataBase(start, token, addr, instance, req, metadataEndpointChatCompletions, req.Stream)
-		requestMeta.HTTPStatus = http.StatusNotImplemented
-		requestMeta.ErrorClass = "provider_unimplemented"
-		requestMeta.TotalLatencyMS = time.Since(start).Milliseconds()
-		_ = s.record(r.Context(), requestMeta)
-		s.logHTTP(r, http.StatusNotImplemented, "chat_route", "provider_unimplemented")
-		writeError(w, http.StatusNotImplemented, providerUnavailableMessage, "invalid_request_error", "provider_unimplemented")
-		return
-	}
-	if err := adapter.ValidateChatRequest(instance, req); err != nil {
-		s.logHTTP(r, http.StatusBadRequest, "chat_route", "unsupported_request")
-		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "unsupported_request")
+	adapter := preflight.Adapter
+	preflight = preflightAdapterRequest(adapter, instance, req)
+	if preflight.failed() {
+		s.logHTTP(r, preflight.Status, "chat_route", preflight.ErrorClass)
+		writeError(w, preflight.Status, preflight.Message, "invalid_request_error", preflight.ErrorClass)
 		return
 	}
 	if s.logger != nil {

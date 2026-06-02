@@ -42,25 +42,14 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request, token c
 		writeError(w, http.StatusNotFound, "provider instance is not configured", "invalid_request_error", "provider_not_configured")
 		return
 	}
-	if !instance.Chat || (!instance.APIKey && !instance.OAuth) {
-		s.recordResponsesEarly(r, start, token, addr, instance, responsesReq, http.StatusNotImplemented, "provider_unimplemented")
-		s.logHTTP(r, http.StatusNotImplemented, "responses_route", "provider_unimplemented")
-		writeError(w, http.StatusNotImplemented, providerUnsupportedCapabilityMessage, "invalid_request_error", "provider_unimplemented")
+	preflight := s.preflightProviderAdapter(instance)
+	if preflight.failed() {
+		s.recordResponsesEarly(r, start, token, addr, instance, responsesReq, preflight.Status, preflight.ErrorClass)
+		s.logHTTP(r, preflight.Status, "responses_route", preflight.ErrorClass)
+		writeError(w, preflight.Status, preflight.Message, "invalid_request_error", preflight.ErrorClass)
 		return
 	}
-	if s.adapters == nil {
-		s.recordResponsesEarly(r, start, token, addr, instance, responsesReq, http.StatusNotImplemented, "provider_unimplemented")
-		s.logHTTP(r, http.StatusNotImplemented, "responses_route", "provider_unimplemented")
-		writeError(w, http.StatusNotImplemented, providerUnavailableMessage, "invalid_request_error", "provider_unimplemented")
-		return
-	}
-	adapter, ok := s.adapters.ForProvider(instance.Type)
-	if !ok {
-		s.recordResponsesEarly(r, start, token, addr, instance, responsesReq, http.StatusNotImplemented, "provider_unimplemented")
-		s.logHTTP(r, http.StatusNotImplemented, "responses_route", "provider_unimplemented")
-		writeError(w, http.StatusNotImplemented, providerUnavailableMessage, "invalid_request_error", "provider_unimplemented")
-		return
-	}
+	adapter := preflight.Adapter
 	chatReq, err := responsesReq.ToChatCompletionRequest(instance.Type)
 	if err != nil {
 		s.logHTTP(r, http.StatusBadRequest, "responses_route", "unsupported_request")
@@ -72,9 +61,10 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request, token c
 		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "unsupported_request")
 		return
 	}
-	if err := adapter.ValidateChatRequest(instance, chatReq); err != nil {
-		s.logHTTP(r, http.StatusBadRequest, "responses_route", "unsupported_request")
-		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "unsupported_request")
+	preflight = preflightAdapterRequest(adapter, instance, chatReq)
+	if preflight.failed() {
+		s.logHTTP(r, preflight.Status, "responses_route", preflight.ErrorClass)
+		writeError(w, preflight.Status, preflight.Message, "invalid_request_error", preflight.ErrorClass)
 		return
 	}
 	if s.logger != nil {

@@ -62,28 +62,18 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request,
 		writeAnthropicError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if !instance.Chat || (!instance.APIKey && !instance.OAuth) {
-		s.recordAnthropicEarly(r, start, token, addr, instance, chatReq, req, http.StatusNotImplemented, "provider_unimplemented")
-		s.logHTTP(r, http.StatusNotImplemented, "anthropic_route", "provider_unimplemented")
-		writeAnthropicError(w, http.StatusNotImplemented, providerUnsupportedCapabilityMessage)
+	preflight := s.preflightProviderAdapter(instance)
+	if preflight.failed() {
+		s.recordAnthropicEarly(r, start, token, addr, instance, chatReq, req, preflight.Status, preflight.ErrorClass)
+		s.logHTTP(r, preflight.Status, "anthropic_route", preflight.ErrorClass)
+		writeAnthropicError(w, preflight.Status, preflight.Message)
 		return
 	}
-	if s.adapters == nil {
-		s.recordAnthropicEarly(r, start, token, addr, instance, chatReq, req, http.StatusNotImplemented, "provider_unimplemented")
-		s.logHTTP(r, http.StatusNotImplemented, "anthropic_route", "provider_unimplemented")
-		writeAnthropicError(w, http.StatusNotImplemented, providerUnavailableMessage)
-		return
-	}
-	adapter, ok := s.adapters.ForProvider(instance.Type)
-	if !ok {
-		s.recordAnthropicEarly(r, start, token, addr, instance, chatReq, req, http.StatusNotImplemented, "provider_unimplemented")
-		s.logHTTP(r, http.StatusNotImplemented, "anthropic_route", "provider_unimplemented")
-		writeAnthropicError(w, http.StatusNotImplemented, providerUnavailableMessage)
-		return
-	}
-	if err := adapter.ValidateChatRequest(instance, chatReq); err != nil {
-		s.logHTTP(r, http.StatusBadRequest, "anthropic_route", "unsupported_request")
-		writeAnthropicError(w, http.StatusBadRequest, err.Error())
+	adapter := preflight.Adapter
+	preflight = preflightAdapterRequest(adapter, instance, chatReq)
+	if preflight.failed() {
+		s.logHTTP(r, preflight.Status, "anthropic_route", preflight.ErrorClass)
+		writeAnthropicError(w, preflight.Status, preflight.Message)
 		return
 	}
 	credentialsSet, err := s.resolveModelCredentials(r.Context(), instance)

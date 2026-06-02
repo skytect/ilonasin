@@ -115,9 +115,9 @@ func poolGaugeBlock(label string, usedPoints, remainingPoints, capacityPoints fl
 	}
 	line := windowStyle.Render(label) + " " +
 		balancedUsageBar(usedPercent, remainingPercent, width) + " " +
-		valueStyle.Render(fmt.Sprintf("used %.1f", usedPoints)) + " " +
-		mutedStyle.Render(fmt.Sprintf("left %.1f", remainingPoints)) + " " +
-		mutedStyle.Render(fmt.Sprintf("cap %.1f", capacityPoints)) + " " +
+		valueStyle.Render(fmt.Sprintf("sum used %.1f", usedPoints)) + " " +
+		mutedStyle.Render(fmt.Sprintf("sum left %.1f", remainingPoints)) + " " +
+		mutedStyle.Render(fmt.Sprintf("sum cap %.1f", capacityPoints)) + " " +
 		statusBadge(remainingRiskLabel(remainingPercent))
 	if resetLabel != "" {
 		line += "  " + mutedStyle.Render(resetLabel)

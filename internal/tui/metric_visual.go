@@ -63,23 +63,23 @@ func narrowMetrics(width int) bool {
 	return width < 80
 }
 
-func metricBarWidth(width int) int {
-	switch {
-	case width < 60:
-		return 10
-	case width < 90:
-		return 14
-	default:
-		return 18
-	}
-}
-
 func msText(label string, value int64) string {
 	return fmt.Sprintf("%s %s", label, compactDurationMS(value))
 }
 
 func tpsText(label string, value float64) string {
 	return fmt.Sprintf("%s %.1f/s", label, boundedTUIFloat(value, 0, 9999))
+}
+
+func compactMetricBarWidth(width int) int {
+	switch {
+	case width < 55:
+		return 7
+	case width < 85:
+		return 10
+	default:
+		return 14
+	}
 }
 
 func compactInt(value int) string {
@@ -153,14 +153,6 @@ func latencyState(ms int64) string {
 	}
 }
 
-func percentGaugeLine(label string, value float64, width int) string {
-	return metricLine(
-		mutedStyle.Render(safeMetricLabel(label)),
-		percentBar(value, metricBarWidth(width)),
-		valueStyle.Render(percentText(value)),
-	)
-}
-
 func compactPercentMetric(label string, value float64) string {
 	return metricChip(label, compactPercentText(value))
 }
@@ -177,14 +169,10 @@ func endpointMetricChip(label, value string) string {
 	return chipStyle.Render(label + " " + value)
 }
 
-func tokenMixLine(prompt, completion, reasoning, cacheHit, cacheMiss, cacheWrite, width int) string {
+func compactTokenMixLine(prompt, completion, reasoning, cacheHit, cacheMiss, cacheWrite, width int) string {
 	total := prompt + completion + reasoning + cacheHit + cacheMiss + cacheWrite
-	barWidth := metricBarWidth(width)
-	if width >= 90 {
-		barWidth += 8
-	}
 	return metricLine(
-		mutedStyle.Render("token mix"),
+		mutedStyle.Render("mix"),
 		stackedTokenBar([]tokenSegment{
 			{value: prompt, style: goodBarStyle, glyph: "█"},
 			{value: completion, style: labelStyle, glyph: "█"},
@@ -192,8 +180,51 @@ func tokenMixLine(prompt, completion, reasoning, cacheHit, cacheMiss, cacheWrite
 			{value: cacheHit, style: goodBarStyle, glyph: "░"},
 			{value: cacheMiss, style: badBarStyle, glyph: "░"},
 			{value: cacheWrite, style: emptyBarStyle, glyph: "░"},
-		}, total, barWidth),
+		}, total, compactMetricBarWidth(width)),
+		metricChip("in", compactInt(prompt)),
+		metricChip("out", compactInt(completion)),
+		metricChip("r", compactInt(reasoning)),
+		metricChip("cache", compactInt(cacheHit)),
 	)
+}
+
+func compactRateBars(width int, rates ...rateMetric) string {
+	parts := make([]string, 0, len(rates))
+	barWidth := compactMetricBarWidth(width)
+	for _, rate := range rates {
+		label := safeMetricLabel(rate.label)
+		if label == "" {
+			continue
+		}
+		value := boundedTUIFloat(rate.value, 0, 100)
+		parts = append(parts, mutedStyle.Render(label)+" "+percentBar(value, barWidth)+" "+valueStyle.Render(compactPercentText(value)))
+	}
+	return metricLine(parts...)
+}
+
+type rateMetric struct {
+	label string
+	value float64
+}
+
+func latencyShapeLine(width int, totalMS, upstreamMS, ttftMS int64, outputTPS, totalTPS, afterTTFTTPS float64) string {
+	return metricLine(
+		mutedStyle.Render("time"),
+		durationBar("lat", totalMS, 10_000, compactMetricBarWidth(width)),
+		durationBar("up", upstreamMS, 10_000, compactMetricBarWidth(width)),
+		durationBar("ttft", ttftMS, 5_000, compactMetricBarWidth(width)),
+		tpsText("output", outputTPS),
+		tpsText("total", totalTPS),
+		tpsText("post", afterTTFTTPS),
+	)
+}
+
+func durationBar(label string, value, ceiling int64, width int) string {
+	if ceiling <= 0 {
+		ceiling = 1
+	}
+	percent := (float64(value) / float64(ceiling)) * 100
+	return mutedStyle.Render(safeMetricLabel(label)) + " " + percentBar(percent, width) + " " + valueStyle.Render(compactDurationMS(value))
 }
 
 type tokenSegment struct {

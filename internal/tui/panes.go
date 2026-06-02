@@ -11,7 +11,7 @@ import (
 const maxDashboardPanes = 4
 const paneColumnGap = 2
 const paneRowGap = 1
-const minPaneColumnWidth = 52
+const minPaneColumnWidth = 44
 
 const (
 	apiPaneSummary = iota
@@ -315,8 +315,8 @@ func paneColumnCount(width, paneCount int) int {
 	if maxColumns < 1 {
 		maxColumns = 1
 	}
-	if maxColumns > 3 {
-		maxColumns = 3
+	if maxColumns > 4 {
+		maxColumns = 4
 	}
 	if maxColumns > paneCount {
 		maxColumns = paneCount

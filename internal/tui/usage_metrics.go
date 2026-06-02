@@ -22,38 +22,23 @@ func (m Model) writeUsageMetrics(b *strings.Builder) {
 	for _, row := range m.usageRows {
 		lines := []string{
 			cardTitleStyle.Render(safeDisplay(row.ProviderInstanceID)) + " " + statusBadge("fresh"),
-			tokenMixLine(row.PromptTokens, row.CompletionTokens, row.ReasoningTokens, row.CacheHitTokens, row.CacheMissTokens, row.CacheWriteTokens, width),
-			metricLine(
-				metricChip("in", compactInt(row.PromptTokens)),
-				metricChip("out", compactInt(row.CompletionTokens)),
-				metricChip("reason", compactInt(row.ReasoningTokens)),
-			),
-			metricLine(
-				metricChip("cache-hit", compactInt(row.CacheHitTokens)),
-				metricChip("cache-miss", compactInt(row.CacheMissTokens)),
-				metricChip("cache-write", compactInt(row.CacheWriteTokens)),
-			),
 			metricLine(
 				metricChip("requests", fmt.Sprintf("%d", row.RequestCount)),
 				metricChip("total", compactInt(row.TotalTokens)),
 				metricChip("cost", compactInt64(row.CostMicrounits)+"u"),
 			),
+			compactTokenMixLine(row.PromptTokens, row.CompletionTokens, row.ReasoningTokens, row.CacheHitTokens, row.CacheMissTokens, row.CacheWriteTokens, width),
+			metricLine(
+				metricChip("miss", compactInt(row.CacheMissTokens)),
+				metricChip("write", compactInt(row.CacheWriteTokens)),
+			),
 		}
-		if narrowMetrics(width) {
-			lines = append(lines, metricLine(
-				compactPercentMetric("hit", row.CacheHitRate*100),
-				compactPercentMetric("miss", row.CacheMissRate*100),
-				compactPercentMetric("write", row.CacheWriteRate*100),
-				compactPercentMetric("reason", row.ReasoningTokenRate*100),
-			))
-		} else {
-			lines = append(lines,
-				percentGaugeLine("cache hit", row.CacheHitRate*100, width),
-				percentGaugeLine("cache miss", row.CacheMissRate*100, width),
-				percentGaugeLine("cache write", row.CacheWriteRate*100, width),
-				percentGaugeLine("reason", row.ReasoningTokenRate*100, width),
-			)
-		}
+		lines = append(lines, compactRateBars(width,
+			rateMetric{"hit", row.CacheHitRate * 100},
+			rateMetric{"miss", row.CacheMissRate * 100},
+			rateMetric{"write", row.CacheWriteRate * 100},
+			rateMetric{"reason", row.ReasoningTokenRate * 100},
+		))
 		usageCards = append(usageCards, renderMetricAccentCard(metricCardWidth(width), lipgloss.Color("42"), lines...))
 	}
 	if len(usageCards) > 0 {
@@ -82,17 +67,13 @@ func (m Model) writeUsageMetrics(b *strings.Builder) {
 		}
 		lines := []string{
 			cardTitleStyle.Render(safeDisplay(row.ProviderInstanceID)) + " " + statusBadge(state),
-			metricLine(metricChip("requests", fmt.Sprintf("%d", row.RequestCount))),
 			metricLine(
+				metricChip("requests", fmt.Sprintf("%d", row.RequestCount)),
 				msText("lat", row.AverageLatencyMS),
 				msText("up", row.AverageUpstreamLatencyMS),
 				msText("ttft", row.AverageTimeToFirstTokenMS),
 			),
-			metricLine(
-				tpsText("output", row.AverageOutputTPS),
-				tpsText("total", row.AverageOutputTPSTotal),
-				tpsText("post-ttft", row.AverageOutputTPSAfterTTFT),
-			),
+			latencyShapeLine(width, row.AverageLatencyMS, row.AverageUpstreamLatencyMS, row.AverageTimeToFirstTokenMS, row.AverageOutputTPS, row.AverageOutputTPSTotal, row.AverageOutputTPSAfterTTFT),
 		}
 		latencyCards = append(latencyCards, renderMetricAccentCard(metricCardWidth(width), accent, lines...))
 	}

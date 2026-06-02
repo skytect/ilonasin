@@ -174,8 +174,8 @@ func (r *keepaliveRunner) refreshUsage(ctx context.Context, instance provider.In
 
 func keepaliveSlot(now time.Time, schedule []string) string {
 	current := now.Format("15:04")
-	for _, value := range schedule {
-		if strings.TrimSpace(value) == current {
+	for _, value := range config.NormalizeSubscriptionKeepaliveTimes(schedule) {
+		if value == current {
 			return current
 		}
 	}

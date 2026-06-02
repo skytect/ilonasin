@@ -146,6 +146,10 @@ func (c *Config) applyDefaults(homeDir string) {
 	if len(c.SubscriptionKeepalive.ScheduleTimes) == 0 {
 		c.SubscriptionKeepalive.ScheduleTimes = append([]string(nil), def.SubscriptionKeepalive.ScheduleTimes...)
 	}
+	c.SubscriptionKeepalive.ScheduleTimes = NormalizeSubscriptionKeepaliveTimes(c.SubscriptionKeepalive.ScheduleTimes)
+	if len(c.SubscriptionKeepalive.ScheduleTimes) == 0 {
+		c.SubscriptionKeepalive.ScheduleTimes = append([]string(nil), def.SubscriptionKeepalive.ScheduleTimes...)
+	}
 	if c.SubscriptionKeepalive.MaxOutputTokens == 0 {
 		c.SubscriptionKeepalive.MaxOutputTokens = def.SubscriptionKeepalive.MaxOutputTokens
 	}

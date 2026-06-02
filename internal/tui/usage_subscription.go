@@ -80,7 +80,7 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 	b.WriteString("\n")
 	b.WriteString(renderPaneSubhead(width, "Subscription keepalive"))
 	b.WriteByte('\n')
-	schedule := strings.Join(m.keepaliveStatus.ScheduleTimes, ", ")
+	schedule := readableKeepaliveSchedule(m.keepaliveStatus.ScheduleTimes)
 	if schedule == "" {
 		schedule = "none"
 	}
@@ -288,4 +288,52 @@ func subscriptionKeepaliveState(status management.KeepaliveStatus) string {
 		return "warning"
 	}
 	return "enabled"
+}
+
+func readableKeepaliveSchedule(values []string) string {
+	labels := make([]string, 0, len(values))
+	for _, value := range values {
+		value = safeDisplay(value)
+		if value == "" || value == "[redacted]" {
+			continue
+		}
+		if label := readableKeepaliveTime(value); label != "" {
+			labels = append(labels, label)
+			continue
+		}
+		labels = append(labels, value)
+	}
+	return strings.Join(labels, ", ")
+}
+
+func readableKeepaliveTime(value string) string {
+	if len(value) != 5 || value[2] != ':' {
+		return ""
+	}
+	hour := twoDigitNumber(value[:2])
+	minute := twoDigitNumber(value[3:])
+	if hour < 0 || hour > 23 || minute < 0 || minute > 59 {
+		return ""
+	}
+	suffix := "AM"
+	displayHour := hour
+	if hour == 0 {
+		displayHour = 12
+	} else if hour == 12 {
+		suffix = "PM"
+	} else if hour > 12 {
+		displayHour = hour - 12
+		suffix = "PM"
+	}
+	return fmt.Sprintf("%d:%02d %s", displayHour, minute, suffix)
+}
+
+func twoDigitNumber(value string) int {
+	if len(value) != 2 {
+		return -1
+	}
+	if value[0] < '0' || value[0] > '9' || value[1] < '0' || value[1] > '9' {
+		return -1
+	}
+	return int(value[0]-'0')*10 + int(value[1]-'0')
 }

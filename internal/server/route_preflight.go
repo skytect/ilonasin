@@ -24,6 +24,11 @@ func (s *Server) writeOpenAIPreflightFailure(w http.ResponseWriter, r *http.Requ
 	writeError(w, preflight.Status, preflight.Message, "invalid_request_error", preflight.ErrorClass)
 }
 
+func writeOpenAICredentialUnavailable(w http.ResponseWriter, record func(status int, errorClass string)) {
+	record(http.StatusUnauthorized, "credential_unavailable")
+	writeError(w, http.StatusUnauthorized, "no eligible upstream credential is available", "invalid_request_error", "credential_unavailable")
+}
+
 func (s *Server) preflightProviderAdapter(instance provider.Instance) routePreflightResult {
 	if !instance.Chat || (!instance.APIKey && !instance.OAuth) {
 		return routePreflightResult{

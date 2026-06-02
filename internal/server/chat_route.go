@@ -83,12 +83,13 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 	}
 	credentialsSet, err := s.resolveModelCredentials(r.Context(), instance)
 	if err != nil {
-		requestMeta := requestMetadataBase(start, token, addr, instance, req, metadataEndpointChatCompletions, req.Stream)
-		requestMeta.HTTPStatus = http.StatusUnauthorized
-		requestMeta.ErrorClass = "credential_unavailable"
-		requestMeta.TotalLatencyMS = time.Since(start).Milliseconds()
-		_ = s.record(r.Context(), requestMeta)
-		writeError(w, http.StatusUnauthorized, "no eligible upstream credential is available", "invalid_request_error", "credential_unavailable")
+		writeOpenAICredentialUnavailable(w, func(status int, errorClass string) {
+			requestMeta := requestMetadataBase(start, token, addr, instance, req, metadataEndpointChatCompletions, req.Stream)
+			requestMeta.HTTPStatus = status
+			requestMeta.ErrorClass = errorClass
+			requestMeta.TotalLatencyMS = time.Since(start).Milliseconds()
+			_ = s.record(r.Context(), requestMeta)
+		})
 		return
 	}
 	if s.logger != nil {

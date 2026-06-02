@@ -65,14 +65,10 @@ func startManagementServer(ctx context.Context, homeDir, configPath, databasePat
 }
 
 func managementKeepaliveSettings(keepalive config.SubscriptionKeepaliveConfig) management.SubscriptionKeepaliveSettings {
-	times := config.NormalizeSubscriptionKeepaliveTimes(keepalive.ScheduleTimes)
-	if len(times) == 0 {
-		times = append([]string(nil), config.Default("").SubscriptionKeepalive.ScheduleTimes...)
-	}
 	return management.SubscriptionKeepaliveSettings{
 		Enabled:           keepalive.Enabled,
 		OutputCapVerified: config.SubscriptionKeepaliveOutputCapVerified(keepalive),
-		ScheduleTimes:     times,
+		ScheduleTimes:     config.SubscriptionKeepaliveScheduleTimes(keepalive.ScheduleTimes),
 	}
 }
 

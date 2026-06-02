@@ -67,7 +67,7 @@ func Default(homeDir string) Config {
 		},
 		SubscriptionKeepalive: SubscriptionKeepaliveConfig{
 			Timezone:        "local",
-			ScheduleTimes:   []string{"07:00", "12:00", "17:00", "22:00"},
+			ScheduleTimes:   DefaultSubscriptionKeepaliveScheduleTimes(),
 			MaxOutputTokens: 1,
 		},
 		Providers: map[string]ProviderConfig{
@@ -151,13 +151,7 @@ func (c *Config) applyDefaults(homeDir string) {
 	if c.SubscriptionKeepalive.Timezone == "" {
 		c.SubscriptionKeepalive.Timezone = def.SubscriptionKeepalive.Timezone
 	}
-	if len(c.SubscriptionKeepalive.ScheduleTimes) == 0 {
-		c.SubscriptionKeepalive.ScheduleTimes = append([]string(nil), def.SubscriptionKeepalive.ScheduleTimes...)
-	}
-	c.SubscriptionKeepalive.ScheduleTimes = NormalizeSubscriptionKeepaliveTimes(c.SubscriptionKeepalive.ScheduleTimes)
-	if len(c.SubscriptionKeepalive.ScheduleTimes) == 0 {
-		c.SubscriptionKeepalive.ScheduleTimes = append([]string(nil), def.SubscriptionKeepalive.ScheduleTimes...)
-	}
+	c.SubscriptionKeepalive.ScheduleTimes = SubscriptionKeepaliveScheduleTimes(c.SubscriptionKeepalive.ScheduleTimes)
 	if c.SubscriptionKeepalive.MaxOutputTokens == 0 {
 		c.SubscriptionKeepalive.MaxOutputTokens = def.SubscriptionKeepalive.MaxOutputTokens
 	}

@@ -2,6 +2,18 @@ package config
 
 import "strings"
 
+func DefaultSubscriptionKeepaliveScheduleTimes() []string {
+	return []string{"07:00", "12:00", "17:00", "22:00"}
+}
+
+func SubscriptionKeepaliveScheduleTimes(values []string) []string {
+	out := NormalizeSubscriptionKeepaliveTimes(values)
+	if len(out) == 0 {
+		return DefaultSubscriptionKeepaliveScheduleTimes()
+	}
+	return out
+}
+
 func NormalizeSubscriptionKeepaliveTimes(values []string) []string {
 	out := make([]string, 0, len(values))
 	for _, value := range values {

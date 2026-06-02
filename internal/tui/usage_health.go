@@ -13,7 +13,7 @@ import (
 func (m Model) writeHealthAndQuota(b *strings.Builder) {
 	width := m.viewWidth()
 	now := m.nowTime()
-	b.WriteString(renderSectionBanner(width, "Health", fmt.Sprintf("events %d", len(m.healthRows))))
+	b.WriteString(renderPaneSubhead(width, "Health", fmt.Sprintf("events %d", len(m.healthRows))))
 	b.WriteByte('\n')
 	if len(m.healthRows) == 0 {
 		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("42"), "health ledger",
@@ -27,7 +27,7 @@ func (m Model) writeHealthAndQuota(b *strings.Builder) {
 		b.WriteByte('\n')
 	}
 	b.WriteString("\n")
-	b.WriteString(renderSectionBanner(width, "Quota", fmt.Sprintf("blocks %d", len(m.quotaRows))))
+	b.WriteString(renderPaneSubhead(width, "Quota", fmt.Sprintf("blocks %d", len(m.quotaRows))))
 	b.WriteByte('\n')
 	if len(m.quotaRows) == 0 {
 		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("214"), "quota ledger",

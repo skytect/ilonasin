@@ -61,7 +61,7 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 		b.WriteByte('\n')
 	}
 	b.WriteString("\n")
-	b.WriteString(renderSectionBanner(width, "Subscription pools", fmt.Sprintf("pools %d", len(m.subscriptionPools))))
+	b.WriteString(renderPaneSubhead(width, "Subscription pools", fmt.Sprintf("pools %d", len(m.subscriptionPools))))
 	b.WriteByte('\n')
 	for _, row := range m.subscriptionPools {
 		limit := safeDisplay(row.LimitName)
@@ -82,7 +82,7 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 		}
 	}
 	b.WriteString("\n")
-	b.WriteString(renderSectionBanner(width, "Subscription keepalive"))
+	b.WriteString(renderPaneSubhead(width, "Subscription keepalive"))
 	b.WriteByte('\n')
 	schedule := strings.Join(m.keepaliveStatus.ScheduleTimes, ", ")
 	if schedule == "" {

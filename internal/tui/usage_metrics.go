@@ -11,7 +11,7 @@ import (
 
 func (m Model) writeUsageMetrics(b *strings.Builder) {
 	width := m.viewWidth()
-	b.WriteString(renderSectionBanner(width, "Token usage", fmt.Sprintf("providers %d", len(m.usageRows))))
+	b.WriteString(renderPaneSubhead(width, "Token usage", fmt.Sprintf("providers %d", len(m.usageRows))))
 	b.WriteByte('\n')
 	if len(m.usageRows) == 0 {
 		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("42"), "token ledger",
@@ -25,7 +25,7 @@ func (m Model) writeUsageMetrics(b *strings.Builder) {
 		b.WriteByte('\n')
 	}
 	b.WriteString("\n")
-	b.WriteString(renderSectionBanner(width, "Performance", fmt.Sprintf("providers %d", len(m.latencyRows))))
+	b.WriteString(renderPaneSubhead(width, "Performance", fmt.Sprintf("providers %d", len(m.latencyRows))))
 	b.WriteByte('\n')
 	if len(m.latencyRows) == 0 {
 		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("110"), "performance ledger",
@@ -39,7 +39,7 @@ func (m Model) writeUsageMetrics(b *strings.Builder) {
 		b.WriteByte('\n')
 	}
 	b.WriteString("\n")
-	b.WriteString(renderSectionBanner(width, "Streams", fmt.Sprintf("states %d", len(m.streamRows))))
+	b.WriteString(renderPaneSubhead(width, "Streams", fmt.Sprintf("states %d", len(m.streamRows))))
 	b.WriteByte('\n')
 	if len(m.streamRows) == 0 {
 		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("110"), "stream ledger",

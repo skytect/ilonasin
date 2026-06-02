@@ -17,7 +17,7 @@ func (m Model) writeOAuth(b *strings.Builder) {
 	width := m.viewWidth()
 	now := m.nowTime()
 	chips := []string{fmt.Sprintf("oauth %d", len(m.oauthRows)), fmt.Sprintf("accounts %d", len(m.accountRows))}
-	b.WriteString(renderSectionBanner(width, "OAuth accounts", chips...))
+	b.WriteString(renderPaneSubhead(width, "OAuth accounts", chips...))
 	b.WriteByte('\n')
 	if m.oauthChallenge != nil {
 		fmt.Fprintf(b, "%s %s %s %s\n", warnBadgeStyle.Render("login"), metricChip("provider", m.oauthChallenge.ProviderInstanceID),
@@ -35,7 +35,7 @@ func (m Model) writeOAuth(b *strings.Builder) {
 		b.WriteByte('\n')
 	}
 	b.WriteString("\n")
-	b.WriteString(renderSectionBanner(width, "Provider accounts", fmt.Sprintf("accounts %d", len(m.accountRows))))
+	b.WriteString(renderPaneSubhead(width, "Provider accounts", fmt.Sprintf("accounts %d", len(m.accountRows))))
 	b.WriteByte('\n')
 	if len(m.accountRows) == 0 {
 		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("24"), "provider identities",

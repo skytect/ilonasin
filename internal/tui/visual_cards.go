@@ -35,6 +35,25 @@ func renderSectionBanner(width int, title string, chips ...string) string {
 	return ansi.Truncate(line, width, "...")
 }
 
+func renderPaneSubhead(width int, title string, chips ...string) string {
+	title = safeChromeDisplay(title)
+	if title == "" {
+		title = "group"
+	}
+	parts := []string{paneTitleStyle.Render(title)}
+	for _, chip := range chips {
+		chip = safeChromeDisplay(chip)
+		if chip != "" {
+			parts = append(parts, chipStyle.Render(chip))
+		}
+	}
+	line := strings.Join(parts, " ")
+	if width <= 0 || ansi.StringWidth(line) <= width {
+		return line
+	}
+	return ansi.Truncate(line, width, "...")
+}
+
 func renderCardGrid(width int, cards []string) string {
 	if len(cards) == 0 {
 		return ""

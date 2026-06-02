@@ -11,7 +11,7 @@ import (
 
 func (m Model) writeProviderInstances(b *strings.Builder) {
 	width := m.viewWidth()
-	b.WriteString(renderSectionBanner(width, "Provider instances", fmt.Sprintf("providers %d", len(m.providers)), fmt.Sprintf("models %d", len(m.modelRows))))
+	b.WriteString(renderPaneSubhead(width, "Provider instances", fmt.Sprintf("providers %d", len(m.providers)), fmt.Sprintf("models %d", len(m.modelRows))))
 	b.WriteByte('\n')
 	if len(m.providers) == 0 {
 		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("110"), "provider instances",

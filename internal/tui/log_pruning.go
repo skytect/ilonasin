@@ -10,7 +10,7 @@ func (m Model) writePruning(b *strings.Builder) {
 		return
 	}
 	width := m.viewWidth()
-	b.WriteString(renderSectionBanner(width, "Metadata and IO", "ledger", "capture policy", "pruning"))
+	b.WriteString(renderPaneSubhead(width, "Metadata and IO", "ledger", "capture policy", "pruning"))
 	b.WriteByte('\n')
 	b.WriteString(metricLine(
 		statusBadge("enabled"),

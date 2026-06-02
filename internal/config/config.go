@@ -79,6 +79,14 @@ func Default(homeDir string) Config {
 }
 
 func LoadOrCreate(path, homeDir string, explicit bool) (Config, string, error) {
+	return load(path, homeDir, explicit, !explicit)
+}
+
+func Load(path, homeDir string) (Config, string, error) {
+	return load(path, homeDir, true, false)
+}
+
+func load(path, homeDir string, explicit bool, createDefault bool) (Config, string, error) {
 	if path == "" {
 		path = filepath.Join(homeDir, "config.toml")
 	}
@@ -88,7 +96,7 @@ func LoadOrCreate(path, homeDir string, explicit bool) (Config, string, error) {
 		if !errors.Is(err, os.ErrNotExist) {
 			return Config{}, "", err
 		}
-		if explicit {
+		if explicit || !createDefault {
 			return Config{}, "", fmt.Errorf("config file does not exist: %s", path)
 		}
 		cfg := Default(homeDir)

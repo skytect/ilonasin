@@ -29,10 +29,10 @@ type coreRuntime struct {
 }
 
 func bootstrapClient(ctx context.Context, opts Options) (*coreRuntime, error) {
-	return bootstrapCore(ctx, opts)
+	return bootstrapCore(ctx, opts, false)
 }
 
-func bootstrapCore(ctx context.Context, opts Options) (*coreRuntime, error) {
+func bootstrapCore(ctx context.Context, opts Options, createDefaultConfig bool) (*coreRuntime, error) {
 	if opts.Stdout == nil {
 		opts.Stdout = io.Discard
 	}
@@ -50,7 +50,7 @@ func bootstrapCore(ctx context.Context, opts Options) (*coreRuntime, error) {
 		cleanup()
 		return nil, err
 	}
-	cfg, cfgPath, err := config.LoadOrCreate(opts.ConfigPath, homeDir, opts.ConfigPath != "")
+	cfg, cfgPath, err := loadConfig(opts.ConfigPath, homeDir, createDefaultConfig)
 	if err != nil {
 		cleanup()
 		return nil, err
@@ -97,4 +97,11 @@ func bootstrapCore(ctx context.Context, opts Options) (*coreRuntime, error) {
 		return nil, err
 	}
 	return &coreRuntime{HomeDir: homeDir, ConfigPath: cfgPath, Config: cfg, Registry: registry, Logger: logger, IOLogger: ioLogger, cleanup: cleanup}, nil
+}
+
+func loadConfig(path, homeDir string, createDefault bool) (config.Config, string, error) {
+	if createDefault {
+		return config.LoadOrCreate(path, homeDir, path != "")
+	}
+	return config.Load(path, homeDir)
 }

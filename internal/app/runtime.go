@@ -14,7 +14,7 @@ type runtime struct {
 }
 
 func bootstrap(ctx context.Context, opts Options) (*runtime, error) {
-	core, err := bootstrapCore(ctx, opts)
+	core, err := bootstrapCore(ctx, opts, true)
 	if err != nil {
 		return nil, err
 	}

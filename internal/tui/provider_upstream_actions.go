@@ -7,7 +7,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"ilonasin/internal/management"
-	"ilonasin/internal/provider"
 )
 
 func (m Model) disableUpstreamCredentialAction() (tea.Model, tea.Cmd) {
@@ -56,9 +55,6 @@ func (m Model) visibleUpstreamCredentials(rows []management.UpstreamCredential) 
 	return out
 }
 
-func (m Model) visibleProviderRows() []provider.Instance {
-	if len(m.providers) > 0 {
-		return m.providers
-	}
-	return m.registry.List()
+func (m Model) visibleProviderRows() []management.ProviderInstance {
+	return m.providers
 }

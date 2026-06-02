@@ -8,10 +8,9 @@ import (
 
 	"ilonasin/internal/config"
 	"ilonasin/internal/management"
-	"ilonasin/internal/provider"
 )
 
-func Run(cfg config.Config, registry provider.Registry, snapshot management.SnapshotClient, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, oauth management.OAuthClient, pruner management.TelemetryPruneClient, loggers ...*slog.Logger) error {
+func Run(cfg config.Config, snapshot management.SnapshotClient, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, oauth management.OAuthClient, pruner management.TelemetryPruneClient, loggers ...*slog.Logger) error {
 	if snapshot == nil {
 		return fmt.Errorf("management snapshot client is required")
 	}
@@ -19,7 +18,7 @@ func Run(cfg config.Config, registry provider.Registry, snapshot management.Snap
 	if client, ok := snapshot.(management.SubscriptionUsageClient); ok {
 		subscriptionUsage = client
 	}
-	model := NewModel(cfg, registry, tokens, upstreams, oauth, pruner, subscriptionUsage, nil, loggers...)
+	model := NewModel(cfg, tokens, upstreams, oauth, pruner, subscriptionUsage, nil, loggers...)
 	model.snapshot = snapshot
 	if err := model.reload(); err != nil {
 		return err

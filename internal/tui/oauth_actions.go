@@ -59,7 +59,7 @@ func (m *Model) cancelOAuthLogin() {
 func (m Model) startOAuthLoginAction() (tea.Model, tea.Cmd) {
 	m.clearReveal()
 	m.cancelOAuthLogin()
-	providerID, ok := firstOAuthLoginProvider(m.registry)
+	providerID, ok := firstOAuthLoginProvider(m.providers)
 	if !ok || m.oauth == nil {
 		m.logInfo(context.Background(), "tui_oauth_login_unavailable")
 		m.err = "OAuth login failed"
@@ -112,8 +112,8 @@ func (m *Model) refreshSelectedOAuthCredential() error {
 	return nil
 }
 
-func firstOAuthLoginProvider(registry provider.Registry) (string, bool) {
-	for _, instance := range registry.List() {
+func firstOAuthLoginProvider(providers []management.ProviderInstance) (string, bool) {
+	for _, instance := range providers {
 		if instance.Type == "codex" && instance.OAuth {
 			return instance.ID, true
 		}

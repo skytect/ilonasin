@@ -75,5 +75,5 @@ func Manage(opts Options) error {
 	if _, err := managementClient.LoadManagementSnapshot(context.Background()); err != nil {
 		return err
 	}
-	return tui.Run(rt.Config, rt.Registry, managementClient, managementClient, managementClient, managementClient, managementClient, rt.Logger)
+	return tui.Run(rt.Config, managementClient, managementClient, managementClient, managementClient, managementClient, rt.Logger)
 }

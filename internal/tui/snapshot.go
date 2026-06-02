@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"ilonasin/internal/management"
-	"ilonasin/internal/provider"
 )
 
 func (m *Model) reload() error {
@@ -25,7 +24,7 @@ func (m *Model) reload() error {
 
 func (m *Model) applySnapshot(snapshot management.ManagementSnapshotResponse) {
 	m.tokenRows = snapshot.LocalTokens
-	m.providers = providersFromSnapshot(snapshot.Providers)
+	m.providers = append([]management.ProviderInstance(nil), snapshot.Providers...)
 	m.credentials = m.visibleUpstreamCredentials(snapshot.UpstreamCredentials)
 	m.fallbackPolicies = m.visibleFallbackPolicies(snapshot.FallbackPolicies)
 	m.oauthRows = append([]management.OAuthCredential(nil), snapshot.OAuthCredentials...)
@@ -59,22 +58,4 @@ func (m *Model) applySubscriptionUsage(resp management.SubscriptionUsageResponse
 	m.subscriptionRows = append([]management.SubscriptionUsageRow(nil), resp.Accounts...)
 	m.subscriptionPools = append([]management.SubscriptionUsageAggregate(nil), resp.Pools...)
 	m.keepaliveStatus = resp.Keepalive
-}
-
-func providersFromSnapshot(rows []management.ProviderInstance) []provider.Instance {
-	out := make([]provider.Instance, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, provider.Instance{
-			ID:             row.ID,
-			Type:           row.Type,
-			BaseURL:        row.BaseURL,
-			AuthStyle:      row.AuthStyle,
-			APIKey:         row.APIKey,
-			OAuth:          row.OAuth,
-			OAuthRefresh:   row.OAuthRefresh,
-			Chat:           row.Chat,
-			ModelDiscovery: row.ModelDiscovery,
-		})
-	}
-	return out
 }

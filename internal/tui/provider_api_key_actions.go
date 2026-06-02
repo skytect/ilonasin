@@ -7,7 +7,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"ilonasin/internal/management"
-	"ilonasin/internal/provider"
 )
 
 func (m Model) updateAPIKeyInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -61,7 +60,7 @@ func (m Model) updateAPIKeyInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) startAPIKeyInput() (tea.Model, tea.Cmd) {
 	m.clearReveal()
-	instance, ok := firstAPIKeyProvider(m.registry)
+	instance, ok := firstAPIKeyProvider(m.providers)
 	if !ok {
 		m.err = "no API-key provider instance is configured"
 		return m, nil
@@ -78,11 +77,11 @@ func (m *Model) clearAPIKeyInput() {
 	m.apiKeyInput = ""
 }
 
-func firstAPIKeyProvider(registry provider.Registry) (provider.Instance, bool) {
-	for _, instance := range registry.List() {
+func firstAPIKeyProvider(providers []management.ProviderInstance) (management.ProviderInstance, bool) {
+	for _, instance := range providers {
 		if instance.APIKey {
 			return instance, true
 		}
 	}
-	return provider.Instance{}, false
+	return management.ProviderInstance{}, false
 }

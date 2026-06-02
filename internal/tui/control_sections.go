@@ -59,7 +59,7 @@ func (m Model) apiSummaryBody(width int) string {
 		),
 		renderCompactCard(metricCardWidth(width),
 			cardTitleStyle.Render("upstream boundary"),
-			metricLine(metricChip("providers", fmt.Sprintf("%d", len(m.cfg.Providers)))),
+			metricLine(metricChip("providers", fmt.Sprintf("%d", len(m.providers)))),
 			mutedStyle.Render("provider API keys and OAuth live on providers"),
 		),
 	}

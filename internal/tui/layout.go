@@ -11,7 +11,7 @@ import (
 func (m Model) View() string {
 	var b strings.Builder
 	width := m.viewWidth()
-	header := fmt.Sprintf("ilonasin  providers %d  bind %s", len(m.cfg.Providers), m.cfg.Server.Bind)
+	header := fmt.Sprintf("ilonasin  providers %d  bind %s", len(m.providers), m.cfg.Server.Bind)
 	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212")).Render(clipPlainLine(header, width))
 	b.WriteString(title)
 	b.WriteByte('\n')

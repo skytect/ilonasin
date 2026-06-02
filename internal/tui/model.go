@@ -10,12 +10,10 @@ import (
 	"ilonasin/internal/config"
 	"ilonasin/internal/credentials"
 	"ilonasin/internal/management"
-	"ilonasin/internal/provider"
 )
 
 type Model struct {
 	cfg               config.Config
-	registry          provider.Registry
 	snapshot          management.SnapshotClient
 	tokens            management.LocalTokenClient
 	upstreams         management.UpstreamCredentialClient
@@ -25,7 +23,7 @@ type Model struct {
 	logger            *slog.Logger
 	now               func() time.Time
 	tokenRows         []management.LocalToken
-	providers         []provider.Instance
+	providers         []management.ProviderInstance
 	credentials       []management.UpstreamCredential
 	fallbackPolicies  []management.FallbackPolicy
 	oauthRows         []management.OAuthCredential
@@ -83,8 +81,8 @@ var tuiTabs = []struct {
 	{tabLogs, "logs"},
 }
 
-func NewModel(cfg config.Config, registry provider.Registry, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, oauth management.OAuthClient, pruner management.TelemetryPruneClient, subscriptionUsage management.SubscriptionUsageClient, now func() time.Time, loggers ...*slog.Logger) Model {
-	m := Model{cfg: cfg, registry: registry, tokens: tokens, upstreams: upstreams, oauth: oauth, pruner: pruner, subscriptionUsage: subscriptionUsage, now: now, logger: firstLogger(loggers)}
+func NewModel(cfg config.Config, tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, oauth management.OAuthClient, pruner management.TelemetryPruneClient, subscriptionUsage management.SubscriptionUsageClient, now func() time.Time, loggers ...*slog.Logger) Model {
+	m := Model{cfg: cfg, tokens: tokens, upstreams: upstreams, oauth: oauth, pruner: pruner, subscriptionUsage: subscriptionUsage, now: now, logger: firstLogger(loggers)}
 	m.paneFocus[tabAPI] = apiPaneTokens
 	return m
 }

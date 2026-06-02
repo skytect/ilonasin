@@ -42,6 +42,7 @@ type codexResponseToolState struct {
 }
 
 type codexResponseToolCall struct {
+	ItemID    string
 	CallID    string
 	Name      string
 	Namespace string
@@ -56,6 +57,7 @@ type codexResponseCustomToolState struct {
 }
 
 type codexResponseCustomToolCall struct {
+	ItemID string
 	CallID string
 	Name   string
 	Input  strings.Builder
@@ -394,11 +396,14 @@ func (state *codexResponseParseState) addCodexFunctionCall(key, callID, name, na
 	}
 	call := state.toolState.calls[key]
 	if call == nil {
-		call = &codexResponseToolCall{CallID: callID, Name: name, Namespace: namespace}
+		call = &codexResponseToolCall{ItemID: key, CallID: callID, Name: name, Namespace: namespace}
 		state.toolState.calls[key] = call
 		state.toolState.order = append(state.toolState.order, key)
 	} else if call.CallID != callID || call.Name != name || call.Namespace != namespace {
 		return fmt.Errorf("conflicting codex function_call")
+	}
+	if call.ItemID == "" {
+		call.ItemID = key
 	}
 	if len(arguments) != 0 && !bytes.Equal(bytes.TrimSpace(arguments), []byte("null")) {
 		argumentText, err := codexFunctionArgumentsText(arguments)
@@ -494,6 +499,7 @@ func (state *codexResponseParseState) addCodexResponsesFunctionCallItem(call *co
 		arguments = body
 	}
 	stateOutput := openai.ResponsesOutputItem{
+		ID:        call.ItemID,
 		Type:      "function_call",
 		CallID:    call.CallID,
 		Name:      call.Name,
@@ -580,10 +586,13 @@ func (state *codexResponseParseState) addCodexCustomToolCall(itemID, callID, nam
 	}
 	call := state.customToolState.calls[key]
 	if call == nil {
-		call = &codexResponseCustomToolCall{CallID: callID, Name: name}
+		call = &codexResponseCustomToolCall{ItemID: key, CallID: callID, Name: name}
 		state.customToolState.calls[key] = call
 		state.customToolState.order = append(state.customToolState.order, key)
 	} else {
+		if call.ItemID == "" {
+			call.ItemID = key
+		}
 		if call.CallID == "" {
 			call.CallID = callID
 		} else if call.CallID != callID {
@@ -637,7 +646,7 @@ func (state *codexResponseParseState) appendCodexCustomToolInput(itemID, callID,
 			state.customToolState.aliases = map[string]string{}
 			state.customToolState.emitted = map[string]bool{}
 		}
-		call = &codexResponseCustomToolCall{CallID: callID}
+		call = &codexResponseCustomToolCall{ItemID: key, CallID: callID}
 		state.customToolState.calls[key] = call
 		state.customToolState.order = append(state.customToolState.order, key)
 		if itemID != "" {
@@ -672,7 +681,7 @@ func (state *codexResponseParseState) finishCodexCustomToolInput(itemID, callID,
 			state.customToolState.aliases = map[string]string{}
 			state.customToolState.emitted = map[string]bool{}
 		}
-		call = &codexResponseCustomToolCall{CallID: callID}
+		call = &codexResponseCustomToolCall{ItemID: key, CallID: callID}
 		state.customToolState.calls[key] = call
 		state.customToolState.order = append(state.customToolState.order, key)
 		if itemID != "" {
@@ -728,6 +737,7 @@ func (state *codexResponseParseState) customToolItems() []openai.ResponsesOutput
 			continue
 		}
 		out = append(out, openai.ResponsesOutputItem{
+			ID:     call.ItemID,
 			Type:   "custom_tool_call",
 			CallID: call.CallID,
 			Name:   call.Name,

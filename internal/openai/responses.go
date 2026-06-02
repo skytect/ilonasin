@@ -54,9 +54,6 @@ func DecodeResponses(r io.Reader) (ResponsesRequest, error) {
 	if dec.Decode(&struct{}{}) != io.EOF {
 		return ResponsesRequest{}, errors.New("request body must contain a single JSON object")
 	}
-	if err := rejectUnsupportedResponsesFields(raw, "prompt_cache_key", "client_metadata"); err != nil {
-		return ResponsesRequest{}, err
-	}
 	if err := validateResponsesTopLevelKeys(raw); err != nil {
 		return ResponsesRequest{}, err
 	}
@@ -143,6 +140,8 @@ func validateResponsesTopLevelKeys(raw map[string]json.RawMessage) error {
 		"include":             true,
 		"service_tier":        true,
 		"text":                true,
+		"prompt_cache_key":    true,
+		"client_metadata":     true,
 	}
 	keys := make([]string, 0, len(raw))
 	for key := range raw {

@@ -3,11 +3,8 @@ package server
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"ilonasin/internal/anthropic"
@@ -16,8 +13,6 @@ import (
 	"ilonasin/internal/provider"
 	"ilonasin/internal/routing"
 )
-
-const anthropicCodexFallbackModel = "gpt-5.5"
 
 func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request, token credentials.VerifiedLocalToken) {
 	start := time.Now()
@@ -39,7 +34,7 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request,
 		writeAnthropicError(w, status, err.Error())
 		return
 	}
-	addr, err := s.resolveAnthropicModelAddress(r, req.Model)
+	addr, err := s.resolveAnthropicModelAddress(req.Model)
 	if err != nil {
 		s.logHTTP(r, http.StatusBadRequest, "anthropic_route", "invalid_model")
 		writeAnthropicError(w, http.StatusBadRequest, err.Error())
@@ -138,47 +133,8 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request,
 	s.recordNonStreamingChat(r, nc, exec, status, errorClass)
 }
 
-func (s *Server) resolveAnthropicModelAddress(r *http.Request, model string) (routing.ModelAddress, error) {
-	addr, err := s.resolveModelAddress(r.Context(), model)
-	if err == nil {
-		return addr, nil
-	}
-	if strings.Contains(model, "/") {
-		return routing.ModelAddress{}, err
-	}
-	if !isAnthropicCodexFallbackAlias(model) {
-		return routing.ModelAddress{}, err
-	}
-	var codexInstances []provider.Instance
-	for _, instance := range s.registry.List() {
-		if instance.Type == "codex" && instance.Chat {
-			codexInstances = append(codexInstances, instance)
-		}
-	}
-	if len(codexInstances) == 1 {
-		if s.logger != nil {
-			s.logAttrs(r, slog.LevelInfo, "anthropic route model fallback",
-				slog.String("event", "anthropic_model_fallback"),
-				slog.String("provider_instance", codexInstances[0].ID),
-				slog.String("provider_type", codexInstances[0].Type),
-			)
-		}
-		return routing.ModelAddress{ProviderInstanceID: codexInstances[0].ID, ProviderModelID: anthropicCodexFallbackModel}, nil
-	}
-	if len(codexInstances) > 1 {
-		return routing.ModelAddress{}, fmt.Errorf("model must be addressed as <provider_instance_id>/<provider_model_id>; Anthropic fallback is ambiguous across Codex providers")
-	}
-	return routing.ModelAddress{}, err
-}
-
-func isAnthropicCodexFallbackAlias(model string) bool {
-	switch model {
-	case "haiku", "opus", "sonnet":
-		return true
-	}
-	return strings.HasPrefix(model, "claude-haiku-") ||
-		strings.HasPrefix(model, "claude-opus-") ||
-		strings.HasPrefix(model, "claude-sonnet-")
+func (s *Server) resolveAnthropicModelAddress(model string) (routing.ModelAddress, error) {
+	return routing.ParseModelAddress(model)
 }
 
 func (s *Server) recordAnthropicEarly(r *http.Request, start time.Time, token credentials.VerifiedLocalToken, addr routing.ModelAddress, instance provider.Instance, chatReq openai.ChatCompletionRequest, req anthropic.Request, status int, errorClass string) {

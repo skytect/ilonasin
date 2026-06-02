@@ -34,7 +34,7 @@ func (s *Server) handleAnthropicCountTokens(w http.ResponseWriter, r *http.Reque
 		writeAnthropicError(w, status, err.Error())
 		return
 	}
-	addr, err := s.resolveAnthropicModelAddress(r, req.Model)
+	addr, err := s.resolveAnthropicModelAddress(req.Model)
 	if err != nil {
 		s.recordAnthropicCountTokensInvalid(r, start, token, req, http.StatusBadRequest, "invalid_model")
 		s.logHTTP(r, http.StatusBadRequest, "anthropic_count_tokens_route", "invalid_model")

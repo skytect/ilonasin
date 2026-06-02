@@ -27,7 +27,8 @@ func Serve(opts Options) error {
 	}
 	captureUpstreamIO := rt.IOLogger != nil && logging.DebugEnabled(rt.Config.Logging.Level)
 	secretRefresh := ioSecretRefreshHook(context.Background(), rt.IOLogger, rt.Store)
-	mgmt, err := startManagementServer(context.Background(), rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database, rt.Config.Server.Bind, rt.Registry, rt.Store, rt.Config.SubscriptionKeepalive, rt.IOLogger, captureUpstreamIO, secretRefresh, rt.Logger)
+	keepalive := subscriptionKeepaliveSettingsFromConfig(rt.Config.SubscriptionKeepalive)
+	mgmt, err := startManagementServer(context.Background(), rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database, rt.Config.Server.Bind, rt.Registry, rt.Store, keepalive, rt.IOLogger, captureUpstreamIO, secretRefresh, rt.Logger)
 	if err != nil {
 		return err
 	}
@@ -58,7 +59,7 @@ func Serve(opts Options) error {
 	codexAdapter.CaptureUpstreamIO = captureUpstreamIO
 	adapters := chatAdapters(nil, rt.IOLogger, captureUpstreamIO, rt.Logger)
 	adapters["codex"] = codexAdapter
-	stopKeepalive := startSubscriptionKeepalive(context.Background(), rt.Config.SubscriptionKeepalive, rt.Registry, upstreams, codexAdapter, codexAdapter, rt.Logger)
+	stopKeepalive := startSubscriptionKeepalive(context.Background(), keepalive, rt.Registry, upstreams, codexAdapter, codexAdapter, rt.Logger)
 	defer stopKeepalive()
 	srv := &http.Server{
 		Addr:              rt.Config.Server.Bind,

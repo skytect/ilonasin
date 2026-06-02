@@ -127,6 +127,16 @@ func providerRegistryConfig(cfg config.Config) provider.RegistryConfig {
 	return provider.RegistryConfig{Providers: providers}
 }
 
+func subscriptionKeepaliveSettingsFromConfig(cfg config.SubscriptionKeepaliveConfig) subscriptionKeepaliveSettings {
+	return subscriptionKeepaliveSettings{
+		Enabled:           cfg.Enabled,
+		ScheduleTimes:     config.SubscriptionKeepaliveScheduleTimes(cfg.ScheduleTimes),
+		Model:             cfg.Model,
+		MaxOutputTokens:   cfg.MaxOutputTokens,
+		OutputCapVerified: config.SubscriptionKeepaliveOutputCapVerified(cfg),
+	}
+}
+
 func loadConfig(path, homeDir string, createDefault bool) (config.Config, string, error) {
 	if createDefault {
 		return config.LoadOrCreate(path, homeDir, path != "")

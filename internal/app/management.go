@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"time"
 
-	"ilonasin/internal/config"
 	"ilonasin/internal/credentials"
 	"ilonasin/internal/logging"
 	"ilonasin/internal/management"
@@ -21,7 +20,7 @@ type managementRuntime struct {
 	server     *http.Server
 }
 
-func startManagementServer(ctx context.Context, homeDir, configPath, databasePath, bind string, registry provider.Registry, store *sqlite.Store, keepalive config.SubscriptionKeepaliveConfig, ioLogger *logging.IOLogger, captureUpstreamIO bool, secretRefresh func(context.Context, ...string), loggers ...*slog.Logger) (managementRuntime, error) {
+func startManagementServer(ctx context.Context, homeDir, configPath, databasePath, bind string, registry provider.Registry, store *sqlite.Store, keepalive subscriptionKeepaliveSettings, ioLogger *logging.IOLogger, captureUpstreamIO bool, secretRefresh func(context.Context, ...string), loggers ...*slog.Logger) (managementRuntime, error) {
 	logger := firstSlogLogger(loggers)
 	refresher := provider.NewHTTPOAuthRefresher(nil)
 	refresher.Logger = logger
@@ -64,11 +63,11 @@ func startManagementServer(ctx context.Context, homeDir, configPath, databasePat
 	})
 }
 
-func managementKeepaliveSettings(keepalive config.SubscriptionKeepaliveConfig) management.SubscriptionKeepaliveSettings {
+func managementKeepaliveSettings(keepalive subscriptionKeepaliveSettings) management.SubscriptionKeepaliveSettings {
 	return management.SubscriptionKeepaliveSettings{
 		Enabled:           keepalive.Enabled,
-		OutputCapVerified: config.SubscriptionKeepaliveOutputCapVerified(keepalive),
-		ScheduleTimes:     config.SubscriptionKeepaliveScheduleTimes(keepalive.ScheduleTimes),
+		OutputCapVerified: keepalive.OutputCapVerified,
+		ScheduleTimes:     append([]string(nil), keepalive.ScheduleTimes...),
 	}
 }
 

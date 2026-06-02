@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"ilonasin/internal/config"
 	"ilonasin/internal/credentials"
 	"ilonasin/internal/openai"
 	"ilonasin/internal/provider"
@@ -18,7 +17,7 @@ import (
 const keepalivePrompt = "Reply exactly: ok"
 
 type keepaliveRunner struct {
-	cfg       config.SubscriptionKeepaliveConfig
+	settings  subscriptionKeepaliveSettings
 	registry  provider.Registry
 	resolver  credentials.OAuthBearerResolver
 	usage     provider.CodexSubscriptionUsageClient
@@ -29,11 +28,19 @@ type keepaliveRunner struct {
 	mu        sync.Mutex
 }
 
-func startSubscriptionKeepalive(ctx context.Context, cfg config.SubscriptionKeepaliveConfig, registry provider.Registry, resolver credentials.OAuthBearerResolver, usage provider.CodexSubscriptionUsageClient, adapter provider.ChatAdapter, logger *slog.Logger) func() {
-	if !cfg.Enabled {
+type subscriptionKeepaliveSettings struct {
+	Enabled           bool
+	ScheduleTimes     []string
+	Model             string
+	MaxOutputTokens   int
+	OutputCapVerified bool
+}
+
+func startSubscriptionKeepalive(ctx context.Context, settings subscriptionKeepaliveSettings, registry provider.Registry, resolver credentials.OAuthBearerResolver, usage provider.CodexSubscriptionUsageClient, adapter provider.ChatAdapter, logger *slog.Logger) func() {
+	if !settings.Enabled {
 		return func() {}
 	}
-	if !config.SubscriptionKeepaliveOutputCapVerified(cfg) {
+	if !settings.OutputCapVerified {
 		logKeepaliveUnavailable(ctx, logger)
 		return func() {}
 	}
@@ -42,7 +49,7 @@ func startSubscriptionKeepalive(ctx context.Context, cfg config.SubscriptionKeep
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	runner := &keepaliveRunner{
-		cfg:       cfg,
+		settings:  settings,
 		registry:  registry,
 		resolver:  resolver,
 		usage:     usage,
@@ -70,11 +77,11 @@ func (r *keepaliveRunner) loop(ctx context.Context) {
 }
 
 func (r *keepaliveRunner) runDue(ctx context.Context) {
-	if !config.SubscriptionKeepaliveOutputCapVerified(r.cfg) {
+	if !r.settings.OutputCapVerified {
 		return
 	}
 	now := r.now()
-	slot := keepaliveSlot(now, r.cfg.ScheduleTimes)
+	slot := keepaliveSlot(now, r.settings.ScheduleTimes)
 	if slot == "" {
 		return
 	}
@@ -105,7 +112,7 @@ func (r *keepaliveRunner) runCredential(ctx context.Context, now time.Time, slot
 	}
 	r.mu.Unlock()
 
-	req := keepaliveRequest(r.cfg.Model)
+	req := keepaliveRequest(r.settings.Model)
 	credential := provider.ChatCredential{
 		ID:                      bearer.ID,
 		ProviderInstanceID:      bearer.ProviderInstanceID,
@@ -184,7 +191,7 @@ func (r *keepaliveRunner) refreshUsage(ctx context.Context, instance provider.In
 
 func keepaliveSlot(now time.Time, schedule []string) string {
 	current := now.Format("15:04")
-	for _, value := range config.SubscriptionKeepaliveScheduleTimes(schedule) {
+	for _, value := range schedule {
 		if value == current {
 			return current
 		}

@@ -84,6 +84,7 @@ var tuiTabs = []struct {
 func NewModel(tokens management.LocalTokenClient, upstreams management.UpstreamCredentialClient, oauth management.OAuthClient, pruner management.TelemetryPruneClient, subscriptionUsage management.SubscriptionUsageClient, now func() time.Time, loggers ...*slog.Logger) Model {
 	m := Model{tokens: tokens, upstreams: upstreams, oauth: oauth, pruner: pruner, subscriptionUsage: subscriptionUsage, now: now, logger: firstLogger(loggers)}
 	m.paneFocus[tabAPI] = apiPaneTokens
+	m.paneFocus[tabUsage] = usagePaneSubscriptions
 	return m
 }
 

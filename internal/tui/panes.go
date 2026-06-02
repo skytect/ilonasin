@@ -45,6 +45,7 @@ type dashboardPane struct {
 
 type panePlacement struct {
 	pane   dashboardPane
+	x      int
 	y      int
 	width  int
 	height int
@@ -298,12 +299,14 @@ func paneLayout(width, height int, panes []dashboardPane) [][]panePlacement {
 	columnWidths := paneColumnWidths(width, columnCount)
 	columns := make([][]panePlacement, 0, columnCount)
 	paneIndex := 0
+	columnX := 0
 	for columnIndex := 0; columnIndex < columnCount; columnIndex++ {
 		count := panesInColumn(len(panes), columnCount, columnIndex)
 		columnPanes := panes[paneIndex : paneIndex+count]
-		column := paneColumnPlacements(columnWidths[columnIndex], height, columnPanes)
+		column := paneColumnPlacements(columnX, columnWidths[columnIndex], height, columnPanes)
 		columns = append(columns, column)
 		paneIndex += count
+		columnX += columnWidths[columnIndex] + paneColumnGap
 	}
 	return columns
 }
@@ -359,7 +362,7 @@ func panesInColumn(paneCount, columnCount, columnIndex int) int {
 	return count
 }
 
-func paneColumnPlacements(width, height int, panes []dashboardPane) []panePlacement {
+func paneColumnPlacements(x, width, height int, panes []dashboardPane) []panePlacement {
 	if len(panes) == 0 {
 		return nil
 	}
@@ -379,7 +382,7 @@ func paneColumnPlacements(width, height int, panes []dashboardPane) []panePlacem
 		if paneHeight < 3 {
 			paneHeight = 3
 		}
-		placements = append(placements, panePlacement{pane: pane, y: y, width: width, height: paneHeight, limit: height})
+		placements = append(placements, panePlacement{pane: pane, x: x, y: y, width: width, height: paneHeight, limit: height})
 		y += paneHeight + paneRowGap
 	}
 	return placements
@@ -444,6 +447,51 @@ func paneScrollableContentHeight(placement panePlacement) int {
 		return height - 1
 	}
 	return height
+}
+
+func (m Model) dashboardTop() int {
+	if m.statusLine() != "" {
+		return 3
+	}
+	return 2
+}
+
+func (m Model) paneAtViewPosition(x, y int) (tuiTab, int, bool) {
+	tab := m.validActiveTab()
+	dashboardY := y - m.dashboardTop()
+	if dashboardY < 0 {
+		return tab, 0, false
+	}
+	placements := panePlacementsForScroll(m.viewWidth(), m.viewportHeight(), m.tabPanes(tab))
+	for _, placement := range placements {
+		if x < placement.x || x >= placement.x+placement.width {
+			continue
+		}
+		if dashboardY < placement.y || dashboardY >= placement.y+placement.height {
+			continue
+		}
+		return tab, placement.pane.id, true
+	}
+	return tab, 0, false
+}
+
+func (m *Model) focusPaneAtViewPosition(x, y int) bool {
+	tab, paneID, ok := m.paneAtViewPosition(x, y)
+	if !ok {
+		return false
+	}
+	m.paneFocus[tab] = paneID
+	return true
+}
+
+func (m *Model) scrollPaneAtViewPosition(x, y, delta int) bool {
+	tab, paneID, ok := m.paneAtViewPosition(x, y)
+	if !ok {
+		return false
+	}
+	m.paneFocus[tab] = paneID
+	m.setPaneScroll(tab, paneID, m.paneOffset(tab, paneID)+delta)
+	return true
 }
 
 func paneScrollMaxForLineCount(placement panePlacement, lineCount int) int {

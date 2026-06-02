@@ -48,6 +48,26 @@ func (m Model) tabBar(width int) string {
 	return line
 }
 
+func (m Model) tabAtViewPosition(x, y int) (tuiTab, bool) {
+	if y != 1 || x < 0 {
+		return tabAPI, false
+	}
+	position := 0
+	for _, tab := range tuiTabs {
+		label := " " + tab.label + " "
+		display := " " + label + " "
+		if tab.id == m.activeTab {
+			display = "[" + label + "]"
+		}
+		width := lipgloss.Width(display)
+		if x >= position && x < position+width {
+			return tab.id, true
+		}
+		position += width + 1
+	}
+	return tabAPI, false
+}
+
 func (m Model) statusLine() string {
 	if m.err != "" {
 		return "Error: " + safeErrorMessage(m.err)

@@ -59,9 +59,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseMsg:
 		switch msg.Type {
 		case tea.MouseWheelUp:
-			m.scrollFocusedPane(-3)
+			if !m.scrollPaneAtViewPosition(msg.X, msg.Y, -3) {
+				m.scrollFocusedPane(-3)
+			}
 		case tea.MouseWheelDown:
-			m.scrollFocusedPane(3)
+			if !m.scrollPaneAtViewPosition(msg.X, msg.Y, 3) {
+				m.scrollFocusedPane(3)
+			}
+		case tea.MouseLeft:
+			if msg.Action != tea.MouseActionPress {
+				return m, nil
+			}
+			if tab, ok := m.tabAtViewPosition(msg.X, msg.Y); ok {
+				m.activeTab = tab
+				m.clampScrolls()
+				return m, nil
+			}
+			m.focusPaneAtViewPosition(msg.X, msg.Y)
 		}
 		return m, nil
 	}

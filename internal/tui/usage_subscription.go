@@ -194,9 +194,9 @@ func subscriptionRawGroupKey(value string) string {
 func subscriptionLimitPriority(sortKey string) int {
 	sortKey = strings.ToLower(sortKey)
 	switch {
-	case subscriptionLimitContains(sortKey, "gpt-5.5", "gpt 5.5", "gpt5.5", "gpt_5_5"):
+	case subscriptionLimitContains(sortKey, "gpt-5.5", "gpt 5.5", "gpt5.5", "gpt_5_5", "codex") && !subscriptionLimitContains(sortKey, "spark", "bengalfox"):
 		return 0
-	case subscriptionLimitContains(sortKey, "gpt-5.4", "gpt 5.4", "gpt5.4", "gpt_5_4", "spark"):
+	case subscriptionLimitContains(sortKey, "gpt-5.3", "gpt 5.3", "gpt5.3", "gpt_5_3", "gpt-5.4", "gpt 5.4", "gpt5.4", "gpt_5_4", "spark", "bengalfox"):
 		return 1
 	default:
 		return 2
@@ -221,13 +221,12 @@ func subscriptionGroupHeader(group subscriptionUsageGroup, width int) string {
 		label = "limit"
 	}
 	head := wrappedMetricLine(width,
-		machineChip("group", "accounts"),
+		displayMetricChip("limit", label),
 		metricChip("accounts", fmt.Sprintf("%d", len(group.rows))),
 	)
 	return strings.Join([]string{
 		head,
 		wrappedDisplayField("provider", group.provider, width),
-		wrappedDisplayField("limit", label, width),
 	}, "\n")
 }
 
@@ -434,9 +433,6 @@ func subscriptionPoolWindowLines(row management.SubscriptionUsageAggregate, widt
 
 func subscriptionAccountMetaLine(row management.SubscriptionUsageRow, width int, now time.Time) string {
 	parts := []string{}
-	if limit := subscriptionLimitLabel(row.LimitName, row.LimitID); limit != "" {
-		parts = append(parts, wrappedDisplayField("limit", limit, width))
-	}
 	if row.Source != "" {
 		parts = append(parts, metricChip("source", row.Source))
 	}

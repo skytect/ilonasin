@@ -3,8 +3,6 @@ package tui
 import (
 	"fmt"
 	"time"
-
-	"ilonasin/internal/management"
 )
 
 func credentialDisplay(id int64, label string) string {
@@ -23,31 +21,6 @@ func healthModelDisplay(modelID string) string {
 		return "models"
 	}
 	return safeDisplay(modelID)
-}
-
-func requestModelDisplay(row management.RequestSummary) string {
-	requestedProvider := row.RequestedProviderID
-	requestedModel := row.RequestedModelID
-	resolvedProvider := row.ResolvedProviderID
-	resolvedModel := row.ResolvedModelID
-	if requestedProvider == "" {
-		requestedProvider = row.ProviderInstanceID
-	}
-	if requestedModel == "" {
-		requestedModel = row.ModelID
-	}
-	if resolvedProvider == "" {
-		resolvedProvider = row.ProviderInstanceID
-	}
-	if resolvedModel == "" {
-		resolvedModel = row.ModelID
-	}
-	requested := safeDisplay(requestedProvider) + "/" + safeDisplay(requestedModel)
-	resolved := safeDisplay(resolvedProvider) + "/" + safeDisplay(resolvedModel)
-	if requested != resolved {
-		return requested + " -> " + resolved
-	}
-	return resolved
 }
 
 func formatTime(t time.Time) string {

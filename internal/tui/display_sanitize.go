@@ -40,11 +40,50 @@ func safeWrappedDisplay(value string) string {
 	return safeWrappedDisplayWithPattern(value, unsafeDisplayPattern)
 }
 
+func safeWrappedChromeDisplay(value string) string {
+	value = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, strings.TrimSpace(value))
+	return value
+}
+
 func safeWrappedAccountDisplay(value string) string {
 	return safeWrappedDisplayWithPattern(value, unsafeAccountDisplayPattern)
 }
 
+func safeFullWrappedDisplay(value string) string {
+	return safeFullWrappedDisplayWithPattern(value, unsafeDisplayPattern)
+}
+
+func safeFullWrappedAccountDisplay(value string) string {
+	return safeFullWrappedDisplayWithPattern(value, unsafeAccountDisplayPattern)
+}
+
 func safeWrappedDisplayWithPattern(value string, unsafe *regexp.Regexp) string {
+	value = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, strings.TrimSpace(value))
+	if value == "" {
+		return ""
+	}
+	if unsafe.MatchString(value) {
+		return "[redacted]"
+	}
+	const maxDisplayRunes = 64
+	runes := []rune(value)
+	if len(runes) > maxDisplayRunes {
+		return string(runes[:maxDisplayRunes]) + "..."
+	}
+	return value
+}
+
+func safeFullWrappedDisplayWithPattern(value string, unsafe *regexp.Regexp) string {
 	value = strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) {
 			return -1

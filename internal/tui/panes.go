@@ -143,7 +143,15 @@ func (m Model) renderPane(placement panePlacement, focused bool) string {
 	}
 	title = clipPlainLine(title, innerWidth)
 	contentLines := splitBodyLines(m.paneContentForWidth(placement.pane, innerWidth))
-	maxOffset := maxInt(0, len(contentLines)-maxInt(1, innerHeight-1))
+	visibleContentHeight := innerHeight - 1
+	showScrollMarker := innerHeight >= 2 && len(contentLines) > visibleContentHeight
+	if showScrollMarker {
+		visibleContentHeight--
+	}
+	if visibleContentHeight < 0 {
+		visibleContentHeight = 0
+	}
+	maxOffset := maxInt(0, len(contentLines)-maxInt(1, visibleContentHeight))
 	offset := m.paneOffset(m.validActiveTab(), placement.pane.id)
 	if offset > maxOffset {
 		offset = maxOffset
@@ -153,17 +161,16 @@ func (m Model) renderPane(placement panePlacement, focused bool) string {
 	}
 	body := make([]string, 0, innerHeight)
 	body = append(body, paneTitleStyle.Render(title))
-	visibleContentHeight := innerHeight - 1
 	for i := 0; i < visibleContentHeight; i++ {
 		line := ""
 		index := offset + i
 		if index < len(contentLines) {
 			line = contentLines[index]
 		}
-		if i == visibleContentHeight-1 && maxOffset > 0 {
-			line = paneScrollMarker(line, offset, maxOffset, innerWidth)
-		}
 		body = append(body, clipPlainLine(line, innerWidth))
+	}
+	if showScrollMarker {
+		body = append(body, paneScrollMarkerLine(offset, maxOffset, innerWidth))
 	}
 	for len(body) < innerHeight {
 		body = append(body, "")
@@ -171,18 +178,13 @@ func (m Model) renderPane(placement panePlacement, focused bool) string {
 	return style.Width(innerWidth).Height(innerHeight).Render(strings.Join(body, "\n"))
 }
 
-func paneScrollMarker(line string, offset, maxOffset, width int) string {
+func paneScrollMarkerLine(offset, maxOffset, width int) string {
 	marker := fmt.Sprintf(" %d/%d", offset, maxOffset)
-	lineWidth := ansi.StringWidth(line)
 	markerWidth := ansi.StringWidth(marker)
 	if markerWidth >= width {
 		return ansi.Truncate(marker, width, "")
 	}
-	if lineWidth+markerWidth > width {
-		line = ansi.Truncate(line, width-markerWidth, "")
-		lineWidth = ansi.StringWidth(line)
-	}
-	return line + strings.Repeat(" ", width-lineWidth-markerWidth) + mutedStyle.Render(marker)
+	return strings.Repeat(" ", width-markerWidth) + mutedStyle.Render(marker)
 }
 
 func (m Model) validPaneFocus(tab tuiTab) int {

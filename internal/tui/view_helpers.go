@@ -78,6 +78,29 @@ func clipPlainLine(line string, width int) string {
 	return ansi.Truncate(line, width, "...")
 }
 
+func wrapStyledLine(line string, width int) []string {
+	if width <= 0 || ansi.StringWidth(line) <= width {
+		return []string{line}
+	}
+	wrapped := strings.TrimRight(ansi.Hardwrap(line, width, false), "\n")
+	if wrapped == "" {
+		return []string{""}
+	}
+	return strings.Split(wrapped, "\n")
+}
+
+func wrapTargetedLines(width int, lines ...string) string {
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimRight(line, "\n")
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		out = append(out, wrapStyledLine(line, width)...)
+	}
+	return strings.Join(out, "\n")
+}
+
 func maxInt(a, b int) int {
 	if a > b {
 		return a

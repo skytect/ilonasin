@@ -30,13 +30,13 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 	}
 	for groupIndex, group := range subscriptionUsageGroups(m.subscriptionRows) {
 		if groupIndex > 0 {
-			b.WriteByte('\n')
+			b.WriteString("\n\n")
 		}
 		b.WriteString(subscriptionGroupHeader(group, width))
 		b.WriteByte('\n')
 		for rowIndex, row := range group.rows {
 			if rowIndex > 0 {
-				b.WriteByte('\n')
+				b.WriteString("\n\n")
 			}
 			b.WriteString(subscriptionAccountRow(row, width, now))
 			b.WriteByte('\n')
@@ -45,18 +45,19 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 	b.WriteString("\n")
 	b.WriteString(renderPaneSubhead(width, "Subscription pools", fmt.Sprintf("pools %d", len(m.subscriptionPools))))
 	b.WriteByte('\n')
-	for _, row := range m.subscriptionPools {
-		limit := safeDisplay(row.LimitName)
+	for _, row := range sortedSubscriptionPools(m.subscriptionPools) {
+		limit := safeFullWrappedDisplay(row.LimitName)
 		if limit == "" {
-			limit = safeDisplay(row.LimitID)
+			limit = safeFullWrappedDisplay(row.LimitID)
 		}
-		b.WriteString(metricLine(
+		b.WriteString(wrappedMetricLine(width,
 			cardTitleStyle.Render(safeDisplay(row.ProviderInstanceID)),
 			statusBadge("pooled"),
-			metricChip("limit", limit),
 			metricChip("accounts", fmt.Sprintf("%d", row.AccountCount)),
 			metricChip("stale", fmt.Sprintf("%d", row.StaleCount)),
 		))
+		b.WriteByte('\n')
+		b.WriteString(wrappedDisplayField("limit", limit, width))
 		b.WriteByte('\n')
 		for _, line := range subscriptionPoolWindowLines(row, width, now) {
 			b.WriteString(line)
@@ -97,11 +98,11 @@ func subscriptionUsageGroups(rows []management.SubscriptionUsageRow) []subscript
 	index := map[string]int{}
 	for _, row := range rows {
 		provider := safeWrappedDisplay(row.ProviderInstanceID)
-		limitID := safeWrappedDisplay(row.LimitID)
-		keyProvider := safeSubscriptionGroupKey(row.ProviderInstanceID)
-		keyLimit := safeSubscriptionGroupKey(row.LimitID)
+		limitID := safeFullWrappedDisplay(row.LimitID)
+		keyProvider := subscriptionRawGroupKey(row.ProviderInstanceID)
+		keyLimit := subscriptionRawGroupKey(row.LimitID)
 		if keyLimit == "" {
-			keyLimit = safeSubscriptionGroupKey(row.LimitName)
+			keyLimit = subscriptionRawGroupKey(row.LimitName)
 		}
 		key := keyProvider + "\x00" + keyLimit
 		position, ok := index[key]
@@ -110,7 +111,7 @@ func subscriptionUsageGroups(rows []management.SubscriptionUsageRow) []subscript
 				provider: provider,
 				limitID:  limitID,
 				label:    subscriptionLimitLabel(row.LimitName, row.LimitID),
-				sortKey:  subscriptionGroupSortKey(row),
+				sortKey:  subscriptionRawLimitSortKey(row.LimitName, row.LimitID),
 			}
 			groups = append(groups, group)
 			position = len(groups) - 1
@@ -137,16 +138,41 @@ func subscriptionUsageGroups(rows []management.SubscriptionUsageRow) []subscript
 	return groups
 }
 
-func safeSubscriptionGroupKey(value string) string {
-	return safeWrappedDisplay(value)
+func sortedSubscriptionPools(rows []management.SubscriptionUsageAggregate) []management.SubscriptionUsageAggregate {
+	out := append([]management.SubscriptionUsageAggregate(nil), rows...)
+	sort.SliceStable(out, func(i, j int) bool {
+		leftKey := subscriptionPoolSortKey(out[i])
+		rightKey := subscriptionPoolSortKey(out[j])
+		leftRank := subscriptionLimitPriority(leftKey)
+		rightRank := subscriptionLimitPriority(rightKey)
+		if leftRank != rightRank {
+			return leftRank < rightRank
+		}
+		if out[i].ProviderInstanceID != out[j].ProviderInstanceID {
+			return out[i].ProviderInstanceID < out[j].ProviderInstanceID
+		}
+		if leftKey != rightKey {
+			return leftKey < rightKey
+		}
+		return out[i].LimitID < out[j].LimitID
+	})
+	return out
 }
 
-func subscriptionGroupSortKey(row management.SubscriptionUsageRow) string {
+func subscriptionPoolSortKey(row management.SubscriptionUsageAggregate) string {
+	return subscriptionRawLimitSortKey(row.LimitName, row.LimitID)
+}
+
+func subscriptionRawLimitSortKey(name, id string) string {
 	parts := []string{
-		safeWrappedDisplay(row.LimitName),
-		safeWrappedDisplay(row.LimitID),
+		name,
+		id,
 	}
 	return strings.ToLower(strings.TrimSpace(strings.Join(parts, " ")))
+}
+
+func subscriptionRawGroupKey(value string) string {
+	return strings.TrimSpace(value)
 }
 
 func subscriptionLimitPriority(sortKey string) int {
@@ -225,22 +251,25 @@ func wrappedSubscriptionIdentity(label string, width int) string {
 		return prefix
 	}
 	lines := []string{prefix + " " + valueStyle.Bold(true).Render(chunks[0])}
+	indent := strings.Repeat(" ", ansi.StringWidth(prefix)+1)
 	for _, chunk := range chunks[1:] {
-		lines = append(lines, valueStyle.Bold(true).Render(chunk))
+		lines = append(lines, indent+valueStyle.Bold(true).Render(chunk))
 	}
 	return strings.Join(lines, "\n")
 }
 
 func safeSubscriptionWrappedAccountDisplay(value string) string {
-	return safeWrappedDisplayWithPattern(value, unsafeAccountDisplayPattern)
+	return safeFullWrappedAccountDisplay(value)
 }
 
 func subscriptionAccountBlock(lines ...string) string {
 	out := make([]string, 0, len(lines))
 	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			out = append(out, line)
+		for _, part := range strings.Split(strings.TrimRight(line, "\n"), "\n") {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				out = append(out, part)
+			}
 		}
 	}
 	return strings.Join(out, "\n")
@@ -377,7 +406,7 @@ func subscriptionPoolWindowLines(row management.SubscriptionUsageAggregate, widt
 func subscriptionAccountMetaLine(row management.SubscriptionUsageRow, width int, now time.Time) string {
 	parts := []string{}
 	if limit := subscriptionLimitLabel(row.LimitName, row.LimitID); limit != "" {
-		parts = append(parts, metricChip("limit", limit))
+		parts = append(parts, wrappedDisplayField("limit", limit, width))
 	}
 	if row.Source != "" {
 		parts = append(parts, metricChip("source", row.Source))
@@ -448,11 +477,11 @@ func resetLocalText(prefix string, resetAt *time.Time, now time.Time) string {
 }
 
 func subscriptionLimitLabel(name, id string) string {
-	name = safeWrappedDisplay(name)
+	name = safeFullWrappedDisplay(name)
 	if name != "" {
 		return name
 	}
-	return safeWrappedDisplay(id)
+	return safeFullWrappedDisplay(id)
 }
 
 func subscriptionKeepaliveState(status management.KeepaliveStatus) string {

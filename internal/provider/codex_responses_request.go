@@ -98,7 +98,7 @@ func marshalCodexResponsesRequest(req openai.ChatCompletionRequest, upstreamMode
 	if req.HasField("tool_choice") {
 		out.ToolChoice = "auto"
 	}
-	if req.HasField("provider_options") {
+	if req.HasField("provider_options") || req.ServiceTier != nil {
 		reasoning, textControls, serviceTier, err := codexRequestOptions(req, model)
 		if err != nil {
 			return nil, "", err
@@ -352,6 +352,18 @@ func codexRequestOptions(req openai.ChatCompletionRequest, model codexResponsesM
 		}
 		if serviceTier != "" && !model.ServiceTiers[serviceTier] {
 			return nil, nil, "", fmt.Errorf("provider_options.codex.service_tier is not supported by model")
+		}
+	} else if req.ServiceTier != nil {
+		switch *req.ServiceTier {
+		case "default":
+			serviceTier = ""
+		case "priority", "flex":
+			serviceTier = *req.ServiceTier
+		default:
+			return nil, nil, "", fmt.Errorf("service_tier is not supported")
+		}
+		if serviceTier != "" && !model.ServiceTiers[serviceTier] {
+			return nil, nil, "", fmt.Errorf("service_tier is not supported by model")
 		}
 	}
 	return reasoning, textControls, serviceTier, nil

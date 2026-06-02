@@ -10,13 +10,23 @@ import (
 func applySafeOptionMetadata(out *metadata.Request, providerType string, req openai.ChatCompletionRequest) {
 	if req.ServiceTier != nil {
 		out.RequestedServiceTier = safeServiceTier(*req.ServiceTier)
-		out.EffectiveServiceTier = out.RequestedServiceTier
+		if providerType != "codex" || out.RequestedServiceTier != "default" {
+			out.EffectiveServiceTier = out.RequestedServiceTier
+		}
 	}
 	switch providerType {
 	case "codex":
 		opts, _ := req.ReasoningOptions["codex"].(map[string]any)
 		if tier, ok := opts["service_tier"].(string); ok {
 			out.RequestedServiceTier = safeServiceTier(tier)
+			switch out.RequestedServiceTier {
+			case "default":
+				out.EffectiveServiceTier = ""
+			case "fast":
+				out.EffectiveServiceTier = "priority"
+			default:
+				out.EffectiveServiceTier = out.RequestedServiceTier
+			}
 		}
 		reasoning, _ := opts["reasoning"].(map[string]any)
 		if effort, ok := reasoning["effort"].(string); ok {

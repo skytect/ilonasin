@@ -34,9 +34,13 @@ func (a HTTPChatAdapter) ValidateChatRequest(instance Instance, req openai.ChatC
 		}
 		return validateProviderOptions(instance.Type, req)
 	case "codex":
+		codexUnsupportedOpenRouterFields := []string{"top_k", "min_p", "top_a", "repetition_penalty", "seed", "logit_bias", "session_id", "metadata"}
 		unsupported := append(commonUnsupported, "parallel_tool_calls", "prediction", "user", "logprobs", "top_logprobs", "max_tokens", "max_completion_tokens", "temperature", "top_p", "presence_penalty", "frequency_penalty", "stop", "response_format")
-		unsupported = append(unsupported, openRouterOnlyFields...)
+		unsupported = append(unsupported, codexUnsupportedOpenRouterFields...)
 		if err := rejectPresentFields(req, unsupported...); err != nil {
+			return err
+		}
+		if err := validateCodexTopLevelServiceTier(req); err != nil {
 			return err
 		}
 		if req.HasField("tool_choice") {
@@ -54,6 +58,18 @@ func (a HTTPChatAdapter) ValidateChatRequest(instance Instance, req openai.ChatC
 		return validateProviderOptions(instance.Type, req)
 	default:
 		return fmt.Errorf("provider type %q does not support chat validation", instance.Type)
+	}
+}
+
+func validateCodexTopLevelServiceTier(req openai.ChatCompletionRequest) error {
+	if req.ServiceTier == nil {
+		return nil
+	}
+	switch *req.ServiceTier {
+	case "default", "priority", "flex":
+		return nil
+	default:
+		return fmt.Errorf("service_tier is not supported")
 	}
 }
 

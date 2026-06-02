@@ -170,14 +170,6 @@ func subscriptionPoolSummaryLine(pools []management.SubscriptionUsageAggregate) 
 	)
 }
 
-func subscriptionPoolHeadline(pools []management.SubscriptionUsageAggregate) string {
-	label, used, remaining, capacity := firstSubscriptionPoolWindowTotal(pools)
-	if capacity <= 0 {
-		return ""
-	}
-	return fmt.Sprintf("%s used %s left %s cap %s", label, compactPercentPoints(used), compactPercentPoints(remaining), compactPercentPoints(capacity))
-}
-
 func firstSubscriptionPoolWindowTotal(pools []management.SubscriptionUsageAggregate) (string, float64, float64, float64) {
 	key := ""
 	used := 0.0

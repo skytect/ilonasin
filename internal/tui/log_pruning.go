@@ -3,8 +3,6 @@ package tui
 import (
 	"fmt"
 	"strings"
-
-	"github.com/charmbracelet/lipgloss"
 )
 
 func (m Model) writePruning(b *strings.Builder) {
@@ -14,33 +12,42 @@ func (m Model) writePruning(b *strings.Builder) {
 	width := m.viewWidth()
 	b.WriteString(renderSectionBanner(width, "Metadata and IO", "ledger", "capture policy", "pruning"))
 	b.WriteByte('\n')
-	cards := []string{
-		renderMetricAccentCard(metricCardWidth(width), lipgloss.Color("42"),
-			cardTitleStyle.Render("metadata ledger")+" "+statusBadge("enabled"),
-			metricLine(metricChip("requests", fmt.Sprintf("%d", len(m.requestRows))), metricChip("fallbacks", fmt.Sprintf("%d", len(m.fallbackRows)))),
-			metricLine(metricChip("health", fmt.Sprintf("%d", len(m.healthRows))), metricChip("quota", fmt.Sprintf("%d", len(m.quotaRows)))),
-		),
-		renderMetricAccentCard(metricCardWidth(width), lipgloss.Color("110"),
-			cardTitleStyle.Render("capture policy")+" "+statusBadge(ioCaptureState(m.runtime.CaptureIO)),
-			metricLine(metricChip("capture", ioCaptureMode(m.runtime.CaptureIO)), metricChip("retention", ioCaptureRetention(m.runtime.CaptureIO))),
-			metricLine(metricChip("policy", ioCapturePolicy(m.runtime.CaptureIO)), metricChip("content", ioCaptureContent(m.runtime.CaptureIO))),
-		),
-		renderMetricAccentCard(metricCardWidth(width), lipgloss.Color("214"),
-			cardTitleStyle.Render("retention"),
-			metricLine(metricChip("manual", "30d"), metricChip("mode", "prune")),
-			mutedStyle.Render("metadata rows stay until pruning"),
-		),
-	}
-	b.WriteString(renderMetricCardGrid(width, cards))
+	b.WriteString(metricLine(
+		statusBadge("enabled"),
+		cardTitleStyle.Render("metadata"),
+		metricChip("requests", fmt.Sprintf("%d", len(m.requestRows))),
+		metricChip("fallbacks", fmt.Sprintf("%d", len(m.fallbackRows))),
+		metricChip("health", fmt.Sprintf("%d", len(m.healthRows))),
+		metricChip("quota", fmt.Sprintf("%d", len(m.quotaRows))),
+	))
+	b.WriteByte('\n')
+	b.WriteString(metricLine(
+		statusBadge(ioCaptureState(m.runtime.CaptureIO)),
+		cardTitleStyle.Render("capture"),
+		metricChip("mode", ioCaptureMode(m.runtime.CaptureIO)),
+		metricChip("retention", ioCaptureRetention(m.runtime.CaptureIO)),
+		metricChip("policy", ioCapturePolicy(m.runtime.CaptureIO)),
+		metricChip("content", ioCaptureContent(m.runtime.CaptureIO)),
+	))
+	b.WriteByte('\n')
+	b.WriteString(metricLine(
+		statusBadge("warning"),
+		cardTitleStyle.Render("retention"),
+		metricChip("manual", "30d"),
+		metricChip("mode", "prune"),
+		mutedStyle.Render("metadata rows stay until pruning"),
+	))
 	b.WriteByte('\n')
 	if m.pruneResult != nil {
-		lines := []string{
+		b.WriteString(metricLine(
 			cardTitleStyle.Render("last prune"),
-			metricLine(metricChip("before", formatPreciseTime(m.pruneResult.Cutoff))),
-			metricLine(metricChip("requests", fmt.Sprintf("%d", m.pruneResult.Requests)), metricChip("streams", fmt.Sprintf("%d", m.pruneResult.Streams))),
-			metricLine(metricChip("fallbacks", fmt.Sprintf("%d", m.pruneResult.Fallbacks)), metricChip("health", fmt.Sprintf("%d", m.pruneResult.Health)), metricChip("quotas", fmt.Sprintf("%d", m.pruneResult.Quotas))),
-		}
-		b.WriteString(renderMetricAccentCard(width, lipgloss.Color("238"), lines...))
+			metricChip("before", formatPreciseTime(m.pruneResult.Cutoff)),
+			metricChip("requests", fmt.Sprintf("%d", m.pruneResult.Requests)),
+			metricChip("streams", fmt.Sprintf("%d", m.pruneResult.Streams)),
+			metricChip("fallbacks", fmt.Sprintf("%d", m.pruneResult.Fallbacks)),
+			metricChip("health", fmt.Sprintf("%d", m.pruneResult.Health)),
+			metricChip("quotas", fmt.Sprintf("%d", m.pruneResult.Quotas)),
+		))
 		b.WriteByte('\n')
 	}
 }

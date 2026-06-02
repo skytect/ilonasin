@@ -13,26 +13,18 @@ func (m Model) apiPanes() []dashboardPane {
 }
 
 func (m Model) providerPanes() []dashboardPane {
-	oauthTitle := "oauth"
-	if identity := primaryOAuthIdentity(m.oauthRows, m.oauthSelected); identity != "" {
-		oauthTitle = "oauth " + identity
-	}
 	return []dashboardPane{
 		{id: providersPaneInstances, title: "instances", content: m.providerInstancesBody},
 		{id: providersPaneCredentials, title: "api keys", content: m.providerCredentialsBody},
-		{id: providersPaneOAuth, title: oauthTitle, content: m.oauthBody},
+		{id: providersPaneOAuth, title: "oauth", content: m.oauthBody},
 		{id: providersPaneFallback, title: "fallback", content: m.providerFallbackBody},
 	}
 }
 
 func (m Model) usagePanes() []dashboardPane {
-	subscriptionTitle := "subscription"
-	if headline := subscriptionPoolHeadline(m.subscriptionPools); headline != "" {
-		subscriptionTitle = "subscription " + headline
-	}
 	return []dashboardPane{
 		{id: usagePaneMetrics, title: "tokens + perf", content: m.usageMetricsBody},
-		{id: usagePaneSubscriptions, title: subscriptionTitle, content: m.subscriptionUsageBody},
+		{id: usagePaneSubscriptions, title: "subscription", content: m.subscriptionUsageBody},
 		{id: usagePaneHealth, title: "health + quota", content: m.healthAndQuotaBody},
 	}
 }

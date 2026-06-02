@@ -3,8 +3,11 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"ilonasin/internal/management"
 )
 
 func (m Model) writeFallbacks(b *strings.Builder) {
@@ -20,22 +23,24 @@ func (m Model) writeFallbacks(b *strings.Builder) {
 		))
 		b.WriteByte('\n')
 	}
-	cards := make([]string, 0, len(m.fallbackRows))
 	for _, row := range m.fallbackRows {
-		lines := []string{
-			cardTitleStyle.Render(safeDisplay(row.ProviderInstanceID)+"/"+safeDisplay(row.ModelID)) + " " + statusBadge("warning"),
-			metricLine(
-				timeChip("at", now, row.OccurredAt),
-				metricChip("reason", row.Reason),
-			),
+		b.WriteString(fallbackSummaryRow(row, now))
+		b.WriteByte('\n')
+	}
+}
+
+func fallbackSummaryRow(row management.FallbackSummary, now time.Time) string {
+	return strings.Join([]string{
+		metricLine(
+			statusBadge("warning"),
+			cardTitleStyle.Render(safeDisplay(row.ProviderInstanceID)+"/"+safeDisplay(row.ModelID)),
+			timeChip("at", now, row.OccurredAt),
+			metricChip("reason", row.Reason),
+		),
+		metricLine(
 			mutedStyle.Render(credentialDisplay(row.FromCredentialID, row.FromCredentialLabel)),
 			valueStyle.Render("->"),
 			mutedStyle.Render(credentialDisplay(row.ToCredentialID, row.ToCredentialLabel)),
-		}
-		cards = append(cards, renderMetricAccentCard(metricCardWidth(width), lipgloss.Color("214"), lines...))
-	}
-	if len(cards) > 0 {
-		b.WriteString(renderMetricCardGrid(width, cards))
-		b.WriteByte('\n')
-	}
+		),
+	}, "\n")
 }

@@ -42,7 +42,6 @@ func requestSummaryRow(row management.RequestSummary, nowTime time.Time, width i
 	tokens := metricLine(
 		compactTokenMixLine(row.PromptTokens, row.CompletionTokens, row.ReasoningTokens, row.CacheHitTokens, row.CacheMissTokens, row.CacheWriteTokens, width),
 		metricChip("total", compactInt(row.TotalTokens)),
-		compactPercentMetric("hit", row.CacheHitRate*100),
 	)
 	timing := metricLine(
 		mutedStyle.Render(credentialDisplay(row.CredentialID, row.CredentialLabel)),
@@ -50,9 +49,9 @@ func requestSummaryRow(row management.RequestSummary, nowTime time.Time, width i
 		metricChip("auth", fmt.Sprintf("%d", row.AuthRetryCount)),
 		metricChip("fb", fmt.Sprintf("%d", row.FallbackCount)),
 		msText("lat", row.TotalLatencyMS),
-		msText("up", row.UpstreamLatencyMS),
 		msText("ttft", row.TimeToFirstTokenMS),
 		tpsText("tps", row.OutputTokensPerSecondTotal),
+		compactPercentMetric("hit", row.CacheHitRate*100),
 	)
 	extras := requestSummaryExtras(row, width)
 	lines := []string{head, tokens, timing}
@@ -75,6 +74,7 @@ func requestSummaryExtras(row management.RequestSummary, width int) string {
 			metricChip("messages", fmt.Sprintf("%d", row.MessageCount)),
 			metricChip("tools", fmt.Sprintf("%d", row.ToolCount)),
 			metricChip("images", fmt.Sprintf("%d", row.ImageCount)),
+			msText("up", row.UpstreamLatencyMS),
 		)
 	}
 	if row.RequestedServiceTier != "" {

@@ -5,8 +5,6 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-
-	"ilonasin/internal/management"
 )
 
 func (m Model) writeOAuth(b *strings.Builder) {
@@ -96,18 +94,4 @@ func (m Model) writeOAuth(b *strings.Builder) {
 		b.WriteString(renderMetricCardGrid(width, accountCards))
 		b.WriteByte('\n')
 	}
-}
-
-func primaryOAuthIdentity(rows []management.OAuthCredential, selected int) string {
-	if len(rows) == 0 {
-		return ""
-	}
-	if selected < 0 || selected >= len(rows) {
-		selected = 0
-	}
-	identity := accountIdentity(rows[selected].AccountDisplayLabel, "")
-	if identity == "account" || identity == "OAuth account" {
-		return ""
-	}
-	return identity
 }

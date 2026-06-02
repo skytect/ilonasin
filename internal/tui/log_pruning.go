@@ -10,7 +10,7 @@ func (m Model) writePruning(b *strings.Builder) {
 		return
 	}
 	width := m.viewWidth()
-	b.WriteString(renderPaneSubhead(width, "Metadata and IO", "ledger", "capture policy", "pruning"))
+	b.WriteString(renderPaneSubhead(width, "Metadata + IO policy", "capture", "retention", "prune"))
 	b.WriteByte('\n')
 	b.WriteString(metricLine(
 		statusBadge("enabled"),
@@ -25,17 +25,16 @@ func (m Model) writePruning(b *strings.Builder) {
 		statusBadge(ioCaptureState(m.runtime.CaptureIO)),
 		cardTitleStyle.Render("capture"),
 		metricChip("mode", ioCaptureMode(m.runtime.CaptureIO)),
-		metricChip("retention", ioCaptureRetention(m.runtime.CaptureIO)),
 		metricChip("policy", ioCapturePolicy(m.runtime.CaptureIO)),
 		metricChip("content", ioCaptureContent(m.runtime.CaptureIO)),
 	))
 	b.WriteByte('\n')
 	b.WriteString(metricLine(
-		statusBadge("warning"),
+		statusBadge("enabled"),
 		cardTitleStyle.Render("retention"),
-		metricChip("manual", "30d"),
-		metricChip("mode", "prune"),
-		mutedStyle.Render("metadata rows stay until pruning"),
+		metricChip("default", ioCaptureRetention(m.runtime.CaptureIO)),
+		metricChip("prune", "manual"),
+		metricChip("cutoff", "30d"),
 	))
 	b.WriteByte('\n')
 	if m.pruneResult != nil {

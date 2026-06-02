@@ -14,10 +14,10 @@ func (m Model) apiPanes() []dashboardPane {
 
 func (m Model) providerPanes() []dashboardPane {
 	return []dashboardPane{
-		{id: providersPaneInstances, title: "inventory", content: m.providerInstancesBody},
+		{id: providersPaneInstances, title: "runtime + models", content: m.providerInstancesBody},
 		{id: providersPaneCredentials, title: "upstream keys", content: m.providerCredentialsBody},
-		{id: providersPaneOAuth, title: "oauth accounts", content: m.oauthBody},
-		{id: providersPaneFallback, title: "fallback", content: m.providerFallbackBody},
+		{id: providersPaneOAuth, title: "oauth + accounts", content: m.oauthBody},
+		{id: providersPaneFallback, title: "fallback groups", content: m.providerFallbackBody},
 	}
 }
 
@@ -33,13 +33,20 @@ func (m Model) logPanes() []dashboardPane {
 	return []dashboardPane{
 		{id: logsPaneRequests, title: "request metadata", content: m.recentRequestsBody},
 		{id: logsPaneFallbacks, title: "fallback metadata", content: m.fallbacksBody},
-		{id: logsPanePruning, title: "io + pruning", content: m.pruningBody},
+		{id: logsPanePruning, title: "io policy + pruning", content: m.pruningBody},
 	}
 }
 
 func (m Model) apiSummaryBody(width int) string {
 	var b strings.Builder
 	b.WriteString(renderSectionBanner(width, "Local API surfaces", "surfaces 3"))
+	b.WriteByte('\n')
+	b.WriteString(metricLine(
+		cardTitleStyle.Render("OpenAI Chat"),
+		cardTitleStyle.Render("OpenAI Responses"),
+		cardTitleStyle.Render("Anthropic Messages"),
+		metricChip("count", "usage"),
+	))
 	b.WriteByte('\n')
 	enabledTokens, disabledTokens := localTokenStateCounts(m.tokenRows)
 	b.WriteString(metricLine(
@@ -53,7 +60,9 @@ func (m Model) apiSummaryBody(width int) string {
 	b.WriteByte('\n')
 	b.WriteString(apiRouteLine("OpenAI Responses", "/v1/responses  /responses", "responses"))
 	b.WriteByte('\n')
-	b.WriteString(apiRouteLine("Anthropic Messages", "/v1/messages  count /v1/messages/count_tokens", "anthropic_messages"))
+	b.WriteString(apiRouteLine("Anthropic Messages", "/v1/messages", "anthropic_messages"))
+	b.WriteByte('\n')
+	b.WriteString(apiRouteLine("Anthropic Count Tokens", "/v1/messages/count_tokens", "anthropic_count_tokens"))
 	b.WriteString("\n\n")
 	b.WriteString(metricLine(
 		statusBadge("enabled"),

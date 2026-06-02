@@ -5,8 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
-
 	"ilonasin/internal/management"
 )
 
@@ -16,10 +14,13 @@ func (m Model) writeRecentRequests(b *strings.Builder) {
 	b.WriteString(renderSectionBanner(width, "Request metadata", fmt.Sprintf("recent %d", len(m.requestRows))))
 	b.WriteByte('\n')
 	if len(m.requestRows) == 0 {
-		b.WriteString(renderMetricAccentCard(metricCardWidth(width), lipgloss.Color("42"),
-			cardTitleStyle.Render("metadata ledger")+" "+statusBadge("enabled"),
-			metricLine(metricChip("recent", "0"), metricChip("visibility", "metadata-only")),
-			metricLine(metricChip("content", "redacted"), metricChip("io", ioCaptureMode(m.runtime.CaptureIO))),
+		b.WriteString(metricLine(
+			statusBadge("enabled"),
+			cardTitleStyle.Render("metadata ledger"),
+			metricChip("recent", "0"),
+			metricChip("visibility", "metadata-only"),
+			metricChip("content", "redacted"),
+			metricChip("io", ioCaptureMode(m.runtime.CaptureIO)),
 		))
 		b.WriteByte('\n')
 	}

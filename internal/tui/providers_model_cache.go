@@ -41,7 +41,6 @@ func modelCacheSummaries(rows []management.ModelMetadata) []modelCacheSummary {
 func (m Model) writeModelCache(b *strings.Builder) {
 	width := m.viewWidth()
 	summaries := modelCacheSummaries(m.modelRows)
-	b.WriteString("\n")
 	b.WriteString(renderPaneSubhead(width, "Model cache", fmt.Sprintf("providers %d", len(summaries))))
 	b.WriteByte('\n')
 	if len(summaries) == 0 {

@@ -5,8 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
-
 	"ilonasin/internal/management"
 )
 
@@ -16,10 +14,13 @@ func (m Model) writeFallbacks(b *strings.Builder) {
 	b.WriteString(renderSectionBanner(width, "Fallback metadata", fmt.Sprintf("events %d", len(m.fallbackRows))))
 	b.WriteByte('\n')
 	if len(m.fallbackRows) == 0 {
-		b.WriteString(renderMetricAccentCard(metricCardWidth(width), lipgloss.Color("214"),
-			cardTitleStyle.Render("fallback ledger")+" "+statusBadge("enabled"),
-			metricLine(metricChip("events", "0"), metricChip("visibility", "metadata-only")),
-			metricLine(metricChip("reason", "none"), metricChip("credential", "redacted")),
+		b.WriteString(metricLine(
+			statusBadge("enabled"),
+			cardTitleStyle.Render("fallback ledger"),
+			metricChip("events", "0"),
+			metricChip("visibility", "metadata-only"),
+			metricChip("reason", "none"),
+			metricChip("credential", "redacted"),
 		))
 		b.WriteByte('\n')
 	}

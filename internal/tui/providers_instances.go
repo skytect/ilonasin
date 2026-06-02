@@ -11,7 +11,7 @@ import (
 
 func (m Model) writeProviderInstances(b *strings.Builder) {
 	width := m.viewWidth()
-	b.WriteString(renderPaneSubhead(width, "Provider instances", fmt.Sprintf("providers %d", len(m.providers)), fmt.Sprintf("models %d", len(m.modelRows))))
+	b.WriteString(renderPaneSubhead(width, "Provider runtime", fmt.Sprintf("providers %d", len(m.providers)), fmt.Sprintf("models %d", len(m.modelRows))))
 	b.WriteByte('\n')
 	if len(m.providers) == 0 {
 		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("110"), "provider instances",
@@ -51,13 +51,29 @@ func providerInstanceRow(instance management.ProviderInstance) string {
 	if base == "" {
 		base = "default"
 	}
-	return strings.Join([]string{
-		metricLine(
-			cardTitleStyle.Render(safeDisplay(instance.ID)),
-			machineChip("type", instance.Type),
-			machineChip("auth", instance.AuthStyle),
-			metricChip("cap", strings.Join(capabilities, ",")),
-		),
-		mutedStyle.Render("base " + base),
-	}, "\n")
+	return metricLine(
+		statusBadge("enabled"),
+		cardTitleStyle.Render(safeDisplay(instance.ID)),
+		machineChip("type", instance.Type),
+		machineChip("auth", instance.AuthStyle),
+		metricChip("cap", strings.Join(capabilities, ",")),
+		metricChip("base", baseHostDisplay(base)),
+	)
+}
+
+func baseHostDisplay(base string) string {
+	base = safeDisplay(base)
+	if base == "" || base == "default" {
+		return "default"
+	}
+	base = strings.TrimPrefix(base, "https://")
+	base = strings.TrimPrefix(base, "http://")
+	base = strings.TrimSuffix(base, "/")
+	if slash := strings.IndexByte(base, '/'); slash >= 0 {
+		base = base[:slash]
+	}
+	if base == "" {
+		return "custom"
+	}
+	return base
 }

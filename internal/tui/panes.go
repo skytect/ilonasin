@@ -142,7 +142,7 @@ func (m Model) renderPane(placement panePlacement, focused bool) string {
 		title = ">" + title
 	}
 	title = clipPlainLine(title, innerWidth)
-	contentLines := splitBodyLines(m.paneContentForWidth(placement.pane, innerWidth))
+	contentLines := paneWrappedContentLines(m.paneContentForWidth(placement.pane, innerWidth), innerWidth)
 	visibleContentHeight := innerHeight - 1
 	showScrollMarker := innerHeight >= 2 && len(contentLines) > visibleContentHeight
 	if showScrollMarker {
@@ -167,7 +167,7 @@ func (m Model) renderPane(placement panePlacement, focused bool) string {
 		if index < len(contentLines) {
 			line = contentLines[index]
 		}
-		body = append(body, clipPlainLine(line, innerWidth))
+		body = append(body, fitPaneBodyLine(line, innerWidth))
 	}
 	if showScrollMarker {
 		body = append(body, paneScrollMarkerLine(offset, maxOffset, innerWidth))
@@ -269,9 +269,8 @@ func (m Model) paneScrollMax(tab tuiTab, paneID int) int {
 	if !ok {
 		return 0
 	}
-	height := paneVisibleContentHeight(placement)
-	contentLines := splitBodyLines(m.paneContentForWidth(placement.pane, paneInnerWidth(placement)))
-	return maxInt(0, len(contentLines)-height)
+	contentLines := paneWrappedContentLines(m.paneContentForWidth(placement.pane, paneInnerWidth(placement)), paneInnerWidth(placement))
+	return paneScrollMaxForLineCount(placement, len(contentLines))
 }
 
 func (m Model) paneContentHeight(tab tuiTab, paneID int) int {
@@ -404,12 +403,51 @@ func paneInnerWidth(placement panePlacement) int {
 	return innerWidth
 }
 
+func paneWrappedContentLines(body string, width int) []string {
+	lines := splitBodyLines(body)
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		out = append(out, wrapStyledLine(line, width)...)
+	}
+	if len(out) == 0 {
+		return []string{""}
+	}
+	return out
+}
+
+func fitPaneBodyLine(line string, width int) string {
+	if width <= 0 || ansi.StringWidth(line) <= width {
+		return line
+	}
+	wrapped := wrapStyledLine(line, width)
+	if len(wrapped) == 0 {
+		return ""
+	}
+	return wrapped[0]
+}
+
 func paneVisibleContentHeight(placement panePlacement) int {
 	innerHeight := placement.height - paneStyle.GetVerticalFrameSize() - 1
 	if innerHeight < 1 {
 		return 1
 	}
 	return innerHeight
+}
+
+func paneScrollableContentHeight(placement panePlacement) int {
+	height := paneVisibleContentHeight(placement)
+	if height >= 2 {
+		return height - 1
+	}
+	return height
+}
+
+func paneScrollMaxForLineCount(placement panePlacement, lineCount int) int {
+	height := paneVisibleContentHeight(placement)
+	if lineCount <= height {
+		return 0
+	}
+	return maxInt(0, lineCount-paneScrollableContentHeight(placement))
 }
 
 func (m Model) paneContentForWidth(pane dashboardPane, width int) string {

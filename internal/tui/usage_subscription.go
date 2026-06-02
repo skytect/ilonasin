@@ -45,7 +45,10 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 	b.WriteString("\n")
 	b.WriteString(renderPaneSubhead(width, "Subscription pools", fmt.Sprintf("pools %d", len(m.subscriptionPools))))
 	b.WriteByte('\n')
-	for _, row := range sortedSubscriptionPools(m.subscriptionPools) {
+	for rowIndex, row := range sortedSubscriptionPools(m.subscriptionPools) {
+		if rowIndex > 0 {
+			b.WriteByte('\n')
+		}
 		limit := safeFullWrappedDisplay(row.LimitName)
 		if limit == "" {
 			limit = safeFullWrappedDisplay(row.LimitID)
@@ -97,7 +100,7 @@ func subscriptionUsageGroups(rows []management.SubscriptionUsageRow) []subscript
 	groups := []subscriptionUsageGroup{}
 	index := map[string]int{}
 	for _, row := range rows {
-		provider := safeWrappedDisplay(row.ProviderInstanceID)
+		provider := safeFullWrappedDisplay(row.ProviderInstanceID)
 		limitID := safeFullWrappedDisplay(row.LimitID)
 		keyProvider := subscriptionRawGroupKey(row.ProviderInstanceID)
 		keyLimit := subscriptionRawGroupKey(row.LimitID)
@@ -118,6 +121,19 @@ func subscriptionUsageGroups(rows []management.SubscriptionUsageRow) []subscript
 			index[key] = position
 		}
 		groups[position].rows = append(groups[position].rows, row)
+	}
+	for i := range groups {
+		sort.SliceStable(groups[i].rows, func(left, right int) bool {
+			leftRow := groups[i].rows[left]
+			rightRow := groups[i].rows[right]
+			if leftRow.ProviderInstanceID != rightRow.ProviderInstanceID {
+				return leftRow.ProviderInstanceID < rightRow.ProviderInstanceID
+			}
+			if leftRow.AccountDisplayLabel != rightRow.AccountDisplayLabel {
+				return leftRow.AccountDisplayLabel < rightRow.AccountDisplayLabel
+			}
+			return leftRow.CredentialID < rightRow.CredentialID
+		})
 	}
 	sort.SliceStable(groups, func(i, j int) bool {
 		left := groups[i]
@@ -217,8 +233,8 @@ func subscriptionAccountRow(row management.SubscriptionUsageRow, width int, now 
 	lines := []string{
 		wrappedMetricLine(width, statusBadge(state), metricChip("credential", fmt.Sprintf("%d", row.CredentialID))),
 		wrappedSubscriptionIdentity(row.AccountDisplayLabel, width),
-		wrappedDisplayField("provider", safeWrappedDisplay(row.ProviderInstanceID), width),
-		wrappedDisplayField("plan", safeWrappedDisplay(row.PlanLabel), width),
+		wrappedDisplayField("provider", safeFullWrappedDisplay(row.ProviderInstanceID), width),
+		wrappedDisplayField("plan", safeFullWrappedDisplay(row.PlanLabel), width),
 		subscriptionAccountMetaLine(row, width, now),
 	}
 	if row.ErrorClass != "" {

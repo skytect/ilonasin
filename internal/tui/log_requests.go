@@ -29,23 +29,30 @@ func (m Model) writeRecentRequests(b *strings.Builder) {
 	if len(m.requestRows) > 0 {
 		b.WriteString(requestTableHeader(width))
 		b.WriteByte('\n')
+		if separator := requestTableSeparator(width); separator != "" {
+			b.WriteString(separator)
+			b.WriteByte('\n')
+		}
 	}
-	for _, row := range m.requestRows {
+	for index, row := range m.requestRows {
+		if index > 0 {
+			b.WriteString("\n\n")
+		}
 		b.WriteString(requestSummaryRow(row, now, width))
-		b.WriteString("\n\n")
+		b.WriteByte('\n')
 	}
 }
 
 func requestSummaryRow(row management.RequestSummary, nowTime time.Time, width int) string {
 	state := statusState(row.HTTPStatus, row.ErrorClass)
 	head := requestTableRow(row, nowTime, state, width)
-	model := wrappedDisplayField("model", requestModelRoute(row), width)
-	tokens := wrappedMetricLine(width,
+	model := requestDetailLine(width, "model", requestModelRoute(row))
+	tokens := requestDetailLine(width, "tokens",
 		compactTokenMixLine(row.PromptTokens, row.CompletionTokens, row.ReasoningTokens, row.CacheHitTokens, row.CacheMissTokens, row.CacheWriteTokens, width),
 		metricChip("total", compactInt(row.TotalTokens)),
 		compactRateBars(width, rateMetric{"hit", row.CacheHitRate * 100}),
 	)
-	retry := wrappedMetricLine(width,
+	retry := requestDetailLine(width, "retry",
 		mutedStyle.Render(fullCredentialDisplay(row.CredentialID, row.CredentialLabel)),
 		metricChip("try", fmt.Sprintf("%d", row.AttemptCount)),
 		metricChip("auth", fmt.Sprintf("%d", row.AuthRetryCount)),
@@ -62,6 +69,29 @@ func requestSummaryRow(row management.RequestSummary, nowTime time.Time, width i
 	return wrapTargetedLines(width, lines...)
 }
 
+func requestDetailLine(width int, label string, parts ...string) string {
+	label = safeMetricLabel(label)
+	if label == "" {
+		label = "detail"
+	}
+	prefix := mutedStyle.Render(label)
+	body := wrappedMetricLine(maxInt(1, width-len(label)-1), parts...)
+	if body == "" {
+		return prefix
+	}
+	bodyLines := splitBodyLines(body)
+	indent := strings.Repeat(" ", len(label)+1)
+	lines := make([]string, 0, len(bodyLines))
+	for i, line := range bodyLines {
+		if i == 0 {
+			lines = append(lines, prefix+" "+line)
+			continue
+		}
+		lines = append(lines, indent+line)
+	}
+	return strings.Join(lines, "\n")
+}
+
 func requestTableHeader(width int) string {
 	columns := requestTableColumns(width)
 	labels := []string{"st", "rt", "http", "time", "io", "cred", "try", "lat", "tok"}
@@ -70,6 +100,22 @@ func requestTableHeader(width int) string {
 		cells = append(cells, fitPlainCell(labels[i], column))
 	}
 	return mutedStyle.Render(strings.Join(cells, " "))
+}
+
+func requestTableSeparator(width int) string {
+	if width <= 0 {
+		return ""
+	}
+	columns := requestTableColumns(width)
+	parts := make([]string, 0, len(columns))
+	for _, column := range columns {
+		if column < 1 {
+			column = 1
+		}
+		parts = append(parts, strings.Repeat("-", column))
+	}
+	line := strings.Join(parts, " ")
+	return mutedStyle.Render(line)
 }
 
 func requestTableRow(row management.RequestSummary, nowTime time.Time, state string, width int) string {

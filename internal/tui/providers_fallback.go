@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"ilonasin/internal/management"
 )
 
 func (m Model) writeFallbackPolicies(b *strings.Builder) {
@@ -22,28 +24,26 @@ func (m Model) writeFallbackPolicies(b *strings.Builder) {
 		b.WriteByte('\n')
 		return
 	}
-	cards := make([]string, 0, len(m.fallbackPolicies))
 	for _, row := range m.fallbackPolicies {
-		state := "disabled"
-		accent := lipgloss.Color("160")
-		if row.Enabled {
-			state = "enabled"
-			accent = lipgloss.Color("42")
-		}
-		explicit := "default"
-		if row.Explicit {
-			explicit = "explicit"
-		}
-		lines := []string{
-			cardTitleStyle.Render(safeDisplay(row.ProviderInstanceID)+" "+safeDisplay(row.GroupLabel)) + " " + statusBadge(state),
-			metricLine(
-				metricChip("kind", row.CredentialKind),
-				metricChip("credentials", fmt.Sprintf("%d", row.CredentialCount)),
-				metricChip("policy", explicit),
-			),
-		}
-		cards = append(cards, renderMetricAccentCard(metricCardWidth(width), accent, lines...))
+		b.WriteString(fallbackPolicyRow(row))
+		b.WriteByte('\n')
 	}
-	b.WriteString(renderMetricCardGrid(width, cards))
-	b.WriteByte('\n')
+}
+
+func fallbackPolicyRow(row management.FallbackPolicy) string {
+	state := "disabled"
+	if row.Enabled {
+		state = "enabled"
+	}
+	explicit := "default"
+	if row.Explicit {
+		explicit = "explicit"
+	}
+	return metricLine(
+		statusBadge(state),
+		cardTitleStyle.Render(safeDisplay(row.ProviderInstanceID)+" "+safeDisplay(row.GroupLabel)),
+		metricChip("kind", row.CredentialKind),
+		metricChip("credentials", fmt.Sprintf("%d", row.CredentialCount)),
+		metricChip("policy", explicit),
+	)
 }

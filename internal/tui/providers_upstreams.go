@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -28,33 +29,10 @@ func (m Model) writeUpstreamCredentials(b *strings.Builder) {
 		b.WriteByte('\n')
 		return
 	}
-	cards := make([]string, 0, len(m.credentials))
 	for _, cred := range m.credentials {
-		state := "enabled"
-		accent := lipgloss.Color("42")
-		if cred.Disabled {
-			state = "disabled"
-			accent = lipgloss.Color("160")
-		}
-		lines := []string{
-			cardTitleStyle.Render(fmt.Sprintf("%d %s", cred.ID, safeDisplay(cred.Label))) + " " + statusBadge(state),
-			metricLine(
-				metricChip("provider", cred.ProviderInstanceID),
-				metricChip("kind", cred.Kind),
-				metricChip("group", cred.FallbackGroup),
-			),
-			metricLine(
-				fragmentChip("key", cred.SecretPrefix, cred.SecretLast4),
-				timeChip("created", m.nowTime(), cred.CreatedAt),
-			),
-		}
-		if cred.DisabledAt != nil {
-			lines = append(lines, optionalTimeChip("disabled", m.nowTime(), cred.DisabledAt))
-		}
-		cards = append(cards, renderMetricAccentCard(metricCardWidth(width), accent, lines...))
+		b.WriteString(upstreamCredentialRow(cred, m.nowTime()))
+		b.WriteByte('\n')
 	}
-	b.WriteString(renderMetricCardGrid(width, cards))
-	b.WriteByte('\n')
 }
 
 func upstreamCredentialStateCounts(rows []management.UpstreamCredential) (int, int) {
@@ -68,4 +46,21 @@ func upstreamCredentialStateCounts(rows []management.UpstreamCredential) (int, i
 		}
 	}
 	return enabled, disabled
+}
+
+func upstreamCredentialRow(cred management.UpstreamCredential, now time.Time) string {
+	state := "enabled"
+	if cred.Disabled {
+		state = "disabled"
+	}
+	return metricLine(
+		statusBadge(state),
+		cardTitleStyle.Render(fmt.Sprintf("%d %s", cred.ID, safeDisplay(cred.Label))),
+		metricChip("provider", cred.ProviderInstanceID),
+		metricChip("kind", cred.Kind),
+		metricChip("group", cred.FallbackGroup),
+		fragmentChip("key", cred.SecretPrefix, cred.SecretLast4),
+		timeChip("created", now, cred.CreatedAt),
+		optionalTimeChip("disabled", now, cred.DisabledAt),
+	)
 }

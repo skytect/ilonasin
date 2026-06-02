@@ -3,8 +3,11 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"ilonasin/internal/management"
 )
 
 func (m Model) writeOAuth(b *strings.Builder) {
@@ -27,44 +30,8 @@ func (m Model) writeOAuth(b *strings.Builder) {
 		))
 		b.WriteByte('\n')
 	}
-	cards := make([]string, 0, len(m.oauthRows))
 	for i, row := range m.oauthRows {
-		cursor := " "
-		if i == m.oauthSelected {
-			cursor = ">"
-		}
-		state := "enabled"
-		if row.Disabled {
-			state = "disabled"
-		}
-		expires := optionalTimeChip("exp", now, row.ExpiresAt)
-		if expires == "" {
-			expires = metricChip("exp", "none")
-		}
-		refresh := safeRefreshFailureClass(row.RefreshFailureClass)
-		if refresh == "" {
-			refresh = "none"
-		}
-		refreshDescription := safeRefreshFailureDescriptionDisplay(row.RefreshFailureDescription)
-		title := cursor + " " + accountIdentity(row.AccountDisplayLabel, "OAuth account")
-		lines := []string{
-			cardTitleStyle.Render(title) + " " + statusBadge(state),
-			highlightedIdentity(row.AccountDisplayLabel, "OAuth account"),
-			metricLine(
-				metricChip("credential", fmt.Sprintf("%d", row.ID)),
-				metricChip("provider", row.ProviderInstanceID),
-				metricChip("plan", row.PlanLabel),
-				expires,
-				metricChip("refresh", refresh),
-			),
-		}
-		if refreshDescription != "" {
-			lines = append(lines, mutedStyle.Render(refreshDescription))
-		}
-		cards = append(cards, renderMetricAccentCard(metricCardWidth(width), lipgloss.Color("110"), lines...))
-	}
-	if len(cards) > 0 {
-		b.WriteString(renderMetricCardGrid(width, cards))
+		b.WriteString(oauthCredentialRow(row, i == m.oauthSelected, now))
 		b.WriteByte('\n')
 	}
 	b.WriteString("\n")
@@ -77,21 +44,51 @@ func (m Model) writeOAuth(b *strings.Builder) {
 		))
 		b.WriteByte('\n')
 	}
-	accountCards := make([]string, 0, len(m.accountRows))
 	for _, row := range m.accountRows {
-		lines := []string{
-			cardTitleStyle.Render(accountIdentity(row.DisplayLabel, "provider account")),
-			highlightedIdentity(row.DisplayLabel, "provider account"),
-			metricLine(
-				metricChip("provider", row.ProviderInstanceID),
-				metricChip("credential", fmt.Sprintf("%d", row.CredentialID)),
-				metricChip("plan", row.PlanLabel),
-			),
-		}
-		accountCards = append(accountCards, renderMetricAccentCard(metricCardWidth(width), lipgloss.Color("24"), lines...))
-	}
-	if len(accountCards) > 0 {
-		b.WriteString(renderMetricCardGrid(width, accountCards))
+		b.WriteString(providerAccountRow(row))
 		b.WriteByte('\n')
 	}
+}
+
+func oauthCredentialRow(row management.OAuthCredential, selected bool, now time.Time) string {
+	cursor := " "
+	if selected {
+		cursor = ">"
+	}
+	state := "enabled"
+	if row.Disabled {
+		state = "disabled"
+	}
+	expires := optionalTimeChip("exp", now, row.ExpiresAt)
+	if expires == "" {
+		expires = metricChip("exp", "none")
+	}
+	refresh := safeRefreshFailureClass(row.RefreshFailureClass)
+	if refresh == "" {
+		refresh = "none"
+	}
+	line := metricLine(
+		statusBadge(state),
+		cardTitleStyle.Render(cursor+" "+accountIdentity(row.AccountDisplayLabel, "OAuth account")),
+		highlightedIdentity(row.AccountDisplayLabel, "OAuth account"),
+		metricChip("provider", row.ProviderInstanceID),
+		metricChip("credential", fmt.Sprintf("%d", row.ID)),
+		metricChip("plan", row.PlanLabel),
+		expires,
+		metricChip("refresh", refresh),
+	)
+	if refreshDescription := safeRefreshFailureDescriptionDisplay(row.RefreshFailureDescription); refreshDescription != "" {
+		return strings.Join([]string{line, mutedStyle.Render(refreshDescription)}, "\n")
+	}
+	return line
+}
+
+func providerAccountRow(row management.ProviderAccount) string {
+	return metricLine(
+		cardTitleStyle.Render(accountIdentity(row.DisplayLabel, "provider account")),
+		highlightedIdentity(row.DisplayLabel, "provider account"),
+		metricChip("provider", row.ProviderInstanceID),
+		metricChip("credential", fmt.Sprintf("%d", row.CredentialID)),
+		metricChip("plan", row.PlanLabel),
+	)
 }

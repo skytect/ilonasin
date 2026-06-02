@@ -103,6 +103,9 @@ func safeRefreshFailureDescriptionDisplay(value string) string {
 	if value == "" {
 		return ""
 	}
+	if unsafeDisplayPattern.MatchString(value) {
+		return "[redacted]"
+	}
 	const maxDisplayRunes = 160
 	runes := []rune(value)
 	if len(runes) > maxDisplayRunes {

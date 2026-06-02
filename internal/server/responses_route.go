@@ -134,7 +134,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request, token c
 	}
 	if err := s.writeResponsesSSE(w, r, localResponsesID(), message, exec.final.result.Usage); err != nil {
 		exec.final.result.ErrorClass = "client_disconnected"
-		s.recordNonStreamingChat(r, nc, exec, http.StatusOK, "client_disconnected")
+		s.recordNonStreamingChat(r, nc, exec, statusClientClosedRequest, "client_disconnected")
 		return
 	}
 	s.recordNonStreamingChat(r, nc, exec, status, errorClass)

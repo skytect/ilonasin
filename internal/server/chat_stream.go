@@ -238,15 +238,17 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 }
 
 func streamStatusAndError(summary provider.ChatStreamSummary, sinkStarted bool) (int, string) {
+	errorClass := summary.ErrorClass
 	status := summary.StatusCode
 	if status == 0 {
-		if sinkStarted {
+		if errorClass == "client_disconnected" || summary.CompletionStatus == "client_disconnected" {
+			status = statusClientClosedRequest
+		} else if sinkStarted {
 			status = http.StatusOK
 		} else {
 			status = http.StatusBadGateway
 		}
 	}
-	errorClass := summary.ErrorClass
 	if errorClass == "" && status >= 400 {
 		errorClass = "upstream_http_error"
 	}

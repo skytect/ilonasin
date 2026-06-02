@@ -17,6 +17,43 @@ import (
 
 var errCodexModelAuthFailed = errors.New("codex model metadata auth failed")
 
+type codexModelDiscoveryError struct {
+	class  string
+	status int
+	err    error
+}
+
+func (e codexModelDiscoveryError) Error() string {
+	return e.err.Error()
+}
+
+func (e codexModelDiscoveryError) Unwrap() error {
+	return e.err
+}
+
+func codexModelDiscoveryFailure(class string, status int, err error) error {
+	if err == nil {
+		err = errors.New(class)
+	}
+	return codexModelDiscoveryError{class: class, status: status, err: err}
+}
+
+func codexModelDiscoveryErrorClass(err error) string {
+	var modelErr codexModelDiscoveryError
+	if errors.As(err, &modelErr) && modelErr.class != "" {
+		return modelErr.class
+	}
+	return "model_discovery_failed"
+}
+
+func codexModelDiscoveryErrorStatus(err error) int {
+	var modelErr codexModelDiscoveryError
+	if errors.As(err, &modelErr) && modelErr.status != 0 {
+		return modelErr.status
+	}
+	return http.StatusBadGateway
+}
+
 type codexResponsesRequest struct {
 	Model             string             `json:"model"`
 	Instructions      string             `json:"instructions,omitempty"`
@@ -372,13 +409,13 @@ func codexRequestOptions(req openai.ChatCompletionRequest, model codexResponsesM
 func (a HTTPChatAdapter) resolveCodexResponsesModel(ctx context.Context, req ChatRequest, start time.Time) (codexResponsesModel, error) {
 	endpoint, err := modelsURL(req.Instance)
 	if err != nil {
-		return codexResponsesModel{}, err
+		return codexResponsesModel{}, codexModelDiscoveryFailure("provider_config_error", http.StatusBadGateway, err)
 	}
 	modelCtx, cancel := context.WithTimeout(ctx, a.modelTimeout())
 	defer cancel()
 	httpReq, err := http.NewRequestWithContext(modelCtx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return codexResponsesModel{}, err
+		return codexResponsesModel{}, codexModelDiscoveryFailure("upstream_request_error", http.StatusBadGateway, err)
 	}
 	credential := req.ModelCredential
 	if credential.ID == 0 {
@@ -396,22 +433,26 @@ func (a HTTPChatAdapter) resolveCodexResponsesModel(ctx context.Context, req Cha
 	resp, err := a.Client.Do(httpReq)
 	if err != nil {
 		errorClass := classifyTransportError(err)
-		logProviderHTTP(ctx, a.Logger, statusLevel(http.StatusBadGateway, errorClass), "provider_http",
+		status := providerStatusForError(http.StatusBadGateway, errorClass)
+		logProviderHTTP(ctx, a.Logger, statusLevel(status, errorClass), "provider_http",
 			slog.String("endpoint", "models"),
 			slog.String("method", http.MethodGet),
 			slog.String("provider_instance", req.Instance.ID),
 			slog.String("provider_type", req.Instance.Type),
 			slog.Int64("credential_id", credential.ID),
+			slog.Int("status", status),
 			slog.Int64("duration_ms", durationMS(start)),
 			slog.String("error_class", errorClass),
 		)
-		return codexResponsesModel{}, err
+		return codexResponsesModel{}, codexModelDiscoveryFailure(errorClass, status, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		errorClass := "upstream_http_error"
 		if resp.StatusCode == http.StatusUnauthorized {
 			errorClass = "upstream_auth_failed"
+		} else if resp.StatusCode == http.StatusTooManyRequests {
+			errorClass = "rate_limit_exceeded"
 		}
 		logProviderHTTP(ctx, a.Logger, statusLevel(resp.StatusCode, errorClass), "provider_http",
 			slog.String("endpoint", "models"),
@@ -426,15 +467,40 @@ func (a HTTPChatAdapter) resolveCodexResponsesModel(ctx context.Context, req Cha
 		if resp.StatusCode == http.StatusUnauthorized {
 			return codexResponsesModel{}, errCodexModelAuthFailed
 		}
-		return codexResponsesModel{}, fmt.Errorf("codex models status %d", resp.StatusCode)
+		return codexResponsesModel{}, codexModelDiscoveryFailure(errorClass, resp.StatusCode, fmt.Errorf("codex models status %d", resp.StatusCode))
 	}
 	body, tooLarge, readErr := readLimitedUpstreamBody(resp.Body, MaxUpstreamModelsBodyBytes)
 	a.recordUpstreamBody(req.Instance, credential.ID, "models", http.MethodGet, "upstream_output", resp.StatusCode, resp.Header.Get("Content-Type"), body, "")
 	if tooLarge {
-		return codexResponsesModel{}, fmt.Errorf("codex models body exceeded limit")
+		errorClass := "upstream_body_too_large"
+		logProviderHTTP(ctx, a.Logger, statusLevel(http.StatusBadGateway, errorClass), "provider_http",
+			slog.String("endpoint", "models"),
+			slog.String("method", http.MethodGet),
+			slog.String("provider_instance", req.Instance.ID),
+			slog.String("provider_type", req.Instance.Type),
+			slog.Int64("credential_id", credential.ID),
+			slog.Int("status", http.StatusBadGateway),
+			slog.Int("upstream_status", resp.StatusCode),
+			slog.Int64("duration_ms", durationMS(start)),
+			slog.String("error_class", errorClass),
+		)
+		return codexResponsesModel{}, codexModelDiscoveryFailure(errorClass, http.StatusBadGateway, fmt.Errorf("codex models body exceeded limit"))
 	}
 	if readErr != nil {
-		return codexResponsesModel{}, readErr
+		errorClass := classifyCodexReadError(modelCtx, readErr)
+		status := providerStatusForError(http.StatusBadGateway, errorClass)
+		logProviderHTTP(ctx, a.Logger, statusLevel(status, errorClass), "provider_http",
+			slog.String("endpoint", "models"),
+			slog.String("method", http.MethodGet),
+			slog.String("provider_instance", req.Instance.ID),
+			slog.String("provider_type", req.Instance.Type),
+			slog.Int64("credential_id", credential.ID),
+			slog.Int("status", status),
+			slog.Int("upstream_status", resp.StatusCode),
+			slog.Int64("duration_ms", durationMS(start)),
+			slog.String("error_class", errorClass),
+		)
+		return codexResponsesModel{}, codexModelDiscoveryFailure(errorClass, status, readErr)
 	}
 	var parsed struct {
 		Models []struct {
@@ -451,7 +517,20 @@ func (a HTTPChatAdapter) resolveCodexResponsesModel(ctx context.Context, req Cha
 		} `json:"models"`
 	}
 	if err := jsonUnmarshal(body, &parsed); err != nil {
-		return codexResponsesModel{}, err
+		errorClass := "upstream_invalid_response"
+		logProviderHTTP(ctx, a.Logger, statusLevel(http.StatusBadGateway, errorClass), "provider_http",
+			slog.String("endpoint", "models"),
+			slog.String("method", http.MethodGet),
+			slog.String("provider_instance", req.Instance.ID),
+			slog.String("provider_type", req.Instance.Type),
+			slog.Int64("credential_id", credential.ID),
+			slog.Int("status", http.StatusBadGateway),
+			slog.Int("upstream_status", resp.StatusCode),
+			slog.Int64("duration_ms", durationMS(start)),
+			slog.Int("response_bytes", len(body)),
+			slog.String("error_class", errorClass),
+		)
+		return codexResponsesModel{}, codexModelDiscoveryFailure(errorClass, http.StatusBadGateway, err)
 	}
 	for _, model := range parsed.Models {
 		if model.Slug == req.UpstreamModel {

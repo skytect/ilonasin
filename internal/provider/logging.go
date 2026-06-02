@@ -8,6 +8,8 @@ import (
 	"ilonasin/internal/logging"
 )
 
+const statusClientClosedRequest = 499
+
 func logProviderHTTP(ctx context.Context, logger *slog.Logger, level slog.Level, event string, attrs ...slog.Attr) string {
 	if logger == nil {
 		return ""
@@ -20,6 +22,13 @@ func logProviderHTTP(ctx context.Context, logger *slog.Logger, level slog.Level,
 	attrs = append([]slog.Attr{slog.String("event", event)}, attrs...)
 	logger.LogAttrs(ctx, level, "provider http event", attrs...)
 	return eventID
+}
+
+func providerStatusForError(defaultStatus int, errorClass string) int {
+	if errorClass == "client_disconnected" || errorClass == "canceled" {
+		return statusClientClosedRequest
+	}
+	return defaultStatus
 }
 
 func statusLevel(status int, errorClass string) slog.Level {

@@ -25,33 +25,6 @@ func (s *Server) writeResponsesSSE(w http.ResponseWriter, r *http.Request, respo
 		return err
 	}
 	itemIndex := 0
-	if message.Content != "" || (!message.HasToolCalls && len(message.ResponsesOutputItems) == 0) {
-		if err := s.writeResponseSSEEvent(r, w, flusher, "response.output_item.done", map[string]any{
-			"type": "response.output_item.done",
-			"item": map[string]any{
-				"id":      fmt.Sprintf("%s_item_%d", responseID, itemIndex),
-				"type":    "message",
-				"role":    "assistant",
-				"content": []any{map[string]any{"type": "output_text", "text": message.Content}},
-			},
-		}); err != nil {
-			return err
-		}
-		itemIndex++
-	}
-	for _, call := range message.ToolCalls {
-		item, err := responseFunctionCallItem(responseID, itemIndex, call)
-		if err != nil {
-			return err
-		}
-		if err := s.writeResponseSSEEvent(r, w, flusher, "response.output_item.done", map[string]any{
-			"type": "response.output_item.done",
-			"item": item,
-		}); err != nil {
-			return err
-		}
-		itemIndex++
-	}
 	for _, item := range message.ResponsesOutputItems {
 		body, err := responseOutputItem(responseID, itemIndex, item)
 		if err != nil {
@@ -76,6 +49,33 @@ func (s *Server) writeResponsesSSE(w http.ResponseWriter, r *http.Request, respo
 		if err := s.writeResponseSSEEvent(r, w, flusher, "response.output_item.done", map[string]any{
 			"type": "response.output_item.done",
 			"item": body,
+		}); err != nil {
+			return err
+		}
+		itemIndex++
+	}
+	if message.Content != "" || (!message.HasToolCalls && len(message.ResponsesOutputItems) == 0) {
+		if err := s.writeResponseSSEEvent(r, w, flusher, "response.output_item.done", map[string]any{
+			"type": "response.output_item.done",
+			"item": map[string]any{
+				"id":      fmt.Sprintf("%s_item_%d", responseID, itemIndex),
+				"type":    "message",
+				"role":    "assistant",
+				"content": []any{map[string]any{"type": "output_text", "text": message.Content}},
+			},
+		}); err != nil {
+			return err
+		}
+		itemIndex++
+	}
+	for _, call := range message.ToolCalls {
+		item, err := responseFunctionCallItem(responseID, itemIndex, call)
+		if err != nil {
+			return err
+		}
+		if err := s.writeResponseSSEEvent(r, w, flusher, "response.output_item.done", map[string]any{
+			"type": "response.output_item.done",
+			"item": item,
 		}); err != nil {
 			return err
 		}

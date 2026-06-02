@@ -49,17 +49,19 @@ func (a HTTPChatAdapter) StreamChat(ctx context.Context, req ChatRequest, sink C
 	resp, err := a.doStreamRequest(streamCtx, cancel, httpReq)
 	if err != nil {
 		errorClass := classifyTransportError(err)
-		logProviderHTTP(ctx, a.Logger, statusLevel(http.StatusBadGateway, errorClass), "provider_http",
+		status := providerStatusForError(http.StatusBadGateway, errorClass)
+		logProviderHTTP(ctx, a.Logger, statusLevel(status, errorClass), "provider_http",
 			slog.String("endpoint", "chat_completions_stream"),
 			slog.String("method", http.MethodPost),
 			slog.String("provider_instance", req.Instance.ID),
 			slog.String("provider_type", req.Instance.Type),
 			slog.Int64("credential_id", req.Credential.ID),
+			slog.Int("status", status),
 			slog.Int64("duration_ms", durationMS(start)),
 			slog.String("error_class", errorClass),
 		)
 		return withStreamLatency(start, ChatStreamSummary{
-			StatusCode:       http.StatusBadGateway,
+			StatusCode:       status,
 			ErrorClass:       errorClass,
 			CompletionStatus: streamStatusForError(errorClass),
 			PreStreamError:   true,
@@ -100,7 +102,7 @@ func (a HTTPChatAdapter) StreamChat(ctx context.Context, req ChatRequest, sink C
 			summary.CompletionStatus = streamStatusForError(summary.ErrorClass)
 		}
 		if summary.StatusCode == 0 || (!summary.Started && summary.StatusCode < 400) {
-			summary.StatusCode = http.StatusBadGateway
+			summary.StatusCode = providerStatusForError(http.StatusBadGateway, summary.ErrorClass)
 		}
 		if !summary.Started {
 			summary.PreStreamError = true

@@ -26,7 +26,9 @@ func (a HTTPChatAdapter) streamCodexChat(ctx context.Context, req ChatRequest, s
 		if errors.Is(err, errCodexModelAuthFailed) {
 			return withStreamLatency(start, ChatStreamSummary{StatusCode: http.StatusUnauthorized, ErrorClass: "model_discovery_auth_failed", CompletionStatus: "upstream_error", PreStreamError: true}), err
 		}
-		return withStreamLatency(start, ChatStreamSummary{StatusCode: http.StatusBadGateway, ErrorClass: "model_discovery_failed", CompletionStatus: "upstream_error", PreStreamError: true}), err
+		errorClass := codexModelDiscoveryErrorClass(err)
+		status := codexModelDiscoveryErrorStatus(err)
+		return withStreamLatency(start, ChatStreamSummary{StatusCode: status, ErrorClass: errorClass, CompletionStatus: streamStatusForError(errorClass), PreStreamError: true}), err
 	}
 	body, effectiveServiceTier, err := marshalCodexResponsesRequest(req.Request, req.UpstreamModel, ids, modelMeta)
 	if err != nil {
@@ -51,17 +53,19 @@ func (a HTTPChatAdapter) streamCodexChat(ctx context.Context, req ChatRequest, s
 	resp, err := a.doStreamRequest(streamCtx, cancel, httpReq)
 	if err != nil {
 		errorClass := classifyTransportError(err)
-		logProviderHTTP(ctx, a.Logger, statusLevel(http.StatusBadGateway, errorClass), "provider_http",
+		status := providerStatusForError(http.StatusBadGateway, errorClass)
+		logProviderHTTP(ctx, a.Logger, statusLevel(status, errorClass), "provider_http",
 			slog.String("endpoint", "responses_stream"),
 			slog.String("method", http.MethodPost),
 			slog.String("provider_instance", req.Instance.ID),
 			slog.String("provider_type", req.Instance.Type),
 			slog.Int64("credential_id", req.Credential.ID),
+			slog.Int("status", status),
 			slog.Int64("duration_ms", durationMS(start)),
 			slog.String("error_class", errorClass),
 		)
 		return withStreamLatency(start, ChatStreamSummary{
-			StatusCode:       http.StatusBadGateway,
+			StatusCode:       status,
 			ErrorClass:       errorClass,
 			CompletionStatus: streamStatusForError(errorClass),
 			PreStreamError:   true,
@@ -140,7 +144,7 @@ func (a HTTPChatAdapter) streamCodexChat(ctx context.Context, req ChatRequest, s
 			summary.CompletionStatus = streamStatusForError(summary.ErrorClass)
 		}
 		if summary.StatusCode == 0 || (!summary.Started && summary.StatusCode < 400) {
-			summary.StatusCode = http.StatusBadGateway
+			summary.StatusCode = providerStatusForError(http.StatusBadGateway, summary.ErrorClass)
 		}
 		if !summary.Started {
 			summary.PreStreamError = true

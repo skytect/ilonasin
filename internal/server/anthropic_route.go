@@ -128,7 +128,7 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request,
 	if req.Stream {
 		if err := writeAnthropicSSE(w, resp); err != nil {
 			exec.final.result.ErrorClass = "client_disconnected"
-			s.recordNonStreamingChat(r, nc, exec, http.StatusOK, "client_disconnected")
+			s.recordNonStreamingChat(r, nc, exec, statusClientClosedRequest, "client_disconnected")
 			return
 		}
 		s.recordNonStreamingChat(r, nc, exec, status, errorClass)

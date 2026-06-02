@@ -83,16 +83,18 @@ func (a HTTPChatAdapter) CompleteChat(ctx context.Context, req ChatRequest) (Cha
 	resp, err := a.Client.Do(httpReq)
 	if err != nil {
 		errorClass := classifyTransportError(err)
-		logProviderHTTP(ctx, a.Logger, statusLevel(http.StatusBadGateway, errorClass), "provider_http",
+		status := providerStatusForError(http.StatusBadGateway, errorClass)
+		logProviderHTTP(ctx, a.Logger, statusLevel(status, errorClass), "provider_http",
 			slog.String("endpoint", "chat_completions"),
 			slog.String("method", http.MethodPost),
 			slog.String("provider_instance", req.Instance.ID),
 			slog.String("provider_type", req.Instance.Type),
 			slog.Int64("credential_id", req.Credential.ID),
+			slog.Int("status", status),
 			slog.Int64("duration_ms", durationMS(start)),
 			slog.String("error_class", errorClass),
 		)
-		return ChatResult{ErrorClass: errorClass, Latency: time.Since(start)}, err
+		return ChatResult{StatusCode: status, ErrorClass: errorClass, Latency: time.Since(start)}, err
 	}
 	defer resp.Body.Close()
 

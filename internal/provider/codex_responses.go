@@ -28,7 +28,9 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 		if errors.Is(err, errCodexModelAuthFailed) {
 			return ChatResult{StatusCode: http.StatusUnauthorized, ContentType: "application/json", ErrorClass: "model_discovery_auth_failed", Latency: time.Since(start)}, err
 		}
-		return ChatResult{StatusCode: http.StatusBadGateway, ContentType: "application/json", ErrorClass: "model_discovery_failed", Latency: time.Since(start)}, err
+		errorClass := codexModelDiscoveryErrorClass(err)
+		status := codexModelDiscoveryErrorStatus(err)
+		return ChatResult{StatusCode: status, ContentType: "application/json", ErrorClass: errorClass, Latency: time.Since(start)}, err
 	}
 	body, effectiveServiceTier, err := marshalCodexResponsesRequest(req.Request, req.UpstreamModel, ids, modelMeta)
 	if err != nil {
@@ -53,16 +55,18 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 	resp, err := a.doStreamRequest(streamCtx, cancel, httpReq)
 	if err != nil {
 		errorClass := classifyTransportError(err)
-		logProviderHTTP(ctx, a.Logger, statusLevel(http.StatusBadGateway, errorClass), "provider_http",
+		status := providerStatusForError(http.StatusBadGateway, errorClass)
+		logProviderHTTP(ctx, a.Logger, statusLevel(status, errorClass), "provider_http",
 			slog.String("endpoint", "responses"),
 			slog.String("method", http.MethodPost),
 			slog.String("provider_instance", req.Instance.ID),
 			slog.String("provider_type", req.Instance.Type),
 			slog.Int64("credential_id", req.Credential.ID),
+			slog.Int("status", status),
 			slog.Int64("duration_ms", durationMS(start)),
 			slog.String("error_class", errorClass),
 		)
-		return ChatResult{StatusCode: http.StatusBadGateway, ContentType: "application/json", ErrorClass: errorClass, Latency: time.Since(start)}, err
+		return ChatResult{StatusCode: status, ContentType: "application/json", ErrorClass: errorClass, Latency: time.Since(start)}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -137,18 +141,19 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 		if errorClass == "" {
 			errorClass = classifyCodexReadError(streamCtx, err)
 		}
-		logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
+		status := providerStatusForError(http.StatusBadGateway, errorClass)
+		logProviderHTTP(ctx, a.Logger, statusLevel(status, errorClass), "provider_http",
 			slog.String("endpoint", "responses"),
 			slog.String("method", http.MethodPost),
 			slog.String("provider_instance", req.Instance.ID),
 			slog.String("provider_type", req.Instance.Type),
 			slog.Int64("credential_id", req.Credential.ID),
-			slog.Int("status", http.StatusBadGateway),
+			slog.Int("status", status),
 			slog.Int64("duration_ms", durationMS(start)),
 			slog.String("error_class", errorClass),
 			slog.String("error_reason", codexReadErrorReason(err)),
 		)
-		return ChatResult{StatusCode: http.StatusBadGateway, ContentType: "application/json", ErrorClass: errorClass, Latency: time.Since(start)}, err
+		return ChatResult{StatusCode: status, ContentType: "application/json", ErrorClass: errorClass, Latency: time.Since(start)}, err
 	}
 	var out []byte
 	if len(parsed.ToolCalls) > 0 {

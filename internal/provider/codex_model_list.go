@@ -45,7 +45,7 @@ func CodexModelInfoFromMetadata(row ModelMetadata, namespacedID string) (CodexMo
 	}
 	serviceTiers := row.ServiceTiers
 	if len(serviceTiers) == 0 && hasModelCapability(capabilities, "service_tier") {
-		serviceTiers = []ModelServiceTier{CodexFastServiceTier()}
+		serviceTiers = []ModelServiceTier{codexFastServiceTier()}
 	}
 	inputModalities := row.InputModalities
 	if len(inputModalities) == 0 && row.ProviderInstanceID != "" && hasModelCapability(capabilities, "vision") {
@@ -121,7 +121,7 @@ func hasModelCapability(capabilities []string, needle string) bool {
 	return false
 }
 
-func CodexFastServiceTier() ModelServiceTier {
+func codexFastServiceTier() ModelServiceTier {
 	return ModelServiceTier{
 		ID:          "priority",
 		Name:        "Fast",

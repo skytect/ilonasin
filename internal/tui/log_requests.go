@@ -48,13 +48,15 @@ func requestSummaryRow(row management.RequestSummary, nowTime time.Time, width i
 		metricChip("try", fmt.Sprintf("%d", row.AttemptCount)),
 		metricChip("auth", fmt.Sprintf("%d", row.AuthRetryCount)),
 		metricChip("fb", fmt.Sprintf("%d", row.FallbackCount)),
+	)
+	performance := metricLine(
 		msText("lat", row.TotalLatencyMS),
 		msText("ttft", row.TimeToFirstTokenMS),
 		tpsText("tps", row.OutputTokensPerSecondTotal),
-		compactPercentMetric("hit", row.CacheHitRate*100),
+		compactRateBars(width, rateMetric{"hit", row.CacheHitRate * 100}),
 	)
 	extras := requestSummaryExtras(row, width)
-	lines := []string{head, tokens, timing}
+	lines := []string{head, tokens, timing, performance}
 	if extras != "" {
 		lines = append(lines, extras)
 	}
@@ -74,8 +76,10 @@ func requestSummaryExtras(row management.RequestSummary, width int) string {
 			metricChip("messages", fmt.Sprintf("%d", row.MessageCount)),
 			metricChip("tools", fmt.Sprintf("%d", row.ToolCount)),
 			metricChip("images", fmt.Sprintf("%d", row.ImageCount)),
-			msText("up", row.UpstreamLatencyMS),
 		)
+	}
+	if width >= 96 {
+		parts = append(parts, msText("up", row.UpstreamLatencyMS))
 	}
 	if row.RequestedServiceTier != "" {
 		parts = append(parts, metricChip("tier", row.RequestedServiceTier))

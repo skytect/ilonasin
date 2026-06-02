@@ -5,17 +5,6 @@ import (
 	"strings"
 )
 
-func accountIdentity(label, fallback string) string {
-	out := safeAccountDisplay(label)
-	if out == "" || out == "[redacted]" {
-		out = fallback
-	}
-	if out == "" {
-		out = "account"
-	}
-	return out
-}
-
 func highlightedIdentity(label, fallback string) string {
 	identity := safeAccountDisplay(label)
 	if identity == "" {

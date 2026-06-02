@@ -53,14 +53,16 @@ func upstreamCredentialRow(cred management.UpstreamCredential, now time.Time) st
 	if cred.Disabled {
 		state = "disabled"
 	}
-	return metricLine(
+	line := metricLine(
 		statusBadge(state),
 		cardTitleStyle.Render(fmt.Sprintf("%d %s", cred.ID, safeDisplay(cred.Label))),
 		metricChip("provider", cred.ProviderInstanceID),
-		metricChip("kind", cred.Kind),
 		metricChip("group", cred.FallbackGroup),
 		fragmentChip("key", cred.SecretPrefix, cred.SecretLast4),
-		timeChip("created", now, cred.CreatedAt),
-		optionalTimeChip("disabled", now, cred.DisabledAt),
 	)
+	meta := metricLine(machineChip("kind", cred.Kind), timeChip("created", now, cred.CreatedAt), optionalTimeChip("disabled", now, cred.DisabledAt))
+	if meta == "" {
+		return line
+	}
+	return strings.Join([]string{line, meta}, "\n")
 }

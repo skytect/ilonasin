@@ -43,7 +43,7 @@ func fallbackPolicyRow(row management.FallbackPolicy) string {
 		statusBadge(state),
 		cardTitleStyle.Render(safeDisplay(row.ProviderInstanceID)+" "+safeDisplay(row.GroupLabel)),
 		metricChip("kind", row.CredentialKind),
-		metricChip("credentials", fmt.Sprintf("%d", row.CredentialCount)),
+		metricChip("keys", fmt.Sprintf("%d", row.CredentialCount)),
 		metricChip("policy", explicit),
 	)
 }

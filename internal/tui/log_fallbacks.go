@@ -33,14 +33,14 @@ func fallbackSummaryRow(row management.FallbackSummary, now time.Time) string {
 	return strings.Join([]string{
 		metricLine(
 			statusBadge("warning"),
-			cardTitleStyle.Render(safeDisplay(row.ProviderInstanceID)+"/"+safeDisplay(row.ModelID)),
+			cardTitleStyle.Render(safeDisplay(row.ProviderInstanceID)),
+			metricChip("model", row.ModelID),
 			timeChip("at", now, row.OccurredAt),
 			metricChip("reason", row.Reason),
 		),
 		metricLine(
-			mutedStyle.Render(credentialDisplay(row.FromCredentialID, row.FromCredentialLabel)),
-			valueStyle.Render("->"),
-			mutedStyle.Render(credentialDisplay(row.ToCredentialID, row.ToCredentialLabel)),
+			metricChip("from", credentialDisplay(row.FromCredentialID, row.FromCredentialLabel)),
+			metricChip("to", credentialDisplay(row.ToCredentialID, row.ToCredentialLabel)),
 		),
 	}, "\n")
 }

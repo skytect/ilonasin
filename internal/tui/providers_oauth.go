@@ -69,26 +69,26 @@ func oauthCredentialRow(row management.OAuthCredential, selected bool, now time.
 	}
 	line := metricLine(
 		statusBadge(state),
-		cardTitleStyle.Render(cursor+" "+accountIdentity(row.AccountDisplayLabel, "OAuth account")),
-		highlightedIdentity(row.AccountDisplayLabel, "OAuth account"),
+		cardTitleStyle.Render(cursor+" oauth "+fmt.Sprintf("%d", row.ID)),
 		metricChip("provider", row.ProviderInstanceID),
-		metricChip("credential", fmt.Sprintf("%d", row.ID)),
 		metricChip("plan", row.PlanLabel),
 		expires,
 		metricChip("refresh", refresh),
 	)
+	identity := highlightedIdentity(row.AccountDisplayLabel, "OAuth account")
 	if refreshDescription := safeRefreshFailureDescriptionDisplay(row.RefreshFailureDescription); refreshDescription != "" {
-		return strings.Join([]string{line, mutedStyle.Render(refreshDescription)}, "\n")
+		return strings.Join([]string{line, identity, mutedStyle.Render(refreshDescription)}, "\n")
 	}
-	return line
+	return strings.Join([]string{line, identity}, "\n")
 }
 
 func providerAccountRow(row management.ProviderAccount) string {
-	return metricLine(
-		cardTitleStyle.Render(accountIdentity(row.DisplayLabel, "provider account")),
+	return strings.Join([]string{
 		highlightedIdentity(row.DisplayLabel, "provider account"),
-		metricChip("provider", row.ProviderInstanceID),
-		metricChip("credential", fmt.Sprintf("%d", row.CredentialID)),
-		metricChip("plan", row.PlanLabel),
-	)
+		metricLine(
+			metricChip("provider", row.ProviderInstanceID),
+			metricChip("credential", fmt.Sprintf("%d", row.CredentialID)),
+			metricChip("plan", row.PlanLabel),
+		),
+	}, "\n")
 }

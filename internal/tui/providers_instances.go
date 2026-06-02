@@ -47,11 +47,17 @@ func providerInstanceRow(instance management.ProviderInstance) string {
 	if len(capabilities) == 0 {
 		capabilities = append(capabilities, "none")
 	}
-	return metricLine(
-		cardTitleStyle.Render(safeDisplay(instance.ID)),
-		machineChip("type", instance.Type),
-		machineChip("auth", instance.AuthStyle),
-		metricChip("cap", strings.Join(capabilities, ",")),
-		mutedStyle.Render(safeDisplay(instance.BaseURL)),
-	)
+	base := safeDisplay(instance.BaseURL)
+	if base == "" {
+		base = "default"
+	}
+	return strings.Join([]string{
+		metricLine(
+			cardTitleStyle.Render(safeDisplay(instance.ID)),
+			machineChip("type", instance.Type),
+			machineChip("auth", instance.AuthStyle),
+			metricChip("cap", strings.Join(capabilities, ",")),
+		),
+		mutedStyle.Render("base " + base),
+	}, "\n")
 }

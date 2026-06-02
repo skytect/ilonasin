@@ -51,15 +51,15 @@ func fallbackSummaryRow(row management.FallbackSummary, now time.Time, width int
 			mutedStyle.Render(labeledFullCredentialDisplay("to", row.ToCredentialID, row.ToCredentialLabel)),
 		),
 	}
-	return wrapTargetedLines(width, lines...)
+	return wrapTargetedLinesPreserveBlank(width, lines...)
 }
 
 func fallbackTableHeader(width int) string {
 	columns := fallbackTableColumns(width)
-	labels := []string{"st", "time", "from", "to"}
+	labels := []string{"st", "time", "from", "to", "route"}
 	cells := make([]string, 0, len(columns))
 	for i, column := range columns {
-		cells = append(cells, fitPlainCell(labels[i], column))
+		cells = append(cells, fitPlainCellFirstLine(labels[i], column))
 	}
 	return mutedStyle.Render(strings.Join(cells, " "))
 }
@@ -81,20 +81,25 @@ func fallbackTableSeparator(width int) string {
 
 func fallbackTableRow(row management.FallbackSummary, now time.Time, width int) string {
 	columns := fallbackTableColumns(width)
+	detail := safeFullWrappedDisplay(row.ProviderInstanceID)
+	if row.ModelID != "" {
+		detail += "/" + safeFullWrappedDisplay(row.ModelID)
+	}
 	cells := []string{
 		"warn",
 		formatRelativeTimeNoClock(now, row.OccurredAt),
 		compactCredentialID(row.FromCredentialID),
 		compactCredentialID(row.ToCredentialID),
+		detail,
 	}
 	for i := range cells {
-		cells[i] = fitPlainCell(cells[i], columns[i])
+		cells[i] = fitPlainCellFirstLine(cells[i], columns[i])
 	}
 	return strings.Join(cells, " ")
 }
 
 func fallbackTableColumns(width int) []int {
-	columns := []int{6, 10, 8, 8}
+	columns := []int{6, 10, 8, 8, 24}
 	available := width - (len(columns) - 1)
 	if available <= 0 {
 		return columns
@@ -117,7 +122,7 @@ func fallbackTableColumns(width int) []int {
 	if available > total {
 		grow := available - total
 		for grow > 0 {
-			for _, i := range []int{1, 2, 3} {
+			for _, i := range []int{4, 1, 2, 3} {
 				if grow == 0 {
 					break
 				}

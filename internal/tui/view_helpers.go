@@ -101,6 +101,19 @@ func wrapTargetedLines(width int, lines ...string) string {
 	return strings.Join(out, "\n")
 }
 
+func wrapTargetedLinesPreserveBlank(width int, lines ...string) string {
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimRight(line, "\n")
+		if strings.TrimSpace(line) == "" {
+			out = append(out, "")
+			continue
+		}
+		out = append(out, wrapStyledLine(line, width)...)
+	}
+	return strings.Join(out, "\n")
+}
+
 func maxInt(a, b int) int {
 	if a > b {
 		return a

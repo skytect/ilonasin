@@ -66,7 +66,7 @@ func requestSummaryRow(row management.RequestSummary, nowTime time.Time, width i
 	if extras != "" {
 		lines = append(lines, extras)
 	}
-	return wrapTargetedLines(width, lines...)
+	return wrapTargetedLinesPreserveBlank(width, lines...)
 }
 
 func requestWrappedFieldLine(width int, label, value string) string {
@@ -98,10 +98,10 @@ func requestDetailLine(width int, label string, parts ...string) string {
 
 func requestTableHeader(width int) string {
 	columns := requestTableColumns(width)
-	labels := []string{"st", "rt", "http", "time", "io", "cred", "try", "lat", "tok"}
+	labels := requestTableLabels(columns)
 	cells := make([]string, 0, len(columns))
 	for i, column := range columns {
-		cells = append(cells, fitPlainCell(labels[i], column))
+		cells = append(cells, fitPlainCellFirstLine(labels[i], column))
 	}
 	return mutedStyle.Render(strings.Join(cells, " "))
 }
@@ -129,6 +129,7 @@ func requestTableRow(row management.RequestSummary, nowTime time.Time, state str
 		stream = "sse"
 	}
 	route := shortEndpointDisplay(row.Endpoint)
+	detail := compactRequestTableDetail(row)
 	cells := []string{
 		shortRequestState(state),
 		route,
@@ -140,8 +141,11 @@ func requestTableRow(row management.RequestSummary, nowTime time.Time, state str
 		fmt.Sprintf("%dms", row.TotalLatencyMS),
 		compactInt(row.TotalTokens),
 	}
+	if len(columns) > len(cells) {
+		cells = append(cells, detail)
+	}
 	for i := range cells {
-		cells[i] = fitPlainCell(cells[i], columns[i])
+		cells[i] = fitPlainCellFirstLine(cells[i], columns[i])
 	}
 	return strings.Join(cells, " ")
 }
@@ -193,42 +197,90 @@ func fullCredentialDisplay(id int64, label string) string {
 }
 
 func requestTableColumns(width int) []int {
-	columns := []int{6, 8, 4, 8, 3, 4, 5, 5, 5}
-	available := width - (len(columns) - 1)
+	if width < 96 {
+		return fitTableColumns(width, []int{4, 5, 4, 7, 3, 4, 5, 5, 5}, []int{3, 4, 3, 5, 3, 3, 5, 4, 4}, []int{3, 7, 8})
+	}
+	columns := []int{6, 8, 4, 8, 3, 4, 5, 5, 5, 24}
+	return fitTableColumns(width, columns, []int{3, 4, 3, 5, 3, 3, 5, 4, 4, 12}, []int{9, 1, 3, 5, 7, 8})
+}
+
+func requestTableLabels(columns []int) []string {
+	labels := []string{"st", "rt", "http", "time", "io", "cred", "try", "lat", "tok"}
+	if len(columns) > len(labels) {
+		labels = append(labels, "model")
+	}
+	return labels
+}
+
+func fitTableColumns(width int, columns, minimums, growOrder []int) []int {
+	out := append([]int(nil), columns...)
+	if len(minimums) != len(out) {
+		minimums = make([]int, len(out))
+		for i := range minimums {
+			minimums[i] = 1
+		}
+	}
+	available := width - (len(out) - 1)
 	if available <= 0 {
-		return columns
+		return out
 	}
 	total := 0
-	for _, column := range columns {
+	for _, column := range out {
 		total += column
 	}
-	for available < total && total > len(columns) {
-		for i := range columns {
+	for available < total {
+		changed := false
+		for i := range out {
 			if total <= available {
 				break
 			}
-			if columns[i] > 1 {
-				columns[i]--
+			if out[i] > minimums[i] {
+				out[i]--
 				total--
+				changed = true
 			}
+		}
+		if !changed {
+			break
 		}
 	}
 	if available > total {
 		grow := available - total
 		for grow > 0 {
-			for _, i := range []int{1, 3, 5, 7, 8} {
+			for _, i := range growOrder {
 				if grow == 0 {
 					break
 				}
-				columns[i]++
+				if i < 0 || i >= len(out) {
+					continue
+				}
+				out[i]++
 				grow--
 			}
 		}
 	}
-	return columns
+	return out
 }
 
-func fitPlainCell(value string, width int) string {
+func compactRequestTableDetail(row management.RequestSummary) string {
+	model := row.ResolvedModelID
+	if model == "" {
+		model = row.ModelID
+	}
+	provider := row.ResolvedProviderID
+	if provider == "" {
+		provider = row.ProviderInstanceID
+	}
+	if model == "" {
+		return safeWrappedRequestDisplay(provider)
+	}
+	if provider == "" {
+		return safeWrappedRequestDisplay(model)
+	}
+	return safeWrappedRequestDisplay(provider) + "/" + safeWrappedRequestDisplay(model)
+}
+
+func fitPlainCellFirstLine(value string, width int) string {
 	value = strings.Join(strings.Fields(safeWrappedChromeDisplay(value)), " ")
 	if width <= 0 {
 		return value

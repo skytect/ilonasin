@@ -164,11 +164,11 @@ func sortedSubscriptionPools(rows []management.SubscriptionUsageAggregate) []man
 		if leftRank != rightRank {
 			return leftRank < rightRank
 		}
-		if out[i].ProviderInstanceID != out[j].ProviderInstanceID {
-			return out[i].ProviderInstanceID < out[j].ProviderInstanceID
-		}
 		if leftKey != rightKey {
 			return leftKey < rightKey
+		}
+		if out[i].ProviderInstanceID != out[j].ProviderInstanceID {
+			return out[i].ProviderInstanceID < out[j].ProviderInstanceID
 		}
 		return out[i].LimitID < out[j].LimitID
 	})
@@ -194,13 +194,22 @@ func subscriptionRawGroupKey(value string) string {
 func subscriptionLimitPriority(sortKey string) int {
 	sortKey = strings.ToLower(sortKey)
 	switch {
-	case strings.Contains(sortKey, "gpt-5.5") || strings.Contains(sortKey, "gpt 5.5") || strings.Contains(sortKey, "gpt5.5"):
+	case subscriptionLimitContains(sortKey, "gpt-5.5", "gpt 5.5", "gpt5.5", "gpt_5_5"):
 		return 0
-	case strings.Contains(sortKey, "gpt-5.4") || strings.Contains(sortKey, "gpt 5.4") || strings.Contains(sortKey, "gpt5.4") || strings.Contains(sortKey, "spark"):
+	case subscriptionLimitContains(sortKey, "gpt-5.4", "gpt 5.4", "gpt5.4", "gpt_5_4", "spark"):
 		return 1
 	default:
 		return 2
 	}
+}
+
+func subscriptionLimitContains(value string, needles ...string) bool {
+	for _, needle := range needles {
+		if strings.Contains(value, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func subscriptionGroupHeader(group subscriptionUsageGroup, width int) string {

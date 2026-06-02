@@ -407,6 +407,10 @@ func paneWrappedContentLines(body string, width int) []string {
 	lines := splitBodyLines(body)
 	out := make([]string, 0, len(lines))
 	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			out = append(out, "")
+			continue
+		}
 		out = append(out, wrapStyledLine(line, width)...)
 	}
 	if len(out) == 0 {

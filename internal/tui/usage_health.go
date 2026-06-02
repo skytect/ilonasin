@@ -60,7 +60,7 @@ func healthSummaryRow(row management.HealthSummary, now time.Time, width int) st
 	if row.RetryAfter != nil {
 		tail = append(tail, optionalTimeChip("retry", now, row.RetryAfter))
 	}
-	if width < 144 {
+	if width < 96 {
 		return strings.Join([]string{metricLine(head...), metricLine(tail...)}, "\n")
 	}
 	return metricLine(append(head, tail...)...)
@@ -88,7 +88,7 @@ func quotaSummaryRow(row management.QuotaSummary, now time.Time, width int) stri
 	if row.ResetAt != nil {
 		tail = append(tail, optionalTimeChip("reset", now, row.ResetAt))
 	}
-	if width < 144 {
+	if width < 96 {
 		return strings.Join([]string{metricLine(head...), metricLine(tail...)}, "\n")
 	}
 	return metricLine(append(head, tail...)...)

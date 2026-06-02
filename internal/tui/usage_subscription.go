@@ -28,27 +28,23 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 	}
 	for _, row := range m.subscriptionRows {
 		state := "fresh"
-		accent := lipgloss.Color("42")
 		if row.Stale || row.ErrorClass != "" {
 			state = "stale"
-			accent = lipgloss.Color("214")
 		}
 		if row.ErrorClass != "" {
 			state = "error"
-			accent = lipgloss.Color("160")
 		}
-		account := highlightedIdentity(row.AccountDisplayLabel, "subscription")
 		lines := []string{
 			metricLine(
-				cardTitleStyle.Render(accountIdentity(row.AccountDisplayLabel, "subscription")),
 				statusBadge(state),
+				highlightedIdentity(row.AccountDisplayLabel, "subscription"),
 				metricChip("provider", row.ProviderInstanceID),
 				metricChip("credential", fmt.Sprintf("%d", row.CredentialID)),
 			),
-			account,
 			metricLine(
 				metricChip("plan", row.PlanLabel),
 				metricChip("limit", subscriptionLimitLabel(row.LimitName, row.LimitID)),
+				metricChip("source", row.Source),
 				timeChip("observed", now, row.ObservedAt),
 			),
 		}
@@ -57,7 +53,7 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 		} else {
 			lines = append(lines, subscriptionAccountWindowLines(row, subscriptionCardWidth(width), now)...)
 		}
-		b.WriteString(subscriptionAccountBlock(width, accent, lines...))
+		b.WriteString(subscriptionAccountBlock(lines...))
 		b.WriteByte('\n')
 	}
 	b.WriteString("\n")
@@ -102,10 +98,7 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 	b.WriteByte('\n')
 }
 
-func subscriptionAccountBlock(width int, accent lipgloss.Color, lines ...string) string {
-	if width >= 96 {
-		return renderMetricAccentCard(metricCardWidth(width), accent, lines...)
-	}
+func subscriptionAccountBlock(lines ...string) string {
 	out := make([]string, 0, len(lines))
 	for _, line := range lines {
 		line = strings.TrimSpace(line)

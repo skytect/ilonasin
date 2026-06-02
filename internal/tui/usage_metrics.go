@@ -13,6 +13,10 @@ func (m Model) writeUsageMetrics(b *strings.Builder) {
 	width := m.viewWidth()
 	b.WriteString(renderPaneSubhead(width, "Token usage", fmt.Sprintf("providers %d", len(m.usageRows))))
 	b.WriteByte('\n')
+	if summary := usageMetricsSummaryLine(m.usageRows, m.latencyRows, m.streamRows); summary != "" {
+		b.WriteString(summary)
+		b.WriteByte('\n')
+	}
 	if len(m.usageRows) == 0 {
 		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("42"), "token ledger",
 			metricLine(metricChip("providers", "0"), metricChip("requests", "0")),
@@ -52,6 +56,65 @@ func (m Model) writeUsageMetrics(b *strings.Builder) {
 		b.WriteString(streamSummaryRow(row))
 		b.WriteByte('\n')
 	}
+}
+
+func usageMetricsSummaryLine(usageRows []management.UsageSummary, latencyRows []management.LatencySummary, streamRows []management.StreamSummary) string {
+	requests := 0
+	promptTokens := 0
+	completionTokens := 0
+	totalTokens := 0
+	reasoningTokens := 0
+	cacheHitTokens := 0
+	for _, row := range usageRows {
+		requests += row.RequestCount
+		promptTokens += row.PromptTokens
+		completionTokens += row.CompletionTokens
+		totalTokens += row.TotalTokens
+		reasoningTokens += row.ReasoningTokens
+		cacheHitTokens += row.CacheHitTokens
+	}
+	latencyRequests := 0
+	weightedLatency := int64(0)
+	weightedTTFT := int64(0)
+	for _, row := range latencyRows {
+		latencyRequests += row.RequestCount
+		weightedLatency += row.AverageLatencyMS * int64(row.RequestCount)
+		weightedTTFT += row.AverageTimeToFirstTokenMS * int64(row.RequestCount)
+	}
+	streams := 0
+	chunks := 0
+	for _, row := range streamRows {
+		streams += row.StreamCount
+		chunks += row.ChunkCount
+	}
+	if requests == 0 && latencyRequests == 0 && streams == 0 {
+		return ""
+	}
+	avgLatency := int64(0)
+	avgTTFT := int64(0)
+	if latencyRequests > 0 {
+		avgLatency = weightedLatency / int64(latencyRequests)
+		avgTTFT = weightedTTFT / int64(latencyRequests)
+	}
+	reasonRate := 0.0
+	cacheRate := 0.0
+	if completionTokens > 0 {
+		reasonRate = float64(reasoningTokens) / float64(completionTokens) * 100
+	}
+	if promptTokens > 0 {
+		cacheRate = float64(cacheHitTokens) / float64(promptTokens) * 100
+	}
+	return metricLine(
+		statusBadge("fresh"),
+		metricChip("requests", fmt.Sprintf("%d", requests)),
+		metricChip("tokens", compactInt(totalTokens)),
+		compactPercentMetric("cache", cacheRate),
+		compactPercentMetric("reason", reasonRate),
+		msText("lat", avgLatency),
+		msText("ttft", avgTTFT),
+		metricChip("streams", compactInt(streams)),
+		metricChip("chunks", compactInt(chunks)),
+	)
 }
 
 func usageSummaryRow(row management.UsageSummary, width int) string {

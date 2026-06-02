@@ -33,7 +33,7 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 			b.WriteString("\n\n")
 		}
 		b.WriteString(subscriptionGroupHeader(group, width))
-		b.WriteByte('\n')
+		b.WriteString("\n\n")
 		for rowIndex, row := range group.rows {
 			if rowIndex > 0 {
 				b.WriteString("\n\n")
@@ -62,7 +62,10 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 		b.WriteByte('\n')
 		b.WriteString(wrappedDisplayField("limit", limit, width))
 		b.WriteByte('\n')
-		for _, line := range subscriptionPoolWindowLines(row, width, now) {
+		for windowIndex, line := range subscriptionPoolWindowLines(row, width, now) {
+			if windowIndex > 0 {
+				b.WriteByte('\n')
+			}
 			b.WriteString(line)
 			b.WriteByte('\n')
 		}
@@ -194,7 +197,7 @@ func subscriptionRawGroupKey(value string) string {
 func subscriptionLimitPriority(sortKey string) int {
 	sortKey = strings.ToLower(sortKey)
 	switch {
-	case subscriptionLimitContains(sortKey, "gpt-5.5", "gpt 5.5", "gpt5.5", "gpt_5_5", "codex") && !subscriptionLimitContains(sortKey, "spark", "bengalfox"):
+	case subscriptionLimitContains(sortKey, "gpt-5.5", "gpt 5.5", "gpt5.5", "gpt_5_5") && !subscriptionLimitContains(sortKey, "spark", "bengalfox"):
 		return 0
 	case subscriptionLimitContains(sortKey, "gpt-5.3", "gpt 5.3", "gpt5.3", "gpt_5_3", "gpt-5.4", "gpt 5.4", "gpt5.4", "gpt_5_4", "spark", "bengalfox"):
 		return 1
@@ -220,7 +223,9 @@ func subscriptionGroupHeader(group subscriptionUsageGroup, width int) string {
 	if label == "" {
 		label = "limit"
 	}
+	family := subscriptionLimitGroupTitle(group.sortKey, label)
 	head := wrappedMetricLine(width,
+		windowStyle.Render(family),
 		displayMetricChip("limit", label),
 		metricChip("accounts", fmt.Sprintf("%d", len(group.rows))),
 	)
@@ -228,6 +233,21 @@ func subscriptionGroupHeader(group subscriptionUsageGroup, width int) string {
 		head,
 		wrappedDisplayField("provider", group.provider, width),
 	}, "\n")
+}
+
+func subscriptionLimitGroupTitle(sortKey, fallback string) string {
+	switch subscriptionLimitPriority(sortKey) {
+	case 0:
+		return "GPT 5.5 usage"
+	case 1:
+		return "GPT 5.4 / Spark usage"
+	default:
+		fallback = safeFullWrappedDisplay(fallback)
+		if fallback == "" {
+			return "subscription usage"
+		}
+		return fallback + " usage"
+	}
 }
 
 func subscriptionAccountRow(row management.SubscriptionUsageRow, width int, now time.Time) string {
@@ -287,7 +307,21 @@ func safeSubscriptionWrappedAccountDisplay(value string) string {
 }
 
 func subscriptionAccountBlock(width int, lines ...string) string {
-	return wrapTargetedLines(width, lines...)
+	return wrapTargetedLinesPreserveBlank(width, joinSubscriptionBlockLines(lines)...)
+}
+
+func joinSubscriptionBlockLines(lines []string) []string {
+	out := make([]string, 0, len(lines)*2)
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if len(out) > 0 {
+			out = append(out, "")
+		}
+		out = append(out, line)
+	}
+	return out
 }
 
 func subscriptionUsageSummary(width int, rows []management.SubscriptionUsageRow, pools []management.SubscriptionUsageAggregate) string {

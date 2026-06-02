@@ -81,9 +81,9 @@ func fallbackTableSeparator(width int) string {
 
 func fallbackTableRow(row management.FallbackSummary, now time.Time, width int) string {
 	columns := fallbackTableColumns(width)
-	detail := safeFullWrappedDisplay(row.ProviderInstanceID)
+	detail := safeWrappedRequestDisplay(row.ProviderInstanceID)
 	if row.ModelID != "" {
-		detail += "/" + safeFullWrappedDisplay(row.ModelID)
+		detail += "/" + safeWrappedRequestDisplay(row.ModelID)
 	}
 	cells := []string{
 		"warn",
@@ -92,10 +92,7 @@ func fallbackTableRow(row management.FallbackSummary, now time.Time, width int) 
 		compactCredentialID(row.ToCredentialID),
 		detail,
 	}
-	for i := range cells {
-		cells[i] = fitPlainCellFirstLine(cells[i], columns[i])
-	}
-	return strings.Join(cells, " ")
+	return wrappedPlainTableRow(cells, columns)
 }
 
 func fallbackTableColumns(width int) []int {

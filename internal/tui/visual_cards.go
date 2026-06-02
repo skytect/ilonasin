@@ -70,6 +70,12 @@ func renderAccentCard(width int, accent lipgloss.Color, lines ...string) string 
 	return renderCardWithStyle(style, width, lines...)
 }
 
+func renderEmptyMetricCard(width int, accent lipgloss.Color, title string, lines ...string) string {
+	cardLines := []string{cardTitleStyle.Render(safeChromeDisplay(title)) + " " + statusBadge("disabled")}
+	cardLines = append(cardLines, lines...)
+	return renderMetricAccentCard(metricCardWidth(width), accent, cardLines...)
+}
+
 func renderCardWithStyle(style lipgloss.Style, width int, lines ...string) string {
 	innerWidth := width - style.GetHorizontalFrameSize()
 	if innerWidth < 8 {

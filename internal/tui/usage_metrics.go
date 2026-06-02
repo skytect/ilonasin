@@ -12,7 +12,11 @@ func (m Model) writeUsageMetrics(b *strings.Builder) {
 	b.WriteString(renderSectionBanner(width, "Token usage", fmt.Sprintf("providers %d", len(m.usageRows))))
 	b.WriteByte('\n')
 	if len(m.usageRows) == 0 {
-		b.WriteString("No usage metadata.\n")
+		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("42"), "token ledger",
+			metricLine(metricChip("providers", "0"), metricChip("requests", "0")),
+			metricLine(metricChip("tokens", "0"), metricChip("visibility", "metadata-only")),
+		))
+		b.WriteByte('\n')
 	}
 	usageCards := make([]string, 0, len(m.usageRows))
 	for _, row := range m.usageRows {
@@ -60,7 +64,11 @@ func (m Model) writeUsageMetrics(b *strings.Builder) {
 	b.WriteString(renderSectionBanner(width, "Performance", fmt.Sprintf("providers %d", len(m.latencyRows))))
 	b.WriteByte('\n')
 	if len(m.latencyRows) == 0 {
-		b.WriteString("No latency metadata.\n")
+		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("110"), "performance ledger",
+			metricLine(metricChip("providers", "0"), metricChip("requests", "0")),
+			metricLine(msText("lat", 0), msText("ttft", 0), tpsText("tps", 0)),
+		))
+		b.WriteByte('\n')
 	}
 	latencyCards := make([]string, 0, len(m.latencyRows))
 	for _, row := range m.latencyRows {
@@ -96,7 +104,11 @@ func (m Model) writeUsageMetrics(b *strings.Builder) {
 	b.WriteString(renderSectionBanner(width, "Streams", fmt.Sprintf("states %d", len(m.streamRows))))
 	b.WriteByte('\n')
 	if len(m.streamRows) == 0 {
-		b.WriteString("No stream metadata.\n")
+		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("110"), "stream ledger",
+			metricLine(metricChip("states", "0"), metricChip("streams", "0")),
+			metricLine(metricChip("chunks", "0"), metricChip("status", "none")),
+		))
+		b.WriteByte('\n')
 	}
 	streamCards := make([]string, 0, len(m.streamRows))
 	for _, row := range m.streamRows {

@@ -13,7 +13,11 @@ func (m Model) writeHealthAndQuota(b *strings.Builder) {
 	b.WriteString(renderSectionBanner(width, "Health", fmt.Sprintf("events %d", len(m.healthRows))))
 	b.WriteByte('\n')
 	if len(m.healthRows) == 0 {
-		b.WriteString("No health metadata.\n")
+		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("42"), "health ledger",
+			metricLine(metricChip("events", "0"), metricChip("providers", "0")),
+			metricLine(metricChip("state", "quiet"), metricChip("visibility", "metadata-only")),
+		))
+		b.WriteByte('\n')
 	}
 	healthCards := make([]string, 0, len(m.healthRows))
 	for _, row := range m.healthRows {
@@ -50,7 +54,11 @@ func (m Model) writeHealthAndQuota(b *strings.Builder) {
 	b.WriteString(renderSectionBanner(width, "Quota", fmt.Sprintf("blocks %d", len(m.quotaRows))))
 	b.WriteByte('\n')
 	if len(m.quotaRows) == 0 {
-		b.WriteString("No quota metadata.\n")
+		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("214"), "quota ledger",
+			metricLine(metricChip("blocks", "0"), metricChip("cooldowns", "0")),
+			metricLine(metricChip("reset", "none"), metricChip("visibility", "metadata-only")),
+		))
+		b.WriteByte('\n')
 	}
 	quotaCards := make([]string, 0, len(m.quotaRows))
 	for _, row := range m.quotaRows {

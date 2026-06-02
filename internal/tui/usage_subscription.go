@@ -16,7 +16,11 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 	b.WriteString(subscriptionUsageSummary(width, m.subscriptionRows, m.subscriptionPools))
 	b.WriteByte('\n')
 	if len(m.subscriptionRows) == 0 {
-		b.WriteString("No subscription usage snapshots.\n")
+		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("110"), "subscription accounts",
+			metricLine(metricChip("accounts", "0"), metricChip("fresh", "0"), metricChip("stale", "0")),
+			metricLine(metricChip("limits", "none"), metricChip("visibility", "metadata-only")),
+		))
+		b.WriteByte('\n')
 	}
 	accountCards := make([]string, 0, len(m.subscriptionRows))
 	for _, row := range m.subscriptionRows {

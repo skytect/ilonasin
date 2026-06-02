@@ -46,9 +46,9 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request, token c
 	}
 	preflight := s.preflightProviderAdapter(instance)
 	if preflight.failed() {
-		s.recordResponsesEarly(r, start, token, addr, instance, responsesReq, preflight.Status, preflight.ErrorClass)
-		s.logHTTP(r, preflight.Status, "responses_route", preflight.ErrorClass)
-		writeError(w, preflight.Status, preflight.Message, "invalid_request_error", preflight.ErrorClass)
+		s.writeOpenAIPreflightFailure(w, r, "responses_route", preflight, func(status int, errorClass string) {
+			s.recordResponsesEarly(r, start, token, addr, instance, responsesReq, status, errorClass)
+		})
 		return
 	}
 	adapter := preflight.Adapter
@@ -67,9 +67,9 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request, token c
 	}
 	preflight = preflightAdapterRequest(adapter, instance, chatReq)
 	if preflight.failed() {
-		s.recordResponsesEarly(r, start, token, addr, instance, responsesReq, preflight.Status, preflight.ErrorClass)
-		s.logHTTP(r, preflight.Status, "responses_route", preflight.ErrorClass)
-		writeError(w, preflight.Status, preflight.Message, "invalid_request_error", preflight.ErrorClass)
+		s.writeOpenAIPreflightFailure(w, r, "responses_route", preflight, func(status int, errorClass string) {
+			s.recordResponsesEarly(r, start, token, addr, instance, responsesReq, status, errorClass)
+		})
 		return
 	}
 	if s.logger != nil {

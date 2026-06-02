@@ -18,6 +18,12 @@ func (r routePreflightResult) failed() bool {
 	return r.Status != 0
 }
 
+func (s *Server) writeOpenAIPreflightFailure(w http.ResponseWriter, r *http.Request, routeEvent string, preflight routePreflightResult, record func(status int, errorClass string)) {
+	record(preflight.Status, preflight.ErrorClass)
+	s.logHTTP(r, preflight.Status, routeEvent, preflight.ErrorClass)
+	writeError(w, preflight.Status, preflight.Message, "invalid_request_error", preflight.ErrorClass)
+}
+
 func (s *Server) preflightProviderAdapter(instance provider.Instance) routePreflightResult {
 	if !instance.Chat || (!instance.APIKey && !instance.OAuth) {
 		return routePreflightResult{

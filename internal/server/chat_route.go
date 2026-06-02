@@ -52,25 +52,25 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 	}
 	preflight := s.preflightProviderAdapter(instance)
 	if preflight.failed() {
-		requestMeta := requestMetadataBase(start, token, addr, instance, req, metadataEndpointChatCompletions, req.Stream)
-		requestMeta.HTTPStatus = preflight.Status
-		requestMeta.ErrorClass = preflight.ErrorClass
-		requestMeta.TotalLatencyMS = time.Since(start).Milliseconds()
-		_ = s.record(r.Context(), requestMeta)
-		s.logHTTP(r, preflight.Status, "chat_route", preflight.ErrorClass)
-		writeError(w, preflight.Status, preflight.Message, "invalid_request_error", preflight.ErrorClass)
+		s.writeOpenAIPreflightFailure(w, r, "chat_route", preflight, func(status int, errorClass string) {
+			requestMeta := requestMetadataBase(start, token, addr, instance, req, metadataEndpointChatCompletions, req.Stream)
+			requestMeta.HTTPStatus = status
+			requestMeta.ErrorClass = errorClass
+			requestMeta.TotalLatencyMS = time.Since(start).Milliseconds()
+			_ = s.record(r.Context(), requestMeta)
+		})
 		return
 	}
 	adapter := preflight.Adapter
 	preflight = preflightAdapterRequest(adapter, instance, req)
 	if preflight.failed() {
-		requestMeta := requestMetadataBase(start, token, addr, instance, req, metadataEndpointChatCompletions, req.Stream)
-		requestMeta.HTTPStatus = preflight.Status
-		requestMeta.ErrorClass = preflight.ErrorClass
-		requestMeta.TotalLatencyMS = time.Since(start).Milliseconds()
-		_ = s.record(r.Context(), requestMeta)
-		s.logHTTP(r, preflight.Status, "chat_route", preflight.ErrorClass)
-		writeError(w, preflight.Status, preflight.Message, "invalid_request_error", preflight.ErrorClass)
+		s.writeOpenAIPreflightFailure(w, r, "chat_route", preflight, func(status int, errorClass string) {
+			requestMeta := requestMetadataBase(start, token, addr, instance, req, metadataEndpointChatCompletions, req.Stream)
+			requestMeta.HTTPStatus = status
+			requestMeta.ErrorClass = errorClass
+			requestMeta.TotalLatencyMS = time.Since(start).Milliseconds()
+			_ = s.record(r.Context(), requestMeta)
+		})
 		return
 	}
 	if s.logger != nil {

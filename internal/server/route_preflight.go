@@ -22,14 +22,14 @@ func (s *Server) preflightProviderAdapter(instance provider.Instance) routePrefl
 	if !instance.Chat || (!instance.APIKey && !instance.OAuth) {
 		return routePreflightResult{
 			Status:     http.StatusNotImplemented,
-			ErrorClass: "provider_unimplemented",
+			ErrorClass: providerUnsupportedCapabilityClass,
 			Message:    providerUnsupportedCapabilityMessage,
 		}
 	}
 	if s.adapters == nil {
 		return routePreflightResult{
 			Status:     http.StatusNotImplemented,
-			ErrorClass: "provider_unimplemented",
+			ErrorClass: providerUnavailableClass,
 			Message:    providerUnavailableMessage,
 		}
 	}
@@ -37,7 +37,7 @@ func (s *Server) preflightProviderAdapter(instance provider.Instance) routePrefl
 	if !ok {
 		return routePreflightResult{
 			Status:     http.StatusNotImplemented,
-			ErrorClass: "provider_unimplemented",
+			ErrorClass: providerUnavailableClass,
 			Message:    providerUnavailableMessage,
 		}
 	}

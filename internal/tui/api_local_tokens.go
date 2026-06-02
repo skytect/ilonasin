@@ -15,6 +15,7 @@ func (m Model) writeLocalTokens(b *strings.Builder) {
 	width := m.viewWidth()
 	enabled, disabled := localTokenStateCounts(m.tokenRows)
 	b.WriteString(renderSectionBanner(width, "Local API tokens",
+		"local-api",
 		fmt.Sprintf("enabled %d", enabled),
 		fmt.Sprintf("disabled %d", disabled),
 	))

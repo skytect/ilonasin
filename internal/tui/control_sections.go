@@ -7,31 +7,32 @@ import (
 
 func (m Model) apiPanes() []dashboardPane {
 	return []dashboardPane{
-		{id: apiPaneSummary, title: "surfaces", content: m.apiSummaryBody},
-		{id: apiPaneTokens, title: "local tokens", content: m.localTokensBody},
+		{id: apiPaneSummary, title: "local apis", content: m.apiSummaryBody},
+		{id: apiPaneTokens, title: "downstream keys", content: m.localTokensBody},
 	}
 }
 
 func (m Model) providerPanes() []dashboardPane {
 	return []dashboardPane{
-		{id: providersPaneInstances, title: "instances", content: m.providerInstancesBody},
-		{id: providersPaneCredentials, title: "credentials", content: m.providerCredentialsBody},
+		{id: providersPaneInstances, title: "upstream providers", content: m.providerInstancesBody},
+		{id: providersPaneCredentials, title: "upstream keys", content: m.providerCredentialsBody},
 		{id: providersPaneOAuth, title: "oauth accounts", content: m.oauthBody},
+		{id: providersPaneFallback, title: "fallback config", content: m.providerFallbackBody},
 	}
 }
 
 func (m Model) usagePanes() []dashboardPane {
 	return []dashboardPane{
-		{id: usagePaneMetrics, title: "tokens and performance", content: m.usageMetricsBody},
-		{id: usagePaneSubscriptions, title: "subscription limits", content: m.subscriptionUsageBody},
+		{id: usagePaneMetrics, title: "token performance", content: m.usageMetricsBody},
+		{id: usagePaneSubscriptions, title: "subscription quota", content: m.subscriptionUsageBody},
 		{id: usagePaneHealth, title: "health and quota", content: m.healthAndQuotaBody},
 	}
 }
 
 func (m Model) logPanes() []dashboardPane {
 	return []dashboardPane{
-		{id: logsPaneRequests, title: "requests", content: m.recentRequestsBody},
-		{id: logsPaneFallbacks, title: "fallbacks", content: m.fallbacksBody},
+		{id: logsPaneRequests, title: "request metadata", content: m.recentRequestsBody},
+		{id: logsPaneFallbacks, title: "fallback metadata", content: m.fallbacksBody},
 		{id: logsPanePruning, title: "metadata and io policy", content: m.pruningBody},
 	}
 }
@@ -45,26 +46,33 @@ func (m Model) apiSummaryBody(width int) string {
 	))
 	b.WriteByte('\n')
 	enabledTokens, disabledTokens := localTokenStateCounts(m.tokenRows)
-	cards := []string{
-		renderCompactCard(metricCardWidth(width),
-			cardTitleStyle.Render("local surfaces"),
-			metricLine(endpointMetricChip("chat", "chat_completions")),
-			metricLine(endpointMetricChip("responses", "responses")),
-			metricLine(endpointMetricChip("anthropic", "anthropic_messages"), endpointMetricChip("count", "anthropic_count_tokens")),
-		),
-		renderCompactCard(metricCardWidth(width),
-			cardTitleStyle.Render("downstream keys"),
-			metricLine(metricChip("enabled", fmt.Sprintf("%d", enabledTokens)), metricChip("disabled", fmt.Sprintf("%d", disabledTokens))),
-			metricLine(metricChip("total", fmt.Sprintf("%d", len(m.tokenRows))), metricChip("bind", m.runtime.Bind)),
-		),
-		renderCompactCard(metricCardWidth(width),
-			cardTitleStyle.Render("upstream boundary"),
-			metricLine(metricChip("providers", fmt.Sprintf("%d", len(m.providers)))),
-			mutedStyle.Render("provider API keys and OAuth live on providers"),
-		),
-	}
-	b.WriteString(renderMetricCardGrid(width, cards))
+	b.WriteString(apiRouteLine("Chat Completions", "/v1/chat/completions", "chat_completions"))
+	b.WriteByte('\n')
+	b.WriteString(apiRouteLine("Responses", "/responses  /v1/responses", "responses"))
+	b.WriteByte('\n')
+	b.WriteString(apiRouteLine("Anthropic Messages", "/v1/messages", "anthropic_messages"))
+	b.WriteByte('\n')
+	b.WriteString(apiRouteLine("Anthropic Count", "/v1/messages/count_tokens", "anthropic_count_tokens"))
+	b.WriteString("\n\n")
+	b.WriteString(metricLine(
+		metricChip("downstream", "local"),
+		metricChip("enabled", fmt.Sprintf("%d", enabledTokens)),
+		metricChip("disabled", fmt.Sprintf("%d", disabledTokens)),
+		metricChip("total", fmt.Sprintf("%d", len(m.tokenRows))),
+	))
+	b.WriteByte('\n')
+	b.WriteString(metricLine(metricChip("bind", m.runtime.Bind), metricChip("upstream", "providers")))
+	b.WriteByte('\n')
+	b.WriteString(mutedStyle.Render("Provider API keys, OAuth accounts, and fallback groups are managed in providers."))
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func apiRouteLine(label, path, endpoint string) string {
+	return metricLine(
+		cardTitleStyle.Render(safeChromeDisplay(label)),
+		endpointMetricChip("endpoint", endpoint),
+		mutedStyle.Render(safeChromeDisplay(path)),
+	)
 }
 
 func (m Model) localTokensBody(width int) string {
@@ -77,6 +85,8 @@ func (m Model) localTokensBody(width int) string {
 func (m Model) providerInstancesBody(width int) string {
 	var b strings.Builder
 	m = m.withRenderWidth(width)
+	m.writeProviderSummary(&b)
+	b.WriteString("\n\n")
 	m.writeProviderInstances(&b)
 	m.writeModelCache(&b)
 	return strings.TrimRight(b.String(), "\n")
@@ -86,8 +96,37 @@ func (m Model) providerCredentialsBody(width int) string {
 	var b strings.Builder
 	m = m.withRenderWidth(width)
 	m.writeUpstreamCredentials(&b)
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m Model) providerFallbackBody(width int) string {
+	var b strings.Builder
+	m = m.withRenderWidth(width)
 	m.writeFallbackPolicies(&b)
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m Model) writeProviderSummary(b *strings.Builder) {
+	width := m.viewWidth()
+	enabledKeys, disabledKeys := upstreamCredentialStateCounts(m.credentials)
+	b.WriteString(renderSectionBanner(width, "Providers",
+		fmt.Sprintf("instances %d", len(m.providers)),
+		fmt.Sprintf("upstream keys %d/%d", enabledKeys, disabledKeys),
+		fmt.Sprintf("oauth %d", len(m.oauthRows)),
+		fmt.Sprintf("accounts %d", len(m.accountRows)),
+		fmt.Sprintf("fallback groups %d", len(m.fallbackPolicies)),
+	))
+	b.WriteByte('\n')
+	b.WriteString(metricLine(
+		metricChip("config", fmt.Sprintf("%d", len(m.providers))),
+		metricChip("keys", fmt.Sprintf("on%d_off%d", enabledKeys, disabledKeys)),
+	))
+	b.WriteByte('\n')
+	b.WriteString(metricLine(
+		metricChip("oauth", fmt.Sprintf("%d", len(m.oauthRows))),
+		metricChip("accounts", fmt.Sprintf("%d", len(m.accountRows))),
+		metricChip("fallback-groups", fmt.Sprintf("%d", len(m.fallbackPolicies))),
+	))
 }
 
 func (m Model) oauthBody(width int) string {

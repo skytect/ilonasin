@@ -12,7 +12,6 @@ func (m Model) writeFallbackPolicies(b *strings.Builder) {
 		return
 	}
 	width := m.viewWidth()
-	b.WriteString("\n")
 	b.WriteString(renderSectionBanner(width, "Credential groups", fmt.Sprintf("groups %d", len(m.fallbackPolicies))))
 	b.WriteByte('\n')
 	if len(m.fallbackPolicies) == 0 {

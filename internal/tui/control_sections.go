@@ -43,17 +43,15 @@ func (m Model) apiSummaryBody(width int) string {
 	b.WriteByte('\n')
 	enabledTokens, disabledTokens := localTokenStateCounts(m.tokenRows)
 	b.WriteString(metricLine(
+		statusBadge("enabled"),
 		metricChip("bind", m.runtime.Bind),
-		metricChip("downstream-keys", fmt.Sprintf("%d", len(m.tokenRows))),
+		apiChromeChip("models", "/v1/models"),
+		apiChromeChip("keys", "n/d"),
+		metricChip("keys", fmt.Sprintf("%d", len(m.tokenRows))),
 		metricChip("on", fmt.Sprintf("%d", enabledTokens)),
 		metricChip("off", fmt.Sprintf("%d", disabledTokens)),
 	))
 	b.WriteByte('\n')
-	b.WriteString(metricLine(
-		apiChromeChip("models", "/v1/models"),
-		apiChromeChip("keys", "n/d"),
-	))
-	b.WriteString("\n\n")
 	b.WriteString(apiSurfaceLine(width, "OpenAI Chat", "/v1/chat/completions", "stream"))
 	b.WriteByte('\n')
 	b.WriteString(apiSurfaceLine(width, "OpenAI Responses", "/v1/responses", "sse", "tools"))
@@ -64,7 +62,7 @@ func (m Model) apiSummaryBody(width int) string {
 
 func apiSurfaceLine(width int, label, path string, capabilities ...string) string {
 	parts := []string{
-		metricChip("surface", "api"),
+		statusBadge("enabled"),
 		cardTitleStyle.Render(safeChromeDisplay(label)),
 	}
 	if width >= 70 {

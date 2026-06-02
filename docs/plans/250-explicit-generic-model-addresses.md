@@ -28,21 +28,17 @@ implicit routing.
    and responses call sites.
 3. Keep `/v1/chat/completions` and `/v1/responses` error behavior as a `400`
    `invalid_model` when the model string is bare or malformed.
-   These requests still fail before request metadata is recorded, matching the
-   current invalid-model behavior for malformed addressed strings.
+   These requests should preserve the current early metadata-only
+   `invalid_model` recording behavior.
 4. Keep addressed-but-unconfigured providers as the existing `404`
    `provider_not_configured` behavior in each route.
-5. Change `internal/server/models_response.go` so OpenAI `data[].id` and
-   Codex-compatible `models[].slug` are always namespaced as
+5. Verify the already-implemented `internal/server/models_response.go`
+   behavior that OpenAI `data[].id`, Codex-compatible `models[].slug`, and empty
+   `display_name` fallbacks are namespaced as
    `<provider_instance_id>/<provider_model_id>`.
-   If `DisplayName` is empty, the Codex-compatible `models[].display_name`
-   fallback should also become the namespaced slug so the UI/client-visible
-   model identity is not bare.
-6. Remove now-dead response-model counting helpers if they only existed to
-   choose bare Codex slugs.
-7. Do not change provider adapters, model discovery/cache storage, management
+6. Do not change provider adapters, model discovery/cache storage, management
    APIs, TUI, Anthropic routes, credentials, IO logging, or fallback policy.
-8. Do not add permanent tests.
+7. Do not add permanent tests.
 
 ## Verification
 
@@ -58,8 +54,7 @@ implicit routing.
    - rows with empty provider `DisplayName` emit namespaced
      `models[].display_name`.
    - No bare response-capable model slug appears in the temporary response.
-   - `rg codexResponseModelCounts internal/server` returns no stale helper
-     references after bare slug selection is removed.
+   - `rg -n 'ListModelCache|strings\.Contains\(model|resolveModelAddress\(r\.Context' internal/server/model_resolution.go internal/server/*_route.go` returns no stale generic request-resolution references.
    - a temporary route-level `/models` and `/v1/models` smoke with seeded model
      cache confirms HTTP response `data[].id`, `models[].slug`, and
      empty-display-name fallback values are namespaced.

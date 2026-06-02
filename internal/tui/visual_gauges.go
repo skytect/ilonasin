@@ -118,7 +118,7 @@ func poolGaugeBlock(label string, usedPoints, remainingPoints, capacityPoints fl
 	if width < 16 {
 		line := windowStyle.Render(label) + " " +
 			balancedUsageBar(usedPercent, remainingPercent, width) + " " +
-			valueStyle.Render(fmt.Sprintf("sum %.1f/%.1fpp cap %.1fpp", usedPoints, remainingPoints, capacityPoints)) + " " +
+			valueStyle.Render(fmt.Sprintf("sum %.0f/%.0fpp cap %.0fpp", usedPoints, remainingPoints, capacityPoints)) + " " +
 			mutedStyle.Render(fmt.Sprintf("acct %d stale %d", accountCount, staleCount))
 		if resetLabel != "" {
 			line += "  " + mutedStyle.Render(compactResetText(resetLabel))

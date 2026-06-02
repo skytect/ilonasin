@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -87,6 +88,7 @@ type subscriptionUsageGroup struct {
 	provider string
 	limitID  string
 	label    string
+	sortKey  string
 	rows     []management.SubscriptionUsageRow
 }
 
@@ -94,8 +96,8 @@ func subscriptionUsageGroups(rows []management.SubscriptionUsageRow) []subscript
 	groups := []subscriptionUsageGroup{}
 	index := map[string]int{}
 	for _, row := range rows {
-		provider := safeDisplay(row.ProviderInstanceID)
-		limitID := safeDisplay(row.LimitID)
+		provider := safeWrappedDisplay(row.ProviderInstanceID)
+		limitID := safeWrappedDisplay(row.LimitID)
 		keyProvider := safeSubscriptionGroupKey(row.ProviderInstanceID)
 		keyLimit := safeSubscriptionGroupKey(row.LimitID)
 		if keyLimit == "" {
@@ -108,6 +110,7 @@ func subscriptionUsageGroups(rows []management.SubscriptionUsageRow) []subscript
 				provider: provider,
 				limitID:  limitID,
 				label:    subscriptionLimitLabel(row.LimitName, row.LimitID),
+				sortKey:  subscriptionGroupSortKey(row),
 			}
 			groups = append(groups, group)
 			position = len(groups) - 1
@@ -115,11 +118,47 @@ func subscriptionUsageGroups(rows []management.SubscriptionUsageRow) []subscript
 		}
 		groups[position].rows = append(groups[position].rows, row)
 	}
+	sort.SliceStable(groups, func(i, j int) bool {
+		left := groups[i]
+		right := groups[j]
+		leftRank := subscriptionLimitPriority(left.sortKey)
+		rightRank := subscriptionLimitPriority(right.sortKey)
+		if leftRank != rightRank {
+			return leftRank < rightRank
+		}
+		if left.provider != right.provider {
+			return left.provider < right.provider
+		}
+		if left.sortKey != right.sortKey {
+			return left.sortKey < right.sortKey
+		}
+		return left.limitID < right.limitID
+	})
 	return groups
 }
 
 func safeSubscriptionGroupKey(value string) string {
 	return safeWrappedDisplay(value)
+}
+
+func subscriptionGroupSortKey(row management.SubscriptionUsageRow) string {
+	parts := []string{
+		safeWrappedDisplay(row.LimitName),
+		safeWrappedDisplay(row.LimitID),
+	}
+	return strings.ToLower(strings.TrimSpace(strings.Join(parts, " ")))
+}
+
+func subscriptionLimitPriority(sortKey string) int {
+	sortKey = strings.ToLower(sortKey)
+	switch {
+	case strings.Contains(sortKey, "gpt-5.5") || strings.Contains(sortKey, "gpt 5.5"):
+		return 0
+	case strings.Contains(sortKey, "gpt-5.4") || strings.Contains(sortKey, "gpt 5.4") || strings.Contains(sortKey, "spark"):
+		return 1
+	default:
+		return 2
+	}
 }
 
 func subscriptionGroupHeader(group subscriptionUsageGroup, width int) string {
@@ -130,12 +169,15 @@ func subscriptionGroupHeader(group subscriptionUsageGroup, width int) string {
 	if label == "" {
 		label = "limit"
 	}
-	return wrappedMetricLine(width,
-		metricChip("group", "accounts"),
-		cardTitleStyle.Render(label),
-		metricChip("provider", group.provider),
+	head := wrappedMetricLine(width,
+		machineChip("group", "accounts"),
 		metricChip("accounts", fmt.Sprintf("%d", len(group.rows))),
 	)
+	return strings.Join([]string{
+		head,
+		wrappedDisplayField("provider", group.provider, width),
+		wrappedDisplayField("limit", label, width),
+	}, "\n")
 }
 
 func subscriptionAccountRow(row management.SubscriptionUsageRow, width int, now time.Time) string {
@@ -147,13 +189,10 @@ func subscriptionAccountRow(row management.SubscriptionUsageRow, width int, now 
 		state = "error"
 	}
 	lines := []string{
-		wrappedMetricLine(width,
-			statusBadge(state),
-			wrappedSubscriptionIdentity(row.AccountDisplayLabel, width),
-			metricChip("provider", row.ProviderInstanceID),
-			metricChip("credential", fmt.Sprintf("%d", row.CredentialID)),
-			metricChip("plan", row.PlanLabel),
-		),
+		wrappedMetricLine(width, statusBadge(state), metricChip("credential", fmt.Sprintf("%d", row.CredentialID))),
+		wrappedSubscriptionIdentity(row.AccountDisplayLabel, width),
+		wrappedDisplayField("provider", safeWrappedDisplay(row.ProviderInstanceID), width),
+		wrappedDisplayField("plan", safeWrappedDisplay(row.PlanLabel), width),
 		subscriptionAccountMetaLine(row, width, now),
 	}
 	if row.ErrorClass != "" {
@@ -236,7 +275,14 @@ func subscriptionUsageSummary(width int, rows []management.SubscriptionUsageRow,
 			"cap "+compactPercentPoints(capacity),
 		)
 	}
-	return renderSectionBanner(width, "Codex subscription limits", chips...)
+	parts := []string{heroStyle.Render("Codex subscription limits")}
+	for _, chip := range chips {
+		chip = safeChromeDisplay(chip)
+		if chip != "" {
+			parts = append(parts, chipStyle.Render(chip))
+		}
+	}
+	return wrappedMetricLine(width, parts...)
 }
 
 func subscriptionPoolSummaryLine(pools []management.SubscriptionUsageAggregate) string {
@@ -360,7 +406,7 @@ func gaugeBarWidth(width int) int {
 func poolGaugeBarWidth(width int) int {
 	switch {
 	case width < 90:
-		return 8
+		return 6
 	case width < 130:
 		return 12
 	default:
@@ -402,11 +448,11 @@ func resetLocalText(prefix string, resetAt *time.Time, now time.Time) string {
 }
 
 func subscriptionLimitLabel(name, id string) string {
-	name = safeDisplay(name)
+	name = safeWrappedDisplay(name)
 	if name != "" {
 		return name
 	}
-	return safeDisplay(id)
+	return safeWrappedDisplay(id)
 }
 
 func subscriptionKeepaliveState(status management.KeepaliveStatus) string {

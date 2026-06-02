@@ -35,17 +35,17 @@ func requestSummaryRow(row management.RequestSummary, nowTime time.Time, width i
 	head := wrappedMetricLine(width,
 		statusBadge(state),
 		endpointMetricChip("route", row.Endpoint),
-		cardTitleStyle.Render(wrappedRequestModelDisplay(row, width)),
-		metricChip("status", fmt.Sprintf("%d", row.HTTPStatus)),
+		metricChip("http", fmt.Sprintf("%d", row.HTTPStatus)),
 		timeChip("at", nowTime, row.StartedAt),
 		streamChip(row.Stream),
 	)
+	model := wrappedDisplayField("model", requestModelRoute(row), width)
 	tokens := wrappedMetricLine(width,
 		compactTokenMixLine(row.PromptTokens, row.CompletionTokens, row.ReasoningTokens, row.CacheHitTokens, row.CacheMissTokens, row.CacheWriteTokens, width),
 		metricChip("total", compactInt(row.TotalTokens)),
 		compactRateBars(width, rateMetric{"hit", row.CacheHitRate * 100}),
 	)
-	route := wrappedMetricLine(width,
+	retry := wrappedMetricLine(width,
 		mutedStyle.Render(credentialDisplay(row.CredentialID, row.CredentialLabel)),
 		metricChip("try", fmt.Sprintf("%d", row.AttemptCount)),
 		metricChip("auth", fmt.Sprintf("%d", row.AuthRetryCount)),
@@ -55,7 +55,7 @@ func requestSummaryRow(row management.RequestSummary, nowTime time.Time, width i
 		tpsText("tps", row.OutputTokensPerSecondTotal),
 	)
 	extras := requestSummaryExtras(row, width)
-	lines := []string{head, tokens, route}
+	lines := []string{head, model, tokens, retry}
 	if extras != "" {
 		lines = append(lines, extras)
 	}
@@ -95,7 +95,7 @@ func requestSummaryExtras(row management.RequestSummary, width int) string {
 	return wrappedMetricLine(width, parts...)
 }
 
-func wrappedRequestModelDisplay(row management.RequestSummary, width int) string {
+func requestModelRoute(row management.RequestSummary) string {
 	requestedProvider := row.RequestedProviderID
 	requestedModel := row.RequestedModelID
 	resolvedProvider := row.ResolvedProviderID
@@ -115,9 +115,9 @@ func wrappedRequestModelDisplay(row management.RequestSummary, width int) string
 	requested := safeWrappedRequestDisplay(requestedProvider) + "/" + safeWrappedRequestDisplay(requestedModel)
 	resolved := safeWrappedRequestDisplay(resolvedProvider) + "/" + safeWrappedRequestDisplay(resolvedModel)
 	if requested != resolved {
-		return strings.Join(wrapDisplayChunks(requested+" -> "+resolved, width), "\n")
+		return requested + " -> " + resolved
 	}
-	return strings.Join(wrapDisplayChunks(resolved, width), "\n")
+	return resolved
 }
 
 func safeWrappedRequestDisplay(value string) string {

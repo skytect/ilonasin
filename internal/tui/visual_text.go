@@ -64,6 +64,32 @@ func wrappedMetricLine(width int, parts ...string) string {
 	return strings.Join(lines, "\n")
 }
 
+func wrappedDisplayField(label, value string, width int) string {
+	label = safeMetricLabel(label)
+	value = strings.TrimSpace(value)
+	if label == "" {
+		label = "field"
+	}
+	if value == "" {
+		value = "none"
+	}
+	prefix := mutedStyle.Render(label)
+	available := width - len(label) - 1
+	if available < 12 {
+		available = width
+	}
+	chunks := wrapDisplayChunks(value, available)
+	if len(chunks) == 0 {
+		return prefix
+	}
+	lines := []string{prefix + " " + cardTitleStyle.Render(chunks[0])}
+	indent := strings.Repeat(" ", len(label)+1)
+	for _, chunk := range chunks[1:] {
+		lines = append(lines, indent+cardTitleStyle.Render(chunk))
+	}
+	return strings.Join(lines, "\n")
+}
+
 func wrapDisplayChunks(value string, width int) []string {
 	value = strings.TrimSpace(value)
 	if value == "" {

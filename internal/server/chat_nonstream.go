@@ -42,7 +42,7 @@ type nonStreamExecution struct {
 
 func (s *Server) executeNonStreamingChat(r *http.Request, nc nonStreamContext) nonStreamExecution {
 	exec := nonStreamExecution{}
-	plan := s.planCredentialAttempts(r.Context(), nc.address, nc.credentials)
+	plan := s.planCredentialAttempts(r.Context(), nc.address, nc.token.ID, nc.credentials)
 	modelCredential := plan.modelCredential
 	if plan.exhausted {
 		exec.final = chatAttempt{

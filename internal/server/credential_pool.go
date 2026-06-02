@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"hash/fnv"
+	"strconv"
 	"time"
 
 	"ilonasin/internal/metadata"
@@ -16,12 +18,13 @@ type credentialAttemptPlan struct {
 	retryAfter      *time.Time
 }
 
-func (s *Server) planCredentialAttempts(ctx context.Context, addr routing.ModelAddress, credentials []provider.BearerCredential) credentialAttemptPlan {
-	plan := credentialAttemptPlan{attempts: credentials}
+func (s *Server) planCredentialAttempts(ctx context.Context, addr routing.ModelAddress, tokenID int64, credentials []provider.BearerCredential) credentialAttemptPlan {
+	ordered := affinityCredentialOrder(addr, tokenID, credentials)
+	plan := credentialAttemptPlan{attempts: ordered}
 	if len(credentials) == 0 {
 		return plan
 	}
-	plan.modelCredential = credentials[0]
+	plan.modelCredential = plan.attempts[0]
 	if s.quota == nil {
 		return plan
 	}
@@ -35,7 +38,7 @@ func (s *Server) planCredentialAttempts(ctx context.Context, addr routing.ModelA
 	}
 	attempts := make([]provider.BearerCredential, 0, len(credentials))
 	var retryAfter *time.Time
-	for _, credential := range credentials {
+	for _, credential := range ordered {
 		block, ok := blocked[credential.ID]
 		if !ok {
 			attempts = append(attempts, credential)
@@ -53,8 +56,36 @@ func (s *Server) planCredentialAttempts(ctx context.Context, addr routing.ModelA
 		return plan
 	}
 	plan.attempts = attempts
-	plan.modelCredential = attempts[0]
+	plan.modelCredential = plan.attempts[0]
 	return plan
+}
+
+func affinityCredentialOrder(addr routing.ModelAddress, tokenID int64, credentials []provider.BearerCredential) []provider.BearerCredential {
+	if len(credentials) < 2 {
+		return credentials
+	}
+	start := credentialAffinityStart(addr, tokenID, len(credentials))
+	if start == 0 {
+		return credentials
+	}
+	out := make([]provider.BearerCredential, 0, len(credentials))
+	out = append(out, credentials[start:]...)
+	out = append(out, credentials[:start]...)
+	return out
+}
+
+func credentialAffinityStart(addr routing.ModelAddress, tokenID int64, size int) int {
+	if size <= 1 {
+		return 0
+	}
+	h := fnv.New64a()
+	_, _ = h.Write([]byte("ilonasin-credential-affinity-v1\x00"))
+	_, _ = h.Write([]byte(strconv.FormatInt(tokenID, 10)))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(addr.ProviderInstanceID))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(addr.ProviderModelID))
+	return int(h.Sum64() % uint64(size))
 }
 
 func quotaRetryAfter(a, b *time.Time) *time.Time {

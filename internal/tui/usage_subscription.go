@@ -2,10 +2,13 @@ package tui
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"ilonasin/internal/management"
 )
@@ -26,31 +29,19 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 		))
 		b.WriteByte('\n')
 	}
-	for _, row := range m.subscriptionRows {
-		state := "fresh"
-		if row.Stale || row.ErrorClass != "" {
-			state = "stale"
+	for groupIndex, group := range subscriptionUsageGroups(m.subscriptionRows) {
+		if groupIndex > 0 {
+			b.WriteByte('\n')
 		}
-		if row.ErrorClass != "" {
-			state = "error"
-		}
-		lines := []string{
-			metricLine(
-				statusBadge(state),
-				highlightedIdentity(row.AccountDisplayLabel, "subscription"),
-				metricChip("provider", row.ProviderInstanceID),
-				metricChip("credential", fmt.Sprintf("%d", row.CredentialID)),
-				metricChip("plan", row.PlanLabel),
-			),
-			subscriptionAccountMetaLine(row, now),
-		}
-		if row.ErrorClass != "" {
-			lines = append(lines, badBadgeStyle.Render("error")+" "+safeDisplay(row.ErrorClass))
-		} else {
-			lines = append(lines, subscriptionAccountWindowLines(row, subscriptionCardWidth(width), now)...)
-		}
-		b.WriteString(subscriptionAccountBlock(lines...))
+		b.WriteString(subscriptionGroupHeader(group, width))
 		b.WriteByte('\n')
+		for rowIndex, row := range group.rows {
+			if rowIndex > 0 {
+				b.WriteByte('\n')
+			}
+			b.WriteString(subscriptionAccountRow(row, width, now))
+			b.WriteByte('\n')
+		}
 	}
 	b.WriteString("\n")
 	b.WriteString(renderPaneSubhead(width, "Subscription pools", fmt.Sprintf("pools %d", len(m.subscriptionPools))))
@@ -92,6 +83,188 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 	}
 	b.WriteString(strings.Join(lines, "\n"))
 	b.WriteByte('\n')
+}
+
+type subscriptionUsageGroup struct {
+	provider string
+	limitID  string
+	label    string
+	rows     []management.SubscriptionUsageRow
+}
+
+func subscriptionUsageGroups(rows []management.SubscriptionUsageRow) []subscriptionUsageGroup {
+	groups := []subscriptionUsageGroup{}
+	index := map[string]int{}
+	for _, row := range rows {
+		provider := safeDisplay(row.ProviderInstanceID)
+		limitID := safeDisplay(row.LimitID)
+		keyProvider := safeSubscriptionGroupKey(row.ProviderInstanceID)
+		keyLimit := safeSubscriptionGroupKey(row.LimitID)
+		if keyLimit == "" {
+			keyLimit = safeSubscriptionGroupKey(row.LimitName)
+		}
+		key := keyProvider + "\x00" + keyLimit
+		position, ok := index[key]
+		if !ok {
+			group := subscriptionUsageGroup{
+				provider: provider,
+				limitID:  limitID,
+				label:    subscriptionLimitLabel(row.LimitName, row.LimitID),
+			}
+			groups = append(groups, group)
+			position = len(groups) - 1
+			index[key] = position
+		}
+		groups[position].rows = append(groups[position].rows, row)
+	}
+	return groups
+}
+
+func safeSubscriptionGroupKey(value string) string {
+	return safeSubscriptionGroupKeyWithPattern(value, unsafeDisplayPattern)
+}
+
+func safeSubscriptionGroupKeyWithPattern(value string, unsafe *regexp.Regexp) string {
+	value = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, strings.TrimSpace(value))
+	if value == "" {
+		return ""
+	}
+	if unsafe.MatchString(value) {
+		return "[redacted]"
+	}
+	return value
+}
+
+func subscriptionGroupHeader(group subscriptionUsageGroup, width int) string {
+	label := group.label
+	if label == "" {
+		label = group.limitID
+	}
+	if label == "" {
+		label = "limit"
+	}
+	return wrapSubscriptionMetricLine(width,
+		metricChip("group", "accounts"),
+		cardTitleStyle.Render(label),
+		metricChip("provider", group.provider),
+		metricChip("accounts", fmt.Sprintf("%d", len(group.rows))),
+	)
+}
+
+func subscriptionAccountRow(row management.SubscriptionUsageRow, width int, now time.Time) string {
+	state := "fresh"
+	if row.Stale || row.ErrorClass != "" {
+		state = "stale"
+	}
+	if row.ErrorClass != "" {
+		state = "error"
+	}
+	lines := []string{
+		wrapSubscriptionMetricLine(width,
+			statusBadge(state),
+			wrappedSubscriptionIdentity(row.AccountDisplayLabel, width),
+			metricChip("provider", row.ProviderInstanceID),
+			metricChip("credential", fmt.Sprintf("%d", row.CredentialID)),
+			metricChip("plan", row.PlanLabel),
+		),
+		subscriptionAccountMetaLine(row, width, now),
+	}
+	if row.ErrorClass != "" {
+		lines = append(lines, badBadgeStyle.Render("error")+" "+safeDisplay(row.ErrorClass))
+	} else {
+		lines = append(lines, subscriptionAccountWindowLines(row, subscriptionCardWidth(width), now)...)
+	}
+	return subscriptionAccountBlock(lines...)
+}
+
+func wrappedSubscriptionIdentity(label string, width int) string {
+	identity := safeSubscriptionWrappedAccountDisplay(label)
+	if identity == "" {
+		return warnBadgeStyle.Render("email") + " " + mutedStyle.Render("not captured")
+	}
+	if identity == "[redacted]" {
+		return warnBadgeStyle.Render("identity") + " " + mutedStyle.Render("redacted")
+	}
+	field := "identity"
+	if looksLikeEmail(identity) {
+		field = "email"
+	}
+	prefix := identityStyle.Render(field)
+	available := width - ansi.StringWidth(prefix) - 1
+	if available < 8 {
+		available = width
+	}
+	chunks := wrapSubscriptionDisplayChunks(identity, available)
+	if len(chunks) == 0 {
+		return prefix
+	}
+	lines := []string{prefix + " " + valueStyle.Bold(true).Render(chunks[0])}
+	for _, chunk := range chunks[1:] {
+		lines = append(lines, valueStyle.Bold(true).Render(chunk))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func safeSubscriptionWrappedAccountDisplay(value string) string {
+	return safeSubscriptionGroupKeyWithPattern(value, unsafeAccountDisplayPattern)
+}
+
+func wrapSubscriptionMetricLine(width int, parts ...string) string {
+	lines := make([]string, 0, 1)
+	current := ""
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if current == "" {
+			current = part
+			continue
+		}
+		candidate := current + "  " + part
+		if width > 0 && ansi.StringWidth(candidate) > width {
+			lines = append(lines, current)
+			current = part
+			continue
+		}
+		current = candidate
+	}
+	if current != "" {
+		lines = append(lines, current)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func wrapSubscriptionDisplayChunks(value string, width int) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	if width <= 0 || ansi.StringWidth(value) <= width {
+		return []string{value}
+	}
+	if width < 1 {
+		width = 1
+	}
+	chunks := []string{}
+	var b strings.Builder
+	for _, r := range value {
+		candidate := b.String() + string(r)
+		if b.Len() > 0 && ansi.StringWidth(candidate) > width {
+			chunks = append(chunks, b.String())
+			b.Reset()
+		}
+		b.WriteRune(r)
+	}
+	if b.Len() > 0 {
+		chunks = append(chunks, b.String())
+	}
+	return chunks
 }
 
 func subscriptionAccountBlock(lines ...string) string {
@@ -220,13 +393,13 @@ func subscriptionPoolWindowLines(row management.SubscriptionUsageAggregate, widt
 			window.AccountCount,
 			window.StaleCount,
 			resetLocalText("earliest reset", window.EarliestResetAt, now),
-			gaugeBarWidth(width),
+			poolGaugeBarWidth(width),
 		))
 	}
 	return lines
 }
 
-func subscriptionAccountMetaLine(row management.SubscriptionUsageRow, now time.Time) string {
+func subscriptionAccountMetaLine(row management.SubscriptionUsageRow, width int, now time.Time) string {
 	parts := []string{}
 	if limit := subscriptionLimitLabel(row.LimitName, row.LimitID); limit != "" {
 		parts = append(parts, metricChip("limit", limit))
@@ -241,7 +414,7 @@ func subscriptionAccountMetaLine(row management.SubscriptionUsageRow, now time.T
 		parts = append(parts, metricChip("type", row.PlanType))
 	}
 	parts = append(parts, timeChip("observed", now, row.ObservedAt))
-	return metricLine(parts...)
+	return wrapSubscriptionMetricLine(width, parts...)
 }
 
 func gaugeBarWidth(width int) int {
@@ -252,6 +425,17 @@ func gaugeBarWidth(width int) int {
 		return 16
 	default:
 		return 24
+	}
+}
+
+func poolGaugeBarWidth(width int) int {
+	switch {
+	case width < 90:
+		return 8
+	case width < 130:
+		return 12
+	default:
+		return 18
 	}
 }
 

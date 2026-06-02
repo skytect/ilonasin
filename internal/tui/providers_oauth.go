@@ -2,10 +2,13 @@ package tui
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"ilonasin/internal/management"
 )
@@ -75,9 +78,10 @@ func oauthCredentialRow(row management.OAuthCredential, selected bool, now time.
 		expires,
 		metricChip("refresh", refresh),
 	)
-	identity := highlightedIdentity(row.AccountDisplayLabel, "OAuth account")
+	head = wrapMetricLine(width, strings.Split(head, "  ")...)
+	identity := wrappedIdentity(row.AccountDisplayLabel, width)
 	if width >= 118 {
-		head = metricLine(head, identity)
+		head = wrapMetricLine(width, head, identity)
 		identity = ""
 	}
 	if refreshDescription := safeRefreshFailureDescriptionDisplay(row.RefreshFailureDescription); refreshDescription != "" {
@@ -87,16 +91,118 @@ func oauthCredentialRow(row management.OAuthCredential, selected bool, now time.
 }
 
 func providerAccountRow(row management.ProviderAccount, width int) string {
-	identity := highlightedIdentity(row.DisplayLabel, "provider account")
+	identity := wrappedIdentity(row.DisplayLabel, width)
 	meta := metricLine(
 		metricChip("provider", row.ProviderInstanceID),
 		metricChip("credential", fmt.Sprintf("%d", row.CredentialID)),
 		metricChip("plan", row.PlanLabel),
 	)
+	meta = wrapMetricLine(width, strings.Split(meta, "  ")...)
 	if width >= 112 {
-		return metricLine(identity, meta)
+		return wrapMetricLine(width, identity, meta)
 	}
 	return compactProviderLines(identity, meta)
+}
+
+func wrappedIdentity(label string, width int) string {
+	identity := safeWrappedAccountDisplay(label)
+	if identity == "" {
+		return warnBadgeStyle.Render("email") + " " + mutedStyle.Render("not captured")
+	}
+	if identity == "[redacted]" {
+		return warnBadgeStyle.Render("identity") + " " + mutedStyle.Render("redacted")
+	}
+	field := "identity"
+	if looksLikeEmail(identity) {
+		field = "email"
+	}
+	prefix := identityStyle.Render(field)
+	available := width - ansi.StringWidth(prefix) - 1
+	if available < 8 {
+		available = width
+	}
+	chunks := wrapPlainDisplayChunks(identity, available)
+	if len(chunks) == 0 {
+		return prefix
+	}
+	lines := []string{prefix + " " + valueStyle.Bold(true).Render(chunks[0])}
+	for _, chunk := range chunks[1:] {
+		lines = append(lines, valueStyle.Bold(true).Render(chunk))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func safeWrappedAccountDisplay(value string) string {
+	return safeWrappedDisplayWithPattern(value, unsafeAccountDisplayPattern)
+}
+
+func safeWrappedDisplayWithPattern(value string, unsafe *regexp.Regexp) string {
+	value = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, strings.TrimSpace(value))
+	if value == "" {
+		return ""
+	}
+	if unsafe.MatchString(value) {
+		return "[redacted]"
+	}
+	return value
+}
+
+func wrapMetricLine(width int, parts ...string) string {
+	lines := make([]string, 0, 1)
+	current := ""
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if current == "" {
+			current = part
+			continue
+		}
+		candidate := current + "  " + part
+		if width > 0 && ansi.StringWidth(candidate) > width {
+			lines = append(lines, current)
+			current = part
+			continue
+		}
+		current = candidate
+	}
+	if current != "" {
+		lines = append(lines, current)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func wrapPlainDisplayChunks(value string, width int) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	if width <= 0 || ansi.StringWidth(value) <= width {
+		return []string{value}
+	}
+	if width < 1 {
+		width = 1
+	}
+	chunks := []string{}
+	var b strings.Builder
+	for _, r := range value {
+		candidate := b.String() + string(r)
+		if b.Len() > 0 && ansi.StringWidth(candidate) > width {
+			chunks = append(chunks, b.String())
+			b.Reset()
+		}
+		b.WriteRune(r)
+	}
+	if b.Len() > 0 {
+		chunks = append(chunks, b.String())
+	}
+	return chunks
 }
 
 func compactProviderLines(lines ...string) string {

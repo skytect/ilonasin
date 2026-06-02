@@ -58,5 +58,6 @@ func (m *Model) applySnapshot(snapshot management.ManagementSnapshotResponse) {
 func (m *Model) applySubscriptionUsage(resp management.SubscriptionUsageResponse) {
 	m.subscriptionRows = append([]management.SubscriptionUsageRow(nil), resp.Accounts...)
 	m.subscriptionPools = append([]management.SubscriptionUsageAggregate(nil), resp.Pools...)
+	m.subscriptionObservedAt = resp.ObservedAt
 	m.keepaliveStatus = resp.Keepalive
 }

@@ -8,6 +8,25 @@ import (
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case subscriptionUsageAutoRefreshTickMsg:
+		cmds := []tea.Cmd{subscriptionUsageAutoRefreshTickCmd(subscriptionUsageAutoRefreshInterval)}
+		if !m.subscriptionRefreshInFlight && m.subscriptionUsageIsStale(m.nowTime()) {
+			m.subscriptionRefreshInFlight = true
+			cmds = append(cmds, m.refreshSubscriptionUsageCmd(false))
+		}
+		return m, tea.Batch(cmds...)
+	case subscriptionUsageRefreshedMsg:
+		m.subscriptionRefreshInFlight = false
+		if msg.err != nil {
+			m.logError(context.Background(), "tui_subscription_usage_refresh_failed", msg.err)
+			if msg.manual {
+				m.err = "subscription usage refresh failed"
+			}
+			return m, nil
+		}
+		m.applySubscriptionUsage(msg.response)
+		_ = m.reload()
+		return m, nil
 	case oauthLoginStartedMsg:
 		if msg.err != nil {
 			m.logError(context.Background(), "tui_oauth_login_start_failed", msg.err)

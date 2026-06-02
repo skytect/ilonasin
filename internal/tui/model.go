@@ -11,52 +11,54 @@ import (
 )
 
 type Model struct {
-	snapshot          management.SnapshotClient
-	tokens            management.LocalTokenClient
-	upstreams         management.UpstreamCredentialClient
-	oauth             management.OAuthClient
-	pruner            management.TelemetryPruneClient
-	subscriptionUsage management.SubscriptionUsageClient
-	logger            *slog.Logger
-	now               func() time.Time
-	runtime           management.RuntimeStatus
-	tokenRows         []management.LocalToken
-	providers         []management.ProviderInstance
-	credentials       []management.UpstreamCredential
-	fallbackPolicies  []management.FallbackPolicy
-	oauthRows         []management.OAuthCredential
-	accountRows       []management.ProviderAccount
-	modelRows         []management.ModelMetadata
-	requestRows       []management.RequestSummary
-	usageRows         []management.UsageSummary
-	latencyRows       []management.LatencySummary
-	streamRows        []management.StreamSummary
-	healthRows        []management.HealthSummary
-	fallbackRows      []management.FallbackSummary
-	quotaRows         []management.QuotaSummary
-	subscriptionRows  []management.SubscriptionUsageRow
-	subscriptionPools []management.SubscriptionUsageAggregate
-	keepaliveStatus   management.KeepaliveStatus
-	pruneResult       *management.PruneResult
-	pruningAvailable  bool
-	width             int
-	height            int
-	renderWidth       int
-	activeTab         tuiTab
-	paneFocus         [tuiTabCount]int
-	paneScrollOffsets [tuiTabCount][maxDashboardPanes]int
-	selected          int
-	oauthSelected     int
-	revealTokenID     int64
-	revealTokenPrefix string
-	revealTokenLast4  string
-	apiKeyMode        bool
-	apiKeyProvider    string
-	apiKeyInput       string
-	oauthChallenge    *management.OAuthDeviceLoginChallenge
-	oauthCtx          context.Context
-	oauthCancel       context.CancelFunc
-	err               string
+	snapshot                    management.SnapshotClient
+	tokens                      management.LocalTokenClient
+	upstreams                   management.UpstreamCredentialClient
+	oauth                       management.OAuthClient
+	pruner                      management.TelemetryPruneClient
+	subscriptionUsage           management.SubscriptionUsageClient
+	logger                      *slog.Logger
+	now                         func() time.Time
+	runtime                     management.RuntimeStatus
+	tokenRows                   []management.LocalToken
+	providers                   []management.ProviderInstance
+	credentials                 []management.UpstreamCredential
+	fallbackPolicies            []management.FallbackPolicy
+	oauthRows                   []management.OAuthCredential
+	accountRows                 []management.ProviderAccount
+	modelRows                   []management.ModelMetadata
+	requestRows                 []management.RequestSummary
+	usageRows                   []management.UsageSummary
+	latencyRows                 []management.LatencySummary
+	streamRows                  []management.StreamSummary
+	healthRows                  []management.HealthSummary
+	fallbackRows                []management.FallbackSummary
+	quotaRows                   []management.QuotaSummary
+	subscriptionRows            []management.SubscriptionUsageRow
+	subscriptionPools           []management.SubscriptionUsageAggregate
+	keepaliveStatus             management.KeepaliveStatus
+	subscriptionObservedAt      time.Time
+	subscriptionRefreshInFlight bool
+	pruneResult                 *management.PruneResult
+	pruningAvailable            bool
+	width                       int
+	height                      int
+	renderWidth                 int
+	activeTab                   tuiTab
+	paneFocus                   [tuiTabCount]int
+	paneScrollOffsets           [tuiTabCount][maxDashboardPanes]int
+	selected                    int
+	oauthSelected               int
+	revealTokenID               int64
+	revealTokenPrefix           string
+	revealTokenLast4            string
+	apiKeyMode                  bool
+	apiKeyProvider              string
+	apiKeyInput                 string
+	oauthChallenge              *management.OAuthDeviceLoginChallenge
+	oauthCtx                    context.Context
+	oauthCancel                 context.CancelFunc
+	err                         string
 }
 
 type tuiTab int
@@ -86,5 +88,5 @@ func NewModel(tokens management.LocalTokenClient, upstreams management.UpstreamC
 }
 
 func (m Model) Init() tea.Cmd {
-	return nil
+	return subscriptionUsageAutoRefreshTickCmd(0)
 }

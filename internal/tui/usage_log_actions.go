@@ -41,18 +41,11 @@ func (m Model) pruneTelemetryAction() (tea.Model, tea.Cmd) {
 
 func (m Model) refreshSubscriptionUsageAction() (tea.Model, tea.Cmd) {
 	m.clearReveal()
-	if m.subscriptionUsage == nil {
+	if m.subscriptionUsage == nil || m.subscriptionRefreshInFlight {
 		return m, nil
 	}
-	resp, err := m.subscriptionUsage.RefreshSubscriptionUsage(context.Background())
-	if err != nil {
-		m.logError(context.Background(), "tui_subscription_usage_refresh_failed", err)
-		m.err = "subscription usage refresh failed"
-		return m, nil
-	}
-	m.applySubscriptionUsage(resp)
-	_ = m.reload()
-	return m, nil
+	m.subscriptionRefreshInFlight = true
+	return m, m.refreshSubscriptionUsageCmd(true)
 }
 
 func (m *Model) pruneTelemetry() error {

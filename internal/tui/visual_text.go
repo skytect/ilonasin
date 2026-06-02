@@ -38,6 +38,59 @@ func metricLine(parts ...string) string {
 	return strings.Join(out, "  ")
 }
 
+func wrappedMetricLine(width int, parts ...string) string {
+	lines := make([]string, 0, 1)
+	current := ""
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if current == "" {
+			current = part
+			continue
+		}
+		candidate := current + "  " + part
+		if width > 0 && ansi.StringWidth(candidate) > width {
+			lines = append(lines, current)
+			current = part
+			continue
+		}
+		current = candidate
+	}
+	if current != "" {
+		lines = append(lines, current)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func wrapDisplayChunks(value string, width int) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	if width <= 0 || ansi.StringWidth(value) <= width {
+		return []string{value}
+	}
+	if width < 1 {
+		width = 1
+	}
+	chunks := []string{}
+	var b strings.Builder
+	for _, r := range value {
+		candidate := b.String() + string(r)
+		if b.Len() > 0 && ansi.StringWidth(candidate) > width {
+			chunks = append(chunks, b.String())
+			b.Reset()
+		}
+		b.WriteRune(r)
+	}
+	if b.Len() > 0 {
+		chunks = append(chunks, b.String())
+	}
+	return chunks
+}
+
 func statusBadge(state string) string {
 	state = strings.TrimSpace(state)
 	switch state {

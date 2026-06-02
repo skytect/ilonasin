@@ -36,6 +36,30 @@ func safeAccountDisplay(value string) string {
 	return safeDisplayWithPattern(value, unsafeAccountDisplayPattern)
 }
 
+func safeWrappedDisplay(value string) string {
+	return safeWrappedDisplayWithPattern(value, unsafeDisplayPattern)
+}
+
+func safeWrappedAccountDisplay(value string) string {
+	return safeWrappedDisplayWithPattern(value, unsafeAccountDisplayPattern)
+}
+
+func safeWrappedDisplayWithPattern(value string, unsafe *regexp.Regexp) string {
+	value = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, strings.TrimSpace(value))
+	if value == "" {
+		return ""
+	}
+	if unsafe.MatchString(value) {
+		return "[redacted]"
+	}
+	return value
+}
+
 func safeDisplayWithPattern(value string, unsafe *regexp.Regexp) string {
 	value = strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) {

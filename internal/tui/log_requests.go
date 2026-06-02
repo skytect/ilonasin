@@ -2,12 +2,8 @@ package tui
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
-	"unicode"
-
-	"github.com/charmbracelet/x/ansi"
 
 	"ilonasin/internal/management"
 )
@@ -36,7 +32,7 @@ func (m Model) writeRecentRequests(b *strings.Builder) {
 
 func requestSummaryRow(row management.RequestSummary, nowTime time.Time, width int) string {
 	state := statusState(row.HTTPStatus, row.ErrorClass)
-	head := wrapRequestMetricLine(width,
+	head := wrappedMetricLine(width,
 		statusBadge(state),
 		endpointMetricChip("route", row.Endpoint),
 		cardTitleStyle.Render(wrappedRequestModelDisplay(row, width)),
@@ -44,12 +40,12 @@ func requestSummaryRow(row management.RequestSummary, nowTime time.Time, width i
 		timeChip("at", nowTime, row.StartedAt),
 		streamChip(row.Stream),
 	)
-	tokens := wrapRequestMetricLine(width,
+	tokens := wrappedMetricLine(width,
 		compactTokenMixLine(row.PromptTokens, row.CompletionTokens, row.ReasoningTokens, row.CacheHitTokens, row.CacheMissTokens, row.CacheWriteTokens, width),
 		metricChip("total", compactInt(row.TotalTokens)),
 		compactRateBars(width, rateMetric{"hit", row.CacheHitRate * 100}),
 	)
-	route := wrapRequestMetricLine(width,
+	route := wrappedMetricLine(width,
 		mutedStyle.Render(credentialDisplay(row.CredentialID, row.CredentialLabel)),
 		metricChip("try", fmt.Sprintf("%d", row.AttemptCount)),
 		metricChip("auth", fmt.Sprintf("%d", row.AuthRetryCount)),
@@ -96,7 +92,7 @@ func requestSummaryExtras(row management.RequestSummary, width int) string {
 	if row.ThinkingType != "" {
 		parts = append(parts, metricChip("thinking", row.ThinkingType))
 	}
-	return wrapRequestMetricLine(width, parts...)
+	return wrappedMetricLine(width, parts...)
 }
 
 func wrappedRequestModelDisplay(row management.RequestSummary, width int) string {
@@ -119,80 +115,11 @@ func wrappedRequestModelDisplay(row management.RequestSummary, width int) string
 	requested := safeWrappedRequestDisplay(requestedProvider) + "/" + safeWrappedRequestDisplay(requestedModel)
 	resolved := safeWrappedRequestDisplay(resolvedProvider) + "/" + safeWrappedRequestDisplay(resolvedModel)
 	if requested != resolved {
-		return strings.Join(wrapRequestDisplayChunks(requested+" -> "+resolved, width), "\n")
+		return strings.Join(wrapDisplayChunks(requested+" -> "+resolved, width), "\n")
 	}
-	return strings.Join(wrapRequestDisplayChunks(resolved, width), "\n")
+	return strings.Join(wrapDisplayChunks(resolved, width), "\n")
 }
 
 func safeWrappedRequestDisplay(value string) string {
-	return safeWrappedRequestDisplayWithPattern(value, unsafeDisplayPattern)
-}
-
-func safeWrappedRequestDisplayWithPattern(value string, unsafe *regexp.Regexp) string {
-	value = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
-			return -1
-		}
-		return r
-	}, strings.TrimSpace(value))
-	if value == "" {
-		return ""
-	}
-	if unsafe.MatchString(value) {
-		return "[redacted]"
-	}
-	return value
-}
-
-func wrapRequestDisplayChunks(value string, width int) []string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return nil
-	}
-	if width <= 0 || ansi.StringWidth(value) <= width {
-		return []string{value}
-	}
-	if width < 1 {
-		width = 1
-	}
-	chunks := []string{}
-	var b strings.Builder
-	for _, r := range value {
-		candidate := b.String() + string(r)
-		if b.Len() > 0 && ansi.StringWidth(candidate) > width {
-			chunks = append(chunks, b.String())
-			b.Reset()
-		}
-		b.WriteRune(r)
-	}
-	if b.Len() > 0 {
-		chunks = append(chunks, b.String())
-	}
-	return chunks
-}
-
-func wrapRequestMetricLine(width int, parts ...string) string {
-	lines := make([]string, 0, 1)
-	current := ""
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		if current == "" {
-			current = part
-			continue
-		}
-		candidate := current + "  " + part
-		if width > 0 && ansi.StringWidth(candidate) > width {
-			lines = append(lines, current)
-			current = part
-			continue
-		}
-		current = candidate
-	}
-	if current != "" {
-		lines = append(lines, current)
-	}
-	return strings.Join(lines, "\n")
+	return safeWrappedDisplay(value)
 }

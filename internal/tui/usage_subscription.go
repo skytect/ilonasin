@@ -2,10 +2,8 @@ package tui
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -121,23 +119,7 @@ func subscriptionUsageGroups(rows []management.SubscriptionUsageRow) []subscript
 }
 
 func safeSubscriptionGroupKey(value string) string {
-	return safeSubscriptionGroupKeyWithPattern(value, unsafeDisplayPattern)
-}
-
-func safeSubscriptionGroupKeyWithPattern(value string, unsafe *regexp.Regexp) string {
-	value = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
-			return -1
-		}
-		return r
-	}, strings.TrimSpace(value))
-	if value == "" {
-		return ""
-	}
-	if unsafe.MatchString(value) {
-		return "[redacted]"
-	}
-	return value
+	return safeWrappedDisplay(value)
 }
 
 func subscriptionGroupHeader(group subscriptionUsageGroup, width int) string {
@@ -148,7 +130,7 @@ func subscriptionGroupHeader(group subscriptionUsageGroup, width int) string {
 	if label == "" {
 		label = "limit"
 	}
-	return wrapSubscriptionMetricLine(width,
+	return wrappedMetricLine(width,
 		metricChip("group", "accounts"),
 		cardTitleStyle.Render(label),
 		metricChip("provider", group.provider),
@@ -165,7 +147,7 @@ func subscriptionAccountRow(row management.SubscriptionUsageRow, width int, now 
 		state = "error"
 	}
 	lines := []string{
-		wrapSubscriptionMetricLine(width,
+		wrappedMetricLine(width,
 			statusBadge(state),
 			wrappedSubscriptionIdentity(row.AccountDisplayLabel, width),
 			metricChip("provider", row.ProviderInstanceID),
@@ -199,7 +181,7 @@ func wrappedSubscriptionIdentity(label string, width int) string {
 	if available < 8 {
 		available = width
 	}
-	chunks := wrapSubscriptionDisplayChunks(identity, available)
+	chunks := wrapDisplayChunks(identity, available)
 	if len(chunks) == 0 {
 		return prefix
 	}
@@ -211,60 +193,7 @@ func wrappedSubscriptionIdentity(label string, width int) string {
 }
 
 func safeSubscriptionWrappedAccountDisplay(value string) string {
-	return safeSubscriptionGroupKeyWithPattern(value, unsafeAccountDisplayPattern)
-}
-
-func wrapSubscriptionMetricLine(width int, parts ...string) string {
-	lines := make([]string, 0, 1)
-	current := ""
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		if current == "" {
-			current = part
-			continue
-		}
-		candidate := current + "  " + part
-		if width > 0 && ansi.StringWidth(candidate) > width {
-			lines = append(lines, current)
-			current = part
-			continue
-		}
-		current = candidate
-	}
-	if current != "" {
-		lines = append(lines, current)
-	}
-	return strings.Join(lines, "\n")
-}
-
-func wrapSubscriptionDisplayChunks(value string, width int) []string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return nil
-	}
-	if width <= 0 || ansi.StringWidth(value) <= width {
-		return []string{value}
-	}
-	if width < 1 {
-		width = 1
-	}
-	chunks := []string{}
-	var b strings.Builder
-	for _, r := range value {
-		candidate := b.String() + string(r)
-		if b.Len() > 0 && ansi.StringWidth(candidate) > width {
-			chunks = append(chunks, b.String())
-			b.Reset()
-		}
-		b.WriteRune(r)
-	}
-	if b.Len() > 0 {
-		chunks = append(chunks, b.String())
-	}
-	return chunks
+	return safeWrappedDisplayWithPattern(value, unsafeAccountDisplayPattern)
 }
 
 func subscriptionAccountBlock(lines ...string) string {
@@ -414,7 +343,7 @@ func subscriptionAccountMetaLine(row management.SubscriptionUsageRow, width int,
 		parts = append(parts, metricChip("type", row.PlanType))
 	}
 	parts = append(parts, timeChip("observed", now, row.ObservedAt))
-	return wrapSubscriptionMetricLine(width, parts...)
+	return wrappedMetricLine(width, parts...)
 }
 
 func gaugeBarWidth(width int) int {

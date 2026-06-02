@@ -59,7 +59,7 @@ The current blockers are narrower:
 | Workspace edit | custom local provider | Pass for tested Codex apply-patch path | None in latest smoke | Keep covered; broader tool parity remains separate |
 | Codex CLI through DeepSeek | custom local provider | Pass | None in Plan 098 smoke | Keep covered |
 | Codex CLI through OpenRouter | custom local provider | Partial | Old local tool-type blocker absent; latest safe metadata showed upstream/provider response failure for the tested model. | Investigate OpenRouter model/tool response behavior |
-| Model discovery | `GET /v1/models` | Partial | Primary Codex credential 401 can hide secondary credentials | Make primary credential health explicit |
+| Model discovery | `GET /v1/models` | Needs live rerun | Historical audit found a primary-credential-only failure mode. Current code inspection shows pooled credential resolution and per-attempt health recording are implemented. | Rerun isolated multi-credential model-discovery smoke before broad switching |
 
 ## Endpoint Evidence
 

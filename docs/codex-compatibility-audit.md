@@ -51,11 +51,15 @@ credentials already configured in `~/.ilonasin`. It used a temporary
 tokens created through the management API. The audit tokens were disabled after
 the smoke.
 
-The primary Codex OAuth credential in the real database currently returns 401
-for model discovery and has `refresh_unauthorized` refresh state. The live
+At audit time, the primary Codex OAuth credential in the real database returned
+401 for model discovery and had `refresh_unauthorized` refresh state. The live
 switch-gate smoke temporarily disabled that credential, restored it during
-cleanup, and used the next real Codex credential. This is a real deployment
-hazard: non-pooled model discovery still uses the primary credential only.
+cleanup, and used the next real Codex credential. That was a real historical
+deployment hazard in the audited worktree. Current code inspection shows model
+discovery now resolves the currently eligible credential pool, attempts
+materialized credentials in order, refreshes a Codex OAuth 401 attempt once
+when possible, and records health per attempted credential. This code status
+does not replace a future live switch-gate rerun against real credentials.
 
 The smoke did not copy the user's real `~/.ilonasin`, Codex auth state, OAuth
 token state, logs, cache, SQLite files, WAL/SHM files, or account state into a
@@ -104,7 +108,7 @@ compatible coding-agent backend.
 | --- | --- | --- | --- | --- | --- |
 | Root base URL text | `POST /responses` | Pass | Live `codex exec` exited 0 against the real Codex provider instance. Local metadata recorded one 200 row. | Text-only root-base use works. | Keep covered in smokes. |
 | `/v1` base URL text | `POST /v1/responses` | Pass | Live `codex exec` exited 0 against the real Codex provider instance. Local metadata recorded one 200 row. | Text-only `/v1` use works. | Keep covered in smokes. |
-| Model discovery | `GET /models`, `GET /v1/models` | Partial | With credential 1 temporarily disabled, live discovery returned Codex rows with `chat,parallel_tool_calls,reasoning,responses,service_tier,stream,tools,vision`. With credential 1 enabled, Codex discovery gets 401 from the primary credential. | Model metadata is now shaped correctly, but primary credential health can hide valid secondary accounts. | Make model discovery health and credential selection explicit before broad use. |
+| Model discovery | `GET /models`, `GET /v1/models` | Needs live rerun | Historical audit: with credential 1 temporarily disabled, live discovery returned Codex rows with `chat,parallel_tool_calls,reasoning,responses,service_tier,stream,tools,vision`; with credential 1 enabled, the audited worktree got 401 from the primary credential. Current code inspection shows pooled credential resolution and per-attempt health recording are implemented. | Model metadata is shaped correctly, and the old primary-credential-only discovery hazard is resolved in code. Live switch-gate evidence should be refreshed before broad use. | Rerun model discovery in an isolated switch-gate smoke with multiple real credentials and verify per-attempt health. |
 | Developer/system instructions | Responses text route | Pass | Live `codex exec` with `developer_instructions` exited 0 and recorded a 200 row. | Basic developer instruction routing works. | Keep covered in smokes. |
 | Codex CLI through DeepSeek | `POST /v1/responses` | Pass | Plan 098 live `codex exec` against `pragnition-deepseek/deepseek-v4-flash` exited 0. Fake-upstream smoke also proved mixed Codex-style tool definitions are filtered to representable Chat function tools and `parallel_tool_calls` is not forwarded to DeepSeek. | Basic Codex CLI text routing through DeepSeek now works. | Keep covered in switch-gate smokes. |
 | Codex CLI through OpenRouter | `POST /v1/responses` | Partial | Plan 098 live `codex exec` against `pragnition-openrouter/anthropic/claude-3-haiku` exited nonzero, but the old local `tools[n].type is unsupported` blocker and DeepSeek-only `parallel_tool_calls` blocker were absent. Safe metadata showed upstream/provider response failure for the tested model. Fake-upstream smokes prove mixed tool filtering, OpenRouter `parallel_tool_calls` forwarding, and local rejection of Codex custom-tool transcript items before upstream. | Local tool-family validation no longer blocks the route, but the tested OpenRouter model path is not ready. | Investigate OpenRouter provider/model tool response behavior. |
@@ -143,11 +147,12 @@ compatible coding-agent backend.
    still failed at the provider-response layer, so OpenRouter is not ready for
    broad Codex CLI use.
 
-3. Primary Codex credential health can hide valid secondary accounts.
+3. Model discovery needs refreshed live switch-gate evidence.
 
-   The real primary Codex OAuth credential returned 401 and had
-   `refresh_unauthorized`. The smoke temporarily disabled it and restored it
-   afterward to test the remaining real Codex credential set.
+   The historical audit found a primary-credential-only discovery hazard. Current
+   code inspection shows pooled credential resolution is implemented for model
+   discovery, with per-attempt health rows. A future isolated live smoke should
+   prove the current behavior against the real multi-credential Codex set.
 
 4. Health semantics are upstream-centered.
 
@@ -178,7 +183,7 @@ smoke:
 - workspace edit through `codex exec`,
 - Codex CLI routing through DeepSeek and OpenRouter, including Codex's default
   tool family list and provider-specific tool response behavior,
-- primary credential health and model discovery behavior,
+- historical primary-credential discovery regression behavior,
 - upstream `401`, retryable `5xx`, `429`, and `Retry-After` error paths,
 - privacy scans showing no forbidden local storage or logs.
 

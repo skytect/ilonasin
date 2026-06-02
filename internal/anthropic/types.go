@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"sort"
 	"strings"
 
 	"ilonasin/internal/openai"
@@ -115,12 +116,8 @@ func decodeRequest(r io.Reader, requireMaxTokens bool) (Request, error) {
 	if dec.Decode(&struct{}{}) != io.EOF {
 		return Request{}, errors.New("request body must contain a single JSON object")
 	}
-	for key := range raw {
-		switch key {
-		case "model", "max_tokens", "messages", "system", "stream", "temperature", "top_p", "top_k", "stop_sequences", "tools", "tool_choice", "metadata", "cache_control", "thinking", "context_management", "output_config":
-		default:
-			return Request{}, fmt.Errorf("%s is not supported", key)
-		}
+	if key, ok := firstUnsupportedAnthropicField(raw, "model", "max_tokens", "messages", "system", "stream", "temperature", "top_p", "top_k", "stop_sequences", "tools", "tool_choice", "metadata", "cache_control", "thinking", "context_management", "output_config"); ok {
+		return Request{}, fmt.Errorf("%s is not supported", key)
 	}
 
 	req := Request{}
@@ -355,6 +352,27 @@ func decodeOptionalFloat(raw map[string]json.RawMessage, key string, out **float
 	return nil
 }
 
+func firstUnsupportedAnthropicField(raw map[string]json.RawMessage, allowed ...string) (string, bool) {
+	if len(raw) == 0 {
+		return "", false
+	}
+	allowedSet := make(map[string]bool, len(allowed))
+	for _, key := range allowed {
+		allowedSet[key] = true
+	}
+	keys := make([]string, 0, len(raw))
+	for key := range raw {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if !allowedSet[key] {
+			return key, true
+		}
+	}
+	return "", false
+}
+
 func decodeMessages(raw json.RawMessage, out *[]Message) error {
 	if len(raw) == 0 {
 		return errors.New("messages is required")
@@ -367,12 +385,8 @@ func decodeMessages(raw json.RawMessage, out *[]Message) error {
 		return errors.New("messages must not be empty")
 	}
 	for i, rawMessage := range messages {
-		for key := range rawMessage {
-			switch key {
-			case "role", "content":
-			default:
-				return fmt.Errorf("messages[%d] contains unsupported fields", i)
-			}
+		if key, ok := firstUnsupportedAnthropicField(rawMessage, "role", "content"); ok {
+			return fmt.Errorf("messages[%d].%s is unsupported", i, key)
 		}
 		var role string
 		if err := decodeRequiredRawString(rawMessage["role"], fmt.Sprintf("messages[%d].role", i), &role); err != nil {
@@ -453,10 +467,8 @@ func decodeContentBlock(raw map[string]json.RawMessage, field string) (ContentBl
 	}
 	switch typ {
 	case "text":
-		for key := range raw {
-			if key != "type" && key != "text" && key != "cache_control" {
-				return ContentBlock{}, fmt.Errorf("%s contains unsupported fields", field)
-			}
+		if key, ok := firstUnsupportedAnthropicField(raw, "type", "text", "cache_control"); ok {
+			return ContentBlock{}, fmt.Errorf("%s.%s is unsupported", field, key)
 		}
 		var text string
 		if err := decodeRequiredRawString(raw["text"], field+".text", &text); err != nil {
@@ -464,10 +476,8 @@ func decodeContentBlock(raw map[string]json.RawMessage, field string) (ContentBl
 		}
 		return ContentBlock{Type: "text", Text: text}, nil
 	case "image":
-		for key := range raw {
-			if key != "type" && key != "source" && key != "cache_control" {
-				return ContentBlock{}, fmt.Errorf("%s contains unsupported fields", field)
-			}
+		if key, ok := firstUnsupportedAnthropicField(raw, "type", "source", "cache_control"); ok {
+			return ContentBlock{}, fmt.Errorf("%s.%s is unsupported", field, key)
 		}
 		url, err := decodeImageURL(raw["source"], field+".source")
 		if err != nil {
@@ -475,10 +485,8 @@ func decodeContentBlock(raw map[string]json.RawMessage, field string) (ContentBl
 		}
 		return ContentBlock{Type: "image", SourceURL: url}, nil
 	case "tool_use":
-		for key := range raw {
-			if key != "type" && key != "id" && key != "name" && key != "input" && key != "cache_control" {
-				return ContentBlock{}, fmt.Errorf("%s contains unsupported fields", field)
-			}
+		if key, ok := firstUnsupportedAnthropicField(raw, "type", "id", "name", "input", "cache_control"); ok {
+			return ContentBlock{}, fmt.Errorf("%s.%s is unsupported", field, key)
 		}
 		var id, name string
 		if err := decodeRequiredRawString(raw["id"], field+".id", &id); err != nil {
@@ -499,10 +507,8 @@ func decodeContentBlock(raw map[string]json.RawMessage, field string) (ContentBl
 		}
 		return ContentBlock{Type: "tool_use", ToolUseID: id, ToolName: name, ToolInput: append(json.RawMessage(nil), input...)}, nil
 	case "tool_result":
-		for key := range raw {
-			if key != "type" && key != "tool_use_id" && key != "content" && key != "is_error" && key != "cache_control" {
-				return ContentBlock{}, fmt.Errorf("%s contains unsupported fields", field)
-			}
+		if key, ok := firstUnsupportedAnthropicField(raw, "type", "tool_use_id", "content", "is_error", "cache_control"); ok {
+			return ContentBlock{}, fmt.Errorf("%s.%s is unsupported", field, key)
 		}
 		var id string
 		if err := decodeRequiredRawString(raw["tool_use_id"], field+".tool_use_id", &id); err != nil {
@@ -523,10 +529,8 @@ func decodeImageURL(raw json.RawMessage, field string) (string, error) {
 	if err := json.Unmarshal(raw, &source); err != nil {
 		return "", fmt.Errorf("%s must be an object", field)
 	}
-	for key := range source {
-		if key != "type" && key != "url" {
-			return "", fmt.Errorf("%s contains unsupported fields", field)
-		}
+	if key, ok := firstUnsupportedAnthropicField(source, "type", "url"); ok {
+		return "", fmt.Errorf("%s.%s is unsupported", field, key)
 	}
 	var typ string
 	if err := decodeRequiredRawString(source["type"], field+".type", &typ); err != nil {
@@ -567,12 +571,8 @@ func decodeTools(raw json.RawMessage) ([]Tool, error) {
 	}
 	tools := make([]Tool, 0, len(rawTools))
 	for i, rawTool := range rawTools {
-		for key := range rawTool {
-			switch key {
-			case "name", "description", "input_schema", "cache_control":
-			default:
-				return nil, fmt.Errorf("tools[%d] contains unsupported fields", i)
-			}
+		if key, ok := firstUnsupportedAnthropicField(rawTool, "name", "description", "input_schema", "cache_control"); ok {
+			return nil, fmt.Errorf("tools[%d].%s is unsupported", i, key)
 		}
 		var tool Tool
 		if err := decodeRequiredRawString(rawTool["name"], fmt.Sprintf("tools[%d].name", i), &tool.Name); err != nil {
@@ -630,10 +630,8 @@ func decodeToolChoice(raw json.RawMessage) (string, error) {
 	if err := json.Unmarshal(raw, &obj); err != nil {
 		return "", errors.New("tool_choice must be a string or object")
 	}
-	for key := range obj {
-		if key != "type" {
-			return "", errors.New("tool_choice contains unsupported fields")
-		}
+	if key, ok := firstUnsupportedAnthropicField(obj, "type"); ok {
+		return "", fmt.Errorf("tool_choice.%s is unsupported", key)
 	}
 	var typ string
 	if err := decodeRequiredRawString(obj["type"], "tool_choice.type", &typ); err != nil {

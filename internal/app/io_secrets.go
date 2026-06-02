@@ -4,23 +4,26 @@ import (
 	"context"
 
 	"ilonasin/internal/logging"
-	"ilonasin/internal/storage/sqlite"
 )
 
-func refreshIOConfiguredSecrets(ctx context.Context, ioLogger *logging.IOLogger, store *sqlite.Store) error {
-	if ioLogger == nil || store == nil {
+type credentialSecretSource interface {
+	ListCredentialSecretMaterial(context.Context) ([]string, error)
+}
+
+func refreshIOConfiguredSecrets(ctx context.Context, ioLogger *logging.IOLogger, source credentialSecretSource) error {
+	if ioLogger == nil || source == nil {
 		return nil
 	}
-	secrets, err := store.ListCredentialSecretMaterial(ctx)
+	values, err := source.ListCredentialSecretMaterial(ctx)
 	if err != nil {
 		return err
 	}
-	ioLogger.ReplaceConfiguredSecrets(secrets)
+	ioLogger.ReplaceConfiguredSecrets(values)
 	return nil
 }
 
-func ioSecretRefreshHook(ctx context.Context, ioLogger *logging.IOLogger, store *sqlite.Store) func(context.Context, ...string) {
-	if ioLogger == nil || store == nil {
+func ioSecretRefreshHook(ctx context.Context, ioLogger *logging.IOLogger, source credentialSecretSource) func(context.Context, ...string) {
+	if ioLogger == nil || source == nil {
 		return nil
 	}
 	if ctx == nil {
@@ -30,6 +33,6 @@ func ioSecretRefreshHook(ctx context.Context, ioLogger *logging.IOLogger, store 
 		for _, secret := range secrets {
 			ioLogger.AddEphemeralSecret(secret)
 		}
-		_ = refreshIOConfiguredSecrets(ctx, ioLogger, store)
+		_ = refreshIOConfiguredSecrets(ctx, ioLogger, source)
 	}
 }

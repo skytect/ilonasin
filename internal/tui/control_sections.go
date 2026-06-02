@@ -7,57 +7,61 @@ import (
 
 func (m Model) apiPanes() []dashboardPane {
 	return []dashboardPane{
-		{id: apiPaneSummary, title: "routes", content: m.apiSummaryBody},
+		{id: apiPaneSummary, title: "surfaces", content: m.apiSummaryBody},
 		{id: apiPaneTokens, title: "downstream keys", content: m.localTokensBody},
 	}
 }
 
 func (m Model) providerPanes() []dashboardPane {
 	return []dashboardPane{
-		{id: providersPaneInstances, title: "instances", content: m.providerInstancesBody},
-		{id: providersPaneCredentials, title: "api keys", content: m.providerCredentialsBody},
-		{id: providersPaneOAuth, title: "oauth", content: m.oauthBody},
+		{id: providersPaneInstances, title: "inventory", content: m.providerInstancesBody},
+		{id: providersPaneCredentials, title: "upstream keys", content: m.providerCredentialsBody},
+		{id: providersPaneOAuth, title: "oauth accounts", content: m.oauthBody},
 		{id: providersPaneFallback, title: "fallback", content: m.providerFallbackBody},
 	}
 }
 
 func (m Model) usagePanes() []dashboardPane {
 	return []dashboardPane{
-		{id: usagePaneMetrics, title: "tokens + perf", content: m.usageMetricsBody},
-		{id: usagePaneSubscriptions, title: "subscription", content: m.subscriptionUsageBody},
+		{id: usagePaneMetrics, title: "tokens + performance", content: m.usageMetricsBody},
+		{id: usagePaneSubscriptions, title: "quota", content: m.subscriptionUsageBody},
 		{id: usagePaneHealth, title: "health + quota", content: m.healthAndQuotaBody},
 	}
 }
 
 func (m Model) logPanes() []dashboardPane {
 	return []dashboardPane{
-		{id: logsPaneRequests, title: "requests", content: m.recentRequestsBody},
-		{id: logsPaneFallbacks, title: "fallbacks", content: m.fallbacksBody},
-		{id: logsPanePruning, title: "io policy", content: m.pruningBody},
+		{id: logsPaneRequests, title: "request metadata", content: m.recentRequestsBody},
+		{id: logsPaneFallbacks, title: "fallback metadata", content: m.fallbacksBody},
+		{id: logsPanePruning, title: "io + pruning", content: m.pruningBody},
 	}
 }
 
 func (m Model) apiSummaryBody(width int) string {
 	var b strings.Builder
-	b.WriteString(renderSectionBanner(width, "API",
-		"OpenAI-compatible",
-		"Responses",
-		"Anthropic-compatible",
-	))
+	b.WriteString(renderSectionBanner(width, "Local API surfaces", "surfaces 3"))
 	b.WriteByte('\n')
 	enabledTokens, disabledTokens := localTokenStateCounts(m.tokenRows)
 	b.WriteString(metricLine(
 		metricChip("bind", m.runtime.Bind),
-		metricChip("keys", fmt.Sprintf("%d", len(m.tokenRows))),
+		metricChip("downstream-keys", fmt.Sprintf("%d", len(m.tokenRows))),
 		metricChip("on", fmt.Sprintf("%d", enabledTokens)),
 		metricChip("off", fmt.Sprintf("%d", disabledTokens)),
 	))
 	b.WriteString("\n\n")
-	b.WriteString(apiRouteLine("OpenAI chat", "/v1/chat/completions", "chat_completions"))
+	b.WriteString(apiRouteLine("OpenAI Chat Completions", "/v1/chat/completions", "chat_completions"))
 	b.WriteByte('\n')
-	b.WriteString(apiRouteLine("Responses", "/responses  /v1/responses", "responses"))
+	b.WriteString(apiRouteLine("OpenAI Responses", "/v1/responses  /responses", "responses"))
 	b.WriteByte('\n')
-	b.WriteString(apiRouteLine("Anthropic", "/v1/messages  count /v1/messages/count_tokens", "anthropic_messages"))
+	b.WriteString(apiRouteLine("Anthropic Messages", "/v1/messages  count /v1/messages/count_tokens", "anthropic_messages"))
+	b.WriteString("\n\n")
+	b.WriteString(metricLine(
+		statusBadge("enabled"),
+		cardTitleStyle.Render("downstream key management"),
+		metricChip("create", "n"),
+		metricChip("disable", "d"),
+		metricChip("managed", "daemon"),
+	))
 	return strings.TrimRight(b.String(), "\n")
 }
 

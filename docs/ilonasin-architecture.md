@@ -250,9 +250,28 @@ Provider classes are inferred from the configured provider instance.
 Fast mode, reasoning effort, and similar behavior should be expressed through
 request fields, not model suffixes.
 
-The exact field mapping for Codex-style fast mode and reasoning effort is
-deferred until deeper Codex/provider research. The architecture should follow
-Codex-compatible request semantics where practical.
+For Codex Chat Completions, Codex-specific controls live under explicit provider
+options:
+
+- `provider_options.codex.reasoning.effort` for reasoning effort,
+- `provider_options.codex.reasoning.summary` for reasoning summary behavior,
+- `provider_options.codex.verbosity` for text verbosity,
+- `provider_options.codex.service_tier` for Codex-specific service tier
+  selection.
+
+Codex Chat also accepts top-level `service_tier` for standard local tiers such
+as `default`, `priority`, and `flex`. Provider-specific service tier values
+must stay under `provider_options.codex.service_tier`; the local `fast` alias
+maps to upstream `priority` when the selected Codex model supports that tier.
+
+For Codex Responses-compatible requests, top-level `reasoning`,
+`text.verbosity`, and `service_tier` are accepted only for Codex provider
+instances and are translated into the same local Codex provider-options
+contract before the Codex provider adapter builds the upstream Responses body.
+Unsupported fields and invalid mode values should fail locally with clear
+errors instead of being silently forwarded. Model-unsupported but locally valid
+Codex reasoning efforts may be normalized to a supported model effort before
+the upstream request is built.
 
 ### Routing
 
@@ -571,8 +590,6 @@ Areas that still need research or stronger live evidence:
 
 ## Open Questions
 
-- What exact request fields should represent Codex fast mode and reasoning
-  effort?
 - Should credential records use labels visible in telemetry?
 - What is the exact policy for subscription account fallback under provider
   terms?

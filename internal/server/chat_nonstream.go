@@ -65,14 +65,9 @@ func (s *Server) executeNonStreamingChat(r *http.Request, nc nonStreamContext) n
 			break
 		}
 		used[attemptIndex] = true
-		if exec.attemptCount == 0 {
-			modelCredential = credential
-		}
+		modelCredential = credential
 		if pendingRetryReason != "" {
 			exec.fallbackEvents = append(exec.fallbackEvents, chatFallbackEvent(time.Now(), nc.address, fallbackFrom, credential, pendingRetryReason))
-			if pendingRetryReason == "auth_retry" {
-				modelCredential = credential
-			}
 			pendingRetryReason = ""
 		}
 		exec.attemptCount++

@@ -9,8 +9,9 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
-	"strings"
 	"time"
+
+	"ilonasin/internal/metadata"
 )
 
 const MaxUpstreamModelsBodyBytes int64 = 64 << 20
@@ -191,9 +192,20 @@ func normalizeModels(instance Instance, body []byte) ([]ModelMetadata, error) {
 			meta.ContextLength = safeInt(item["context_length"])
 			meta.CapabilityFlags = openRouterCapabilityFlags(item)
 		case "deepseek":
-			meta.CapabilityFlags = "chat,json_object,logprobs,reasoning,stream,tools"
+			meta.CapabilityFlags = metadata.FormatModelCapabilities(
+				metadata.ModelCapabilityChat,
+				metadata.ModelCapabilityJSONObject,
+				metadata.ModelCapabilityLogprobs,
+				metadata.ModelCapabilityReasoning,
+				metadata.ModelCapabilityStream,
+				metadata.ModelCapabilityTools,
+			)
 		case "codex":
-			meta.CapabilityFlags = "chat,reasoning,stream"
+			meta.CapabilityFlags = metadata.FormatModelCapabilities(
+				metadata.ModelCapabilityChat,
+				metadata.ModelCapabilityReasoning,
+				metadata.ModelCapabilityStream,
+			)
 		}
 		models = append(models, meta)
 	}
@@ -256,30 +268,25 @@ func normalizeCodexModels(instance Instance, body []byte) ([]ModelMetadata, erro
 }
 
 func codexCapabilityFlags(item map[string]any) string {
-	flags := map[string]bool{
-		"chat":      true,
-		"responses": true,
-		"stream":    true,
-		"tools":     true,
+	flags := []string{
+		metadata.ModelCapabilityChat,
+		metadata.ModelCapabilityResponses,
+		metadata.ModelCapabilityStream,
+		metadata.ModelCapabilityTools,
 	}
 	if codexStringField(item, "default_reasoning_level") != "" || len(codexArrayField(item, "supported_reasoning_levels")) > 0 {
-		flags["reasoning"] = true
+		flags = append(flags, metadata.ModelCapabilityReasoning)
 	}
 	if codexBoolField(item, "supports_parallel_tool_calls") {
-		flags["parallel_tool_calls"] = true
+		flags = append(flags, metadata.ModelCapabilityParallelToolCalls)
 	}
 	if hasCodexServiceTier(item) {
-		flags["service_tier"] = true
+		flags = append(flags, metadata.ModelCapabilityServiceTier)
 	}
 	if hasCodexVisionCapability(item) {
-		flags["vision"] = true
+		flags = append(flags, metadata.ModelCapabilityVision)
 	}
-	out := make([]string, 0, len(flags))
-	for flag := range flags {
-		out = append(out, flag)
-	}
-	sort.Strings(out)
-	return strings.Join(out, ",")
+	return metadata.FormatModelCapabilities(flags...)
 }
 
 func hasCodexServiceTier(item map[string]any) bool {

@@ -6,9 +6,10 @@ import (
 	"io"
 	"math"
 	"math/big"
-	"sort"
 	"strconv"
 	"strings"
+
+	"ilonasin/internal/metadata"
 )
 
 func openRouterCostMicrounitsFromChatCompletion(body []byte) int64 {
@@ -154,7 +155,7 @@ func pow10(exp int) *big.Int {
 }
 
 func openRouterCapabilityFlags(item map[string]any) string {
-	flags := map[string]bool{"chat": true}
+	flags := []string{metadata.ModelCapabilityChat}
 	params, _ := item["supported_parameters"].([]any)
 	for _, raw := range params {
 		param, ok := raw.(string)
@@ -163,43 +164,38 @@ func openRouterCapabilityFlags(item map[string]any) string {
 		}
 		switch param {
 		case "temperature", "top_p", "frequency_penalty", "presence_penalty", "stop":
-			flags["sampling"] = true
+			flags = append(flags, metadata.ModelCapabilitySampling)
 		case "top_k", "min_p", "top_a", "repetition_penalty", "seed":
-			flags["advanced_sampling"] = true
+			flags = append(flags, metadata.ModelCapabilityAdvancedSampling)
 		case "response_format":
-			flags["json_object"] = true
+			flags = append(flags, metadata.ModelCapabilityJSONObject)
 		case "tools", "tool_choice":
-			flags["tools"] = true
+			flags = append(flags, metadata.ModelCapabilityTools)
 		case "parallel_tool_calls":
-			flags["parallel_tool_calls"] = true
+			flags = append(flags, metadata.ModelCapabilityParallelToolCalls)
 		case "prediction":
-			flags["prediction"] = true
+			flags = append(flags, metadata.ModelCapabilityPrediction)
 		case "logprobs", "top_logprobs":
-			flags["logprobs"] = true
+			flags = append(flags, metadata.ModelCapabilityLogprobs)
 		case "logit_bias":
-			flags["logit_bias"] = true
+			flags = append(flags, metadata.ModelCapabilityLogitBias)
 		case "reasoning":
-			flags["reasoning"] = true
+			flags = append(flags, metadata.ModelCapabilityReasoning)
 		case "stream":
-			flags["stream"] = true
+			flags = append(flags, metadata.ModelCapabilityStream)
 		case "user":
-			flags["user"] = true
+			flags = append(flags, metadata.ModelCapabilityUser)
 		case "service_tier":
-			flags["service_tier"] = true
+			flags = append(flags, metadata.ModelCapabilityServiceTier)
 		case "session_id":
-			flags["session_id"] = true
+			flags = append(flags, metadata.ModelCapabilitySessionID)
 		case "metadata":
-			flags["metadata"] = true
+			flags = append(flags, metadata.ModelCapabilityMetadata)
 		case "models":
-			flags["model_fallbacks"] = true
+			flags = append(flags, metadata.ModelCapabilityModelFallbacks)
 		case "cache_control":
-			flags["cache_control"] = true
+			flags = append(flags, metadata.ModelCapabilityCacheControl)
 		}
 	}
-	out := make([]string, 0, len(flags))
-	for flag := range flags {
-		out = append(out, flag)
-	}
-	sort.Strings(out)
-	return strings.Join(out, ",")
+	return metadata.FormatModelCapabilities(flags...)
 }

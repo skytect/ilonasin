@@ -2,7 +2,8 @@ package openai
 
 import (
 	"sort"
-	"strings"
+
+	"ilonasin/internal/metadata"
 )
 
 type ModelMetadata struct {
@@ -100,16 +101,15 @@ func sortedModelMetadata(rows []ModelMetadata) []ModelMetadata {
 }
 
 func codexModelInfoFromMetadata(row ModelMetadata, namespacedID string) (CodexModelInfo, bool) {
-	capabilities := modelCapabilityList(row.CapabilityFlags)
-	if !hasModelCapability(capabilities, "responses") {
+	if !metadata.HasModelCapability(row.CapabilityFlags, metadata.ModelCapabilityResponses) {
 		return CodexModelInfo{}, false
 	}
 	serviceTiers := row.ServiceTiers
-	if len(serviceTiers) == 0 && hasModelCapability(capabilities, "service_tier") {
+	if len(serviceTiers) == 0 && metadata.HasModelCapability(row.CapabilityFlags, metadata.ModelCapabilityServiceTier) {
 		serviceTiers = []ModelServiceTier{codexFastServiceTier()}
 	}
 	inputModalities := row.InputModalities
-	if len(inputModalities) == 0 && row.ProviderInstanceID != "" && hasModelCapability(capabilities, "vision") {
+	if len(inputModalities) == 0 && row.ProviderInstanceID != "" && metadata.HasModelCapability(row.CapabilityFlags, metadata.ModelCapabilityVision) {
 		inputModalities = []string{"text", "image"}
 	}
 	inputModalities = orderedModelInputModalities(inputModalities)
@@ -118,10 +118,13 @@ func codexModelInfoFromMetadata(row ModelMetadata, namespacedID string) (CodexMo
 	}
 	reasoningEfforts := []CodexReasoning{}
 	defaultReasoningEffort := ""
-	if hasModelCapability(capabilities, "reasoning") {
+	hasReasoning := metadata.HasModelCapability(row.CapabilityFlags, metadata.ModelCapabilityReasoning)
+	if hasReasoning {
 		reasoningEfforts = defaultCodexReasoningEfforts()
 		defaultReasoningEffort = "medium"
 	}
+	hasParallelToolCalls := metadata.HasModelCapability(row.CapabilityFlags, metadata.ModelCapabilityParallelToolCalls)
+	hasVision := metadata.HasModelCapability(row.CapabilityFlags, metadata.ModelCapabilityVision)
 	additionalSpeedTiers := []string(nil)
 	if len(serviceTiers) > 0 {
 		additionalSpeedTiers = []string{"fast"}
@@ -142,44 +145,20 @@ func codexModelInfoFromMetadata(row ModelMetadata, namespacedID string) (CodexMo
 		AvailabilityNUX:            nil,
 		Upgrade:                    nil,
 		BaseInstructions:           "",
-		SupportsReasoningSummaries: hasModelCapability(capabilities, "reasoning"),
+		SupportsReasoningSummaries: hasReasoning,
 		SupportVerbosity:           true,
 		DefaultVerbosity:           "low",
 		ApplyPatchToolType:         "freeform",
 		WebSearchToolType:          "text_and_image",
 		TruncationPolicy:           map[string]any{"mode": "tokens", "limit": 10000},
-		SupportsParallelToolCalls:  hasModelCapability(capabilities, "parallel_tool_calls"),
-		SupportsImageDetailOrig:    hasModelCapability(capabilities, "vision"),
+		SupportsParallelToolCalls:  hasParallelToolCalls,
+		SupportsImageDetailOrig:    hasVision,
 		ContextWindow:              row.ContextLength,
 		MaxContextWindow:           row.ContextLength,
 		ExperimentalSupportedTools: []string{},
 		InputModalities:            inputModalities,
 		SupportsSearchTool:         true,
 	}, true
-}
-
-func modelCapabilityList(flags string) []string {
-	if strings.TrimSpace(flags) == "" {
-		return nil
-	}
-	parts := strings.Split(flags, ",")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			out = append(out, part)
-		}
-	}
-	return out
-}
-
-func hasModelCapability(capabilities []string, needle string) bool {
-	for _, capability := range capabilities {
-		if capability == needle {
-			return true
-		}
-	}
-	return false
 }
 
 func codexFastServiceTier() ModelServiceTier {

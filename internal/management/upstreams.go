@@ -32,10 +32,6 @@ const (
 	CredentialKindOAuth  = "oauth"
 )
 
-func ProviderAllowsFallbackCredentialKind(instance ProviderInstance, credentialKind string) bool {
-	return fallbackCredentialKinds(instance)[credentialKind]
-}
-
 func fallbackCredentialKinds(instance ProviderInstance) map[string]bool {
 	out := map[string]bool{}
 	if instance.APIKey {
@@ -56,17 +52,6 @@ func allowedFallbackCredentialKindsByProvider(providers []ProviderInstance) map[
 		}
 	}
 	return allowed
-}
-
-func VisibleFallbackPolicies(rows []FallbackPolicy, providers []ProviderInstance) []FallbackPolicy {
-	allowed := allowedFallbackCredentialKindsByProvider(providers)
-	out := make([]FallbackPolicy, 0, len(rows))
-	for _, row := range rows {
-		if allowed[row.ProviderInstanceID][row.CredentialKind] && row.CredentialCount >= 2 {
-			out = append(out, row)
-		}
-	}
-	return out
 }
 
 func visibleFallbackPolicyMetadata(rows []credentials.FallbackPolicyMetadata, providers []ProviderInstance) []credentials.FallbackPolicyMetadata {

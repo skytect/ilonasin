@@ -44,9 +44,11 @@ func (m Model) writeFallbacks(b *strings.Builder) {
 func fallbackSummaryRow(row management.FallbackSummary, now time.Time, width int) string {
 	lines := []string{
 		fallbackTableRow(row, now, width),
-		wrappedDisplayField("route", safeFullWrappedDisplay(row.ProviderInstanceID)+"/"+safeFullWrappedDisplay(row.ModelID), width),
-		wrappedDisplayField("reason", safeFullWrappedDisplay(row.Reason), width),
-		requestDetailLine(width, "credentials",
+		requestDetailLine(width, "route",
+			cardTitleStyle.Render(safeFullWrappedDisplay(row.ProviderInstanceID)+"/"+safeFullWrappedDisplay(row.ModelID)),
+			wrappedMetricChip("reason", row.Reason),
+		),
+		requestDetailLine(width, "creds",
 			mutedStyle.Render(labeledFullCredentialDisplay("from", row.FromCredentialID, row.FromCredentialLabel)),
 			mutedStyle.Render(labeledFullCredentialDisplay("to", row.ToCredentialID, row.ToCredentialLabel)),
 		),

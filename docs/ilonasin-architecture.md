@@ -340,16 +340,20 @@ credential. Fabricated local cooldowns are not provider reset times and must not
 be rendered as such.
 
 Credential affinity should start from fields that real clients already send or
-commonly expose. The daemon must distinguish observed client behavior from local
-pooling interpretation:
+commonly expose. The daemon must distinguish observed named-client behavior,
+optional API fields, and local fallback behavior. Observed entries below are
+grounded in local source inspection or sanitized local captures. Common API
+fields are not guarantees: many harnesses send only the required model plus
+message/input content, so pooling must remain useful when every optional
+session, user, metadata, or prompt-cache field is absent.
 
-| Client or API | Observed or common request fields | Local affinity priority |
+| Client or API | What sends what | Local affinity priority |
 | --- | --- | --- |
-| Codex CLI Responses | The audited `codex-cli 0.135.0` Responses path sends body `prompt_cache_key` from the Codex thread ID. `client_metadata` includes installation metadata. Transport headers may include `session-id`, `thread-id`, `x-client-request-id`, and `x-codex-window-id`. | Prefer safe body `prompt_cache_key`. Use safe `client_metadata` session, thread, conversation, or prompt-cache fields only when the cache key is absent. Use safe `session-id` or `thread-id` headers only as fallback. |
+| Codex CLI Responses | The audited `codex-cli 0.135.0` Responses path sends body `prompt_cache_key` from the Codex thread ID. It also sends `client_metadata` with installation metadata. Transport headers may include `session-id`, `thread-id`, `x-client-request-id`, and `x-codex-window-id`. | Prefer safe body `prompt_cache_key`. Use safe `client_metadata` session, thread, conversation, or prompt-cache fields only when the cache key is absent. Use safe `session-id` or `thread-id` headers only as fallback. |
 | Codex app-server Responses | App-server turn APIs can forward turn-scoped `responsesapi_client_metadata` into Responses `client_metadata`. | Use only selected safe `client_metadata` session, thread, conversation, or prompt-cache keys when top-level `prompt_cache_key` is absent. |
 | Claude Code Anthropic | Captured Claude Code `2.1.159` traffic uses Anthropic `metadata.user_id` as a JSON string containing `session_id`, plus `X-Claude-Code-Session-Id`. | Prefer safe nested `metadata.user_id.session_id`, then safe plain `metadata.session_id`. Use the safe session header only after conversion if body affinity is absent. |
-| Generic OpenAI Chat | Many clients send only `model` and `messages`. `session_id`, `prompt_cache_key`, `user`, and `metadata` are optional, even though modern SDKs may expose them. | Prefer safe `session_id`, then safe top-level `prompt_cache_key`, then safe `user`, then selected safe metadata keys: `session_id`, `thread_id`, `conversation_id`, and `prompt_cache_key`. |
-| Generic Responses | `prompt_cache_key`, `client_metadata`, and top-level `metadata` are optional. Many clients may send none of them. | Prefer safe body `prompt_cache_key`, then selected safe `client_metadata` keys, then selected safe top-level `metadata` keys: `prompt_cache_key`, `session_id`, `thread_id`, and `conversation_id`. |
+| Generic OpenAI Chat | Many clients send only `model` and `messages`. `session_id`, `prompt_cache_key`, `user`, and `metadata` are optional API fields, even when SDKs expose them. | Prefer safe `session_id`, then safe top-level `prompt_cache_key`, then safe `user`, then selected safe metadata keys: `session_id`, `thread_id`, `conversation_id`, and `prompt_cache_key`. |
+| Generic Responses | Many clients send only `model` and `input`. `prompt_cache_key`, `client_metadata`, and top-level `metadata` are optional API fields. | Prefer safe body `prompt_cache_key`, then selected safe `client_metadata` keys, then selected safe top-level `metadata` keys: `prompt_cache_key`, `session_id`, `thread_id`, and `conversation_id`. |
 | Minimal clients | Often send only model, messages or input, and a local ilonasin API token. | Route by local token identity, provider instance, provider model, least-in-flight credential pressure, and round-robin tie breaking. |
 
 Do not use request-id-shaped values, `x-client-request-id`,

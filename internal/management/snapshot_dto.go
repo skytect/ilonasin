@@ -1,6 +1,10 @@
 package management
 
-import "time"
+import (
+	"time"
+
+	"ilonasin/internal/metadata"
+)
 
 type ManagementSnapshotResponse struct {
 	Runtime              RuntimeStatus             `json:"runtime"`
@@ -41,7 +45,7 @@ type ProviderInstance struct {
 }
 
 func SupportsCodexOAuth(instance ProviderInstance) bool {
-	return instance.Type == "codex" && instance.OAuth
+	return metadata.SupportsCodexOAuth(instance.Type, instance.OAuth)
 }
 
 type UpstreamCredential struct {

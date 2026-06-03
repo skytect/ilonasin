@@ -3,6 +3,8 @@ package credentials
 import (
 	"context"
 	"time"
+
+	"ilonasin/internal/metadata"
 )
 
 type ProviderInstanceLookup interface {
@@ -19,11 +21,11 @@ type ProviderInstance struct {
 }
 
 func supportsCodexOAuthCredentials(instance ProviderInstance) bool {
-	return instance.Type == "codex" && instance.OAuth
+	return metadata.SupportsCodexOAuth(instance.Type, instance.OAuth)
 }
 
 func supportsCodexOAuthRefresh(instance ProviderInstance) bool {
-	return supportsCodexOAuthCredentials(instance) && instance.OAuthRefresh
+	return metadata.SupportsCodexOAuthRefresh(instance.Type, instance.OAuth, instance.OAuthRefresh)
 }
 
 type OAuthTokenRefresher interface {

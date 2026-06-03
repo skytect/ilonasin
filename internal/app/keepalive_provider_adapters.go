@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 
+	"ilonasin/internal/metadata"
 	"ilonasin/internal/openai"
 	"ilonasin/internal/provider"
 )
@@ -25,7 +26,7 @@ type keepaliveProvider struct {
 }
 
 func supportsCodexOAuthKeepalive(instance keepaliveProvider) bool {
-	return instance.Type == "codex" && instance.OAuth
+	return metadata.SupportsCodexOAuth(instance.Type, instance.OAuth)
 }
 
 type keepaliveCredential struct {

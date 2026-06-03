@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"ilonasin/internal/anthropic"
+	"ilonasin/internal/metadata"
 	"ilonasin/internal/openai"
 	"ilonasin/internal/provider"
 )
@@ -42,7 +43,7 @@ func streamErrorExposurePolicyFor(instance provider.Instance) streamErrorExposur
 }
 
 func (s *Server) canRefreshCodexOAuth(instance provider.Instance) bool {
-	return instance.Type == "codex" && instance.OAuth && s.refresh != nil
+	return metadata.SupportsCodexOAuth(instance.Type, instance.OAuth) && s.refresh != nil
 }
 
 func (s *Server) shouldRefreshOAuthAfterChat401(instance provider.Instance, result provider.ChatResult) bool {

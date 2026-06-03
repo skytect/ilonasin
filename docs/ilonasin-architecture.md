@@ -300,6 +300,23 @@ may apply a short local cooldown to avoid immediately retrying a blocked
 credential. Fabricated local cooldowns are not provider reset times and must not
 be rendered as such.
 
+Credential affinity should use fields that real clients already send, in this
+priority order:
+
+| Client or API | Out-of-box or common signal | Pooling interpretation |
+| --- | --- | --- |
+| Codex CLI Responses | The audited Codex CLI 0.135 path sets body `prompt_cache_key` from the Codex thread ID. `client_metadata` includes installation metadata, and transport headers may include `session-id`, `thread-id`, `x-client-request-id`, and `x-codex-window-id`. | Prefer safe body `prompt_cache_key`. Use safe `client_metadata` session or thread fields only when the cache key is absent. Use safe session or thread headers only as fallback. Never use request-id-shaped values as generic affinity. |
+| Codex app-server Responses | App-server turn APIs can forward turn-scoped `responsesapi_client_metadata` into Responses `client_metadata`. | Use only selected safe `client_metadata` session, thread, conversation, or prompt-cache keys. Ignore installation, account, device, token, and request-id-shaped values. |
+| Claude Code Anthropic | Captured traffic uses Anthropic `metadata.user_id` as a JSON string containing `session_id`, plus `X-Claude-Code-Session-Id`. | Prefer the safe nested `metadata.user_id.session_id`. Use the safe session header only if body affinity is absent. |
+| Generic OpenAI Chat | Many clients send only `model` and `messages`. `session_id`, `user`, and `metadata` are optional. | Prefer safe `session_id`, then safe `user`, then selected safe metadata keys: `session_id`, `thread_id`, `conversation_id`, and `prompt_cache_key`. |
+| Generic Responses | `prompt_cache_key` and `client_metadata` are optional. Many clients may send neither. | Prefer safe body `prompt_cache_key`, then selected safe `client_metadata` keys: `prompt_cache_key`, `session_id`, `thread_id`, and `conversation_id`. |
+| Minimal clients | Often send only model plus a local ilonasin API token. | Route by local token identity, provider instance, provider model, least-in-flight credential pressure, and round-robin tie breaking. |
+
+Affinity is best-effort locality, not a quota or correctness boundary. It must
+never require clients to send a session field. When no safe client signal is
+available, pooling still spreads traffic across eligible credentials using the
+local token, requested route, in-flight pressure, and cursor state.
+
 ### Observability and Logging
 
 Ilonasin must not persist request or response bodies in normal operation.

@@ -74,17 +74,23 @@ func requestDetailLine(width int, label string, parts ...string) string {
 	if label == "" {
 		label = "detail"
 	}
-	prefix := mutedStyle.Render(label)
-	body := wrappedMetricLine(maxInt(1, width-len(label)-1), parts...)
+	labelWidth := 5
+	if len(label) > labelWidth {
+		labelWidth = len(label)
+	}
+	prefixPlain := padPlainCell(label, labelWidth)
+	prefix := mutedStyle.Render(prefixPlain)
+	bodyWidth := maxInt(1, width-labelWidth-3)
+	body := wrappedMetricLine(bodyWidth, parts...)
 	if body == "" {
 		return prefix
 	}
 	bodyLines := splitBodyLines(body)
-	indent := strings.Repeat(" ", len(label)+1)
+	indent := strings.Repeat(" ", labelWidth) + mutedStyle.Render(" | ")
 	lines := make([]string, 0, len(bodyLines))
 	for i, line := range bodyLines {
 		if i == 0 {
-			lines = append(lines, prefix+" "+line)
+			lines = append(lines, prefix+mutedStyle.Render(" | ")+line)
 			continue
 		}
 		lines = append(lines, indent+line)

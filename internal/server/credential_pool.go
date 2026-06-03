@@ -105,6 +105,7 @@ type credentialPressureKey struct {
 type credentialPressureScope struct {
 	providerInstanceID string
 	providerModelID    string
+	tokenID            int64
 }
 
 type credentialPressureTracker struct {
@@ -142,7 +143,7 @@ func (t *credentialPressureTracker) acquire(addr routing.ModelAddress, credentia
 	}
 }
 
-func (t *credentialPressureTracker) reserveLeast(addr routing.ModelAddress, slots []credentialAttemptSlot) (int, provider.BearerCredential, func(), bool) {
+func (t *credentialPressureTracker) reserveLeast(addr routing.ModelAddress, tokenID int64, slots []credentialAttemptSlot) (int, provider.BearerCredential, func(), bool) {
 	if t == nil || len(slots) == 0 {
 		return 0, provider.BearerCredential{}, func() {}, false
 	}
@@ -168,7 +169,7 @@ func (t *credentialPressureTracker) reserveLeast(addr routing.ModelAddress, slot
 			candidates = append(candidates, i)
 		}
 	}
-	best := t.reserveLeastCandidate(addr, slots, candidates)
+	best := t.reserveLeastCandidate(addr, tokenID, slots, candidates)
 	if best == -1 {
 		t.mu.Unlock()
 		return 0, provider.BearerCredential{}, func() {}, false
@@ -191,7 +192,7 @@ func (t *credentialPressureTracker) reserveLeast(addr routing.ModelAddress, slot
 	}, true
 }
 
-func (t *credentialPressureTracker) reserveLeastCandidate(addr routing.ModelAddress, slots []credentialAttemptSlot, candidates []int) int {
+func (t *credentialPressureTracker) reserveLeastCandidate(addr routing.ModelAddress, tokenID int64, slots []credentialAttemptSlot, candidates []int) int {
 	if len(candidates) == 0 {
 		return -1
 	}
@@ -201,6 +202,7 @@ func (t *credentialPressureTracker) reserveLeastCandidate(addr routing.ModelAddr
 	scope := credentialPressureScope{
 		providerInstanceID: addr.ProviderInstanceID,
 		providerModelID:    addr.ProviderModelID,
+		tokenID:            tokenID,
 	}
 	nextID := t.next[scope]
 	chosen := candidates[0]
@@ -269,7 +271,7 @@ func (s *Server) trackCredentialAttempt(addr routing.ModelAddress, credential pr
 	return s.pressure.acquire(addr, credential)
 }
 
-func (s *Server) reserveCredentialAttempt(addr routing.ModelAddress, affinityKey string, slots []credentialAttemptSlot) (int, provider.BearerCredential, func(), bool) {
+func (s *Server) reserveCredentialAttempt(addr routing.ModelAddress, tokenID int64, affinityKey string, slots []credentialAttemptSlot) (int, provider.BearerCredential, func(), bool) {
 	if len(slots) == 0 {
 		return 0, provider.BearerCredential{}, func() {}, false
 	}
@@ -277,7 +279,7 @@ func (s *Server) reserveCredentialAttempt(addr routing.ModelAddress, affinityKey
 		slot := slots[0]
 		return slot.index, slot.credential, s.trackCredentialAttempt(addr, slot.credential), true
 	}
-	return s.pressure.reserveLeast(addr, slots)
+	return s.pressure.reserveLeast(addr, tokenID, slots)
 }
 
 func remainingCredentialAttemptSlots(credentials []provider.BearerCredential, used map[int]bool) []credentialAttemptSlot {

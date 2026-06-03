@@ -122,7 +122,7 @@ func (s *Server) executeStreamingChat(r *http.Request, sc streamContext, sink *s
 		pendingRetryReason := ""
 		for len(used) < len(plan.attempts) {
 			remaining := remainingCredentialAttemptSlots(plan.attempts, used)
-			attemptIndex, credential, releaseAttempt, ok := s.reserveCredentialAttempt(sc.address, sc.request.AffinityKey, remaining)
+			attemptIndex, credential, releaseAttempt, ok := s.reserveCredentialAttempt(sc.address, sc.token.ID, sc.request.AffinityKey, remaining)
 			if !ok {
 				break
 			}

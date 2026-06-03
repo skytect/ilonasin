@@ -60,7 +60,7 @@ func (s *Server) executeNonStreamingChat(r *http.Request, nc nonStreamContext) n
 	pendingRetryReason := ""
 	for len(used) < len(plan.attempts) {
 		remaining := remainingCredentialAttemptSlots(plan.attempts, used)
-		attemptIndex, credential, releaseAttempt, ok := s.reserveCredentialAttempt(nc.address, nc.request.AffinityKey, remaining)
+		attemptIndex, credential, releaseAttempt, ok := s.reserveCredentialAttempt(nc.address, nc.token.ID, nc.request.AffinityKey, remaining)
 		if !ok {
 			break
 		}

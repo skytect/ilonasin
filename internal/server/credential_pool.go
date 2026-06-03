@@ -104,6 +104,14 @@ type credentialPressureKey struct {
 	credentialID       int64
 }
 
+func credentialPressureKeyFor(addr routing.ModelAddress, credential provider.BearerCredential) credentialPressureKey {
+	return credentialPressureKey{
+		providerInstanceID: addr.ProviderInstanceID,
+		providerModelID:    addr.ProviderModelID,
+		credentialID:       credential.ID,
+	}
+}
+
 type credentialPressureScope struct {
 	providerInstanceID string
 	providerModelID    string
@@ -132,11 +140,7 @@ func (t *credentialPressureTracker) acquire(addr routing.ModelAddress, credentia
 	if t == nil || credential.ID == 0 {
 		return func() {}
 	}
-	key := credentialPressureKey{
-		providerInstanceID: addr.ProviderInstanceID,
-		providerModelID:    addr.ProviderModelID,
-		credentialID:       credential.ID,
-	}
+	key := credentialPressureKeyFor(addr, credential)
 	t.mu.Lock()
 	t.inFlight[key]++
 	t.mu.Unlock()
@@ -179,11 +183,7 @@ func (t *credentialPressureTracker) reserveSlotLocked(addr routing.ModelAddress,
 	}
 	slot := slots[slotPosition]
 	credential := slot.credential
-	key := credentialPressureKey{
-		providerInstanceID: addr.ProviderInstanceID,
-		providerModelID:    addr.ProviderModelID,
-		credentialID:       credential.ID,
-	}
+	key := credentialPressureKeyFor(addr, credential)
 	if credential.ID != 0 {
 		t.inFlight[key]++
 	}
@@ -216,11 +216,7 @@ func (t *credentialPressureTracker) inFlightCount(addr routing.ModelAddress, cre
 	if credential.ID == 0 {
 		return 0
 	}
-	return t.inFlight[credentialPressureKey{
-		providerInstanceID: addr.ProviderInstanceID,
-		providerModelID:    addr.ProviderModelID,
-		credentialID:       credential.ID,
-	}]
+	return t.inFlight[credentialPressureKeyFor(addr, credential)]
 }
 
 func (t *credentialPressureTracker) reserveLeastCandidate(addr routing.ModelAddress, tokenID int64, slots []credentialAttemptSlot, candidates []int) int {

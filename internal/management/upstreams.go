@@ -27,26 +27,21 @@ type DisableUpstreamCredentialResponse struct {
 	Disabled bool `json:"disabled"`
 }
 
-const (
-	CredentialKindAPIKey = "api_key"
-	CredentialKindOAuth  = "oauth"
-)
-
-func fallbackCredentialKinds(instance ProviderInstance) map[string]bool {
+func poolGroupCredentialKinds(instance ProviderInstance) map[string]bool {
 	out := map[string]bool{}
 	if instance.APIKey {
-		out[CredentialKindAPIKey] = true
+		out[credentials.CredentialKindAPIKey] = true
 	}
 	if instance.OAuth && instance.Type == "codex" {
-		out[CredentialKindOAuth] = true
+		out[credentials.CredentialKindOAuth] = true
 	}
 	return out
 }
 
-func allowedFallbackCredentialKindsByProvider(providers []ProviderInstance) map[string]map[string]bool {
+func allowedPoolGroupCredentialKindsByProvider(providers []ProviderInstance) map[string]map[string]bool {
 	allowed := map[string]map[string]bool{}
 	for _, instance := range providers {
-		kinds := fallbackCredentialKinds(instance)
+		kinds := poolGroupCredentialKinds(instance)
 		if len(kinds) > 0 {
 			allowed[instance.ID] = kinds
 		}
@@ -55,7 +50,7 @@ func allowedFallbackCredentialKindsByProvider(providers []ProviderInstance) map[
 }
 
 func visibleCredentialPoolGroupMetadata(rows []credentials.CredentialPoolGroupMetadata, providers []ProviderInstance) []credentials.CredentialPoolGroupMetadata {
-	allowed := allowedFallbackCredentialKindsByProvider(providers)
+	allowed := allowedPoolGroupCredentialKindsByProvider(providers)
 	out := make([]credentials.CredentialPoolGroupMetadata, 0, len(rows))
 	for _, row := range rows {
 		if allowed[row.ProviderInstanceID][row.CredentialKind] && row.CredentialCount >= 2 {

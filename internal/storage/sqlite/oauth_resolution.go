@@ -26,10 +26,10 @@ func (s *Store) ResolveOAuthBearerCredentials(ctx context.Context, providerInsta
 	var candidates []oauthBearerRow
 	for rows.Next() {
 		var row oauthBearerRow
-		if err := rows.Scan(&row.credential.ID, &row.credential.ProviderInstanceID, &row.fallback, &row.accessSecret, &row.expires, &row.refreshFailure); err != nil {
+		if err := rows.Scan(&row.credential.ID, &row.credential.ProviderInstanceID, &row.poolGroup, &row.accessSecret, &row.expires, &row.refreshFailure); err != nil {
 			return nil, err
 		}
-		row.credential.PoolGroup = row.fallback
+		row.credential.PoolGroup = row.poolGroup
 		candidates = append(candidates, row)
 	}
 	if err := rows.Err(); err != nil {
@@ -56,7 +56,7 @@ func (s *Store) ResolveOAuthBearerCredentials(ctx context.Context, providerInsta
 
 type oauthBearerRow struct {
 	credential     credentials.ResolvedOAuthBearerCredential
-	fallback       string
+	poolGroup      string
 	accessSecret   sql.NullInt64
 	expires        sql.NullString
 	refreshFailure sql.NullString

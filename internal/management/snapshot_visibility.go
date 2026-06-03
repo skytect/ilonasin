@@ -6,7 +6,7 @@ import (
 
 func visibleUpstreamCredentials(rows []credentials.UpstreamCredentialMetadata, providers []ProviderInstance) []credentials.UpstreamCredentialMetadata {
 	allowed := apiKeyProviderIDs(providers)
-	out := rows[:0]
+	out := make([]credentials.UpstreamCredentialMetadata, 0, len(rows))
 	for _, row := range rows {
 		if allowed[row.ProviderInstanceID] {
 			out = append(out, row)
@@ -31,7 +31,7 @@ func apiKeyProviderIDs(providers []ProviderInstance) map[string]bool {
 
 func visibleOAuthCredentials(rows []credentials.OAuthCredentialMetadata, providers []ProviderInstance) []credentials.OAuthCredentialMetadata {
 	allowed := oauthProviderIDs(providers)
-	out := rows[:0]
+	out := make([]credentials.OAuthCredentialMetadata, 0, len(rows))
 	for _, row := range rows {
 		if allowed[row.ProviderInstanceID] {
 			out = append(out, row)
@@ -42,7 +42,7 @@ func visibleOAuthCredentials(rows []credentials.OAuthCredentialMetadata, provide
 
 func visibleProviderAccounts(rows []credentials.ProviderAccountMetadata, providers []ProviderInstance) []credentials.ProviderAccountMetadata {
 	allowed := oauthProviderIDs(providers)
-	out := rows[:0]
+	out := make([]credentials.ProviderAccountMetadata, 0, len(rows))
 	for _, row := range rows {
 		if allowed[row.ProviderInstanceID] {
 			out = append(out, row)

@@ -81,7 +81,7 @@ func VisibleFallbackPolicies(rows []FallbackPolicy, providers []ProviderInstance
 
 func visibleFallbackPolicyMetadata(rows []credentials.FallbackPolicyMetadata, providers []ProviderInstance) []credentials.FallbackPolicyMetadata {
 	allowed := allowedFallbackCredentialKindsByProvider(providers)
-	out := rows[:0]
+	out := make([]credentials.FallbackPolicyMetadata, 0, len(rows))
 	for _, row := range rows {
 		if allowed[row.ProviderInstanceID][row.CredentialKind] && row.CredentialCount >= 2 {
 			out = append(out, row)

@@ -93,7 +93,7 @@ func (s Service) RefreshOAuthCredential(ctx context.Context, req RefreshOAuthCre
 
 func oauthChallengeFromCredentials(row credentials.OAuthDeviceLoginChallenge) OAuthDeviceLoginChallenge {
 	return OAuthDeviceLoginChallenge{
-		ProviderInstanceID: safeSnapshotString(row.ProviderInstanceID),
+		ProviderInstanceID: safeMachineString(row.ProviderInstanceID),
 		VerificationURL:    safeBaseURL(row.VerificationURL),
 		UserCode:           safeSnapshotString(row.UserCode),
 		Handle:             safeOAuthHandle(row.Handle),
@@ -103,7 +103,7 @@ func oauthChallengeFromCredentials(row credentials.OAuthDeviceLoginChallenge) OA
 func oauthCredentialFromCredentials(row credentials.OAuthCredentialMetadata) OAuthCredential {
 	return OAuthCredential{
 		ID:                        row.ID,
-		ProviderInstanceID:        safeSnapshotString(row.ProviderInstanceID),
+		ProviderInstanceID:        safeMachineString(row.ProviderInstanceID),
 		Label:                     safeSnapshotString(row.Label),
 		AccountDisplayLabel:       safeAccountDisplayString(row.AccountDisplayLabel),
 		PlanLabel:                 safeSnapshotString(row.PlanLabel),

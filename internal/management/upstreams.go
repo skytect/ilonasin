@@ -38,8 +38,8 @@ type FallbackPolicyResponse struct {
 }
 
 const (
-	CredentialKindAPIKey = credentials.CredentialKindAPIKey
-	CredentialKindOAuth  = credentials.CredentialKindOAuth
+	CredentialKindAPIKey = "api_key"
+	CredentialKindOAuth  = "oauth"
 )
 
 func ProviderAllowsFallbackCredentialKind(instance ProviderInstance, credentialKind string) bool {

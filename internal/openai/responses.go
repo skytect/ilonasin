@@ -23,6 +23,7 @@ type ResponsesRequest struct {
 	ServiceTier       *string
 	Text              map[string]any
 	PromptCacheKey    string
+	ClientMetadata    map[string]string
 }
 
 type ResponseInputItem struct {
@@ -111,6 +112,7 @@ func DecodeResponses(r io.Reader) (ResponsesRequest, error) {
 	if err != nil {
 		return ResponsesRequest{}, err
 	}
+	clientMetadata := responseClientMetadata(raw["client_metadata"])
 	promptCacheKey := responseAffinityPromptCacheKey(raw["prompt_cache_key"])
 	if err := validateResponsesInclude(raw["include"], reasoning != nil); err != nil {
 		return ResponsesRequest{}, err
@@ -127,6 +129,7 @@ func DecodeResponses(r io.Reader) (ResponsesRequest, error) {
 		ServiceTier:       serviceTier,
 		Text:              text,
 		PromptCacheKey:    promptCacheKey,
+		ClientMetadata:    clientMetadata,
 	}, nil
 }
 
@@ -142,7 +145,46 @@ func responseAffinityPromptCacheKey(raw json.RawMessage) string {
 	if value == "" || utf8.RuneCountInString(value) > 256 {
 		return ""
 	}
+	if !safeResponsesAffinityValue(value) {
+		return ""
+	}
 	return value
+}
+
+func responseClientMetadata(raw json.RawMessage) map[string]string {
+	if len(bytes.TrimSpace(raw)) == 0 || isJSONNull(raw) {
+		return nil
+	}
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return nil
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &obj); err != nil {
+		return nil
+	}
+	if len(obj) > 16 {
+		return nil
+	}
+	out := make(map[string]string, len(obj))
+	for key, rawValue := range obj {
+		if key == "" || utf8.RuneCountInString(key) > 64 {
+			return nil
+		}
+		rawValue = bytes.TrimSpace(rawValue)
+		if len(rawValue) == 0 || isJSONNull(rawValue) || rawValue[0] != '"' {
+			return nil
+		}
+		var value string
+		if err := json.Unmarshal(rawValue, &value); err != nil {
+			return nil
+		}
+		if utf8.RuneCountInString(value) > 512 {
+			return nil
+		}
+		out[key] = value
+	}
+	return out
 }
 
 func validateResponsesTopLevelKeys(raw map[string]json.RawMessage) error {
@@ -668,7 +710,7 @@ func (r ResponsesRequest) ToChatCompletionRequest(providerType string) (ChatComp
 		Model:               r.Model,
 		Messages:            messages,
 		Stream:              false,
-		AffinityKey:         r.PromptCacheKey,
+		AffinityKey:         r.AffinityKey(),
 		PresentFields:       map[string]bool{"model": true, "messages": true},
 		CodexInstructions:   codexInstructions,
 		CodexResponsesInput: nil,
@@ -720,6 +762,51 @@ func (r ResponsesRequest) ToChatCompletionRequest(providerType string) (ChatComp
 		req.PresentFields["provider_options"] = true
 	}
 	return req, nil
+}
+
+func (r ResponsesRequest) AffinityKey() string {
+	if value := strings.TrimSpace(r.PromptCacheKey); safeResponsesAffinityValue(value) {
+		return value
+	}
+	return responsesMetadataAffinityKey(r.ClientMetadata)
+}
+
+func responsesMetadataAffinityKey(metadata map[string]string) string {
+	for _, key := range []string{"prompt_cache_key", "session_id", "thread_id", "conversation_id"} {
+		value, ok := metadata[key]
+		if !ok {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		if safeResponsesAffinityValue(value) {
+			return value
+		}
+	}
+	return ""
+}
+
+func safeResponsesAffinityValue(value string) bool {
+	if value == "" || utf8.RuneCountInString(value) > 256 {
+		return false
+	}
+	if strings.HasPrefix(value, "{") {
+		return false
+	}
+	lower := strings.ToLower(value)
+	if strings.HasPrefix(lower, "eyj") && strings.Contains(lower, ".") {
+		return false
+	}
+	for _, marker := range []string{
+		"account", "acct_", "account_uuid", "device", "device_id", "bearer",
+		"token", "secret", "authorization", "oauth", "sk-", "requestid",
+		"request_id", "request-id", "request.id", "request:id", "request/id",
+		"request id", "req_", "req-", "req.", "req:", "req/",
+	} {
+		if strings.Contains(lower, marker) {
+			return false
+		}
+	}
+	return true
 }
 
 func codexResponsesInputAndInstructions(raw []json.RawMessage, input []ResponseInputItem, instructions string) ([]json.RawMessage, string, error) {

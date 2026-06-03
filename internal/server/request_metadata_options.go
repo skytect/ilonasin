@@ -19,40 +19,8 @@ func applySafeOptionMetadata(out *metadata.Request, providerType string, req ope
 }
 
 func applyResponsesOptionMetadata(out *metadata.Request, req openai.ResponsesRequest) {
-	if req.ServiceTier != nil {
-		out.RequestedServiceTier = safeServiceTier(*req.ServiceTier)
-	}
-	if effort, ok := req.Reasoning["effort"].(string); ok {
-		out.ReasoningEffort = safeReasoningEffort(effort)
-	}
-	if summary, ok := req.Reasoning["summary"].(string); ok {
-		out.ReasoningSummary = safeReasoningSummary(summary)
-	}
-}
-
-func safeServiceTier(value string) string {
-	switch value {
-	case "auto", "default", "flex", "priority", "scale", "fast":
-		return value
-	default:
-		return ""
-	}
-}
-
-func safeReasoningEffort(value string) string {
-	switch value {
-	case "none", "minimal", "low", "medium", "high", "xhigh", "max":
-		return value
-	default:
-		return ""
-	}
-}
-
-func safeReasoningSummary(value string) string {
-	switch value {
-	case "auto", "concise", "detailed", "none":
-		return value
-	default:
-		return ""
-	}
+	options := openai.ExtractResponsesOptionMetadata(req)
+	out.RequestedServiceTier = options.RequestedServiceTier
+	out.ReasoningEffort = options.ReasoningEffort
+	out.ReasoningSummary = options.ReasoningSummary
 }

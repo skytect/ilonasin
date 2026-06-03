@@ -70,6 +70,16 @@ func tpsText(label string, value float64) string {
 	return fmt.Sprintf("%s %.1f/s", label, boundedTUIFloat(value, 0, 9999))
 }
 
+func tpsMeter(label string, value float64, width int) string {
+	value = boundedTUIFloat(value, 0, 9999)
+	const ceiling = 200.0
+	percent := 0.0
+	if ceiling > 0 {
+		percent = value / ceiling * 100
+	}
+	return meterRow(label, percentBar(percent, compactMetricBarWidth(width)), fmt.Sprintf("%.1f/s", value), 0)
+}
+
 func compactMetricBarWidth(width int) int {
 	switch {
 	case width < 55:
@@ -207,14 +217,14 @@ type rateMetric struct {
 }
 
 func latencyShapeLine(width int, totalMS, upstreamMS, ttftMS int64, outputTPS, totalTPS, afterTTFTTPS float64) string {
-	return metricLine(
+	return wrappedMetricLine(width,
 		mutedStyle.Render("time"),
 		durationBar("lat", totalMS, 10_000, compactMetricBarWidth(width)),
 		durationBar("up", upstreamMS, 10_000, compactMetricBarWidth(width)),
 		durationBar("ttft", ttftMS, 5_000, compactMetricBarWidth(width)),
-		tpsText("output", outputTPS),
-		tpsText("total", totalTPS),
-		tpsText("post", afterTTFTTPS),
+		tpsMeter("output", outputTPS, width),
+		tpsMeter("total", totalTPS, width),
+		tpsMeter("post", afterTTFTTPS, width),
 	)
 }
 

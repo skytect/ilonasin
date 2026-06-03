@@ -177,9 +177,9 @@ func latencyShapeLines(width int, row management.LatencySummary) []string {
 			durationBar("ttft", row.AverageTimeToFirstTokenMS, 5_000, compactMetricBarWidth(width)),
 		),
 		wrappedMetricLine(width,
-			tpsText("output", row.AverageOutputTPS),
-			tpsText("total", row.AverageOutputTPSTotal),
-			tpsText("post", row.AverageOutputTPSAfterTTFT),
+			tpsMeter("output", row.AverageOutputTPS, width),
+			tpsMeter("total", row.AverageOutputTPSTotal, width),
+			tpsMeter("post", row.AverageOutputTPSAfterTTFT, width),
 		),
 	}
 }

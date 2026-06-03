@@ -1,9 +1,10 @@
 package provider
 
 type RoutePolicy struct {
-	Responses ResponsesRoutePolicy
-	Anthropic AnthropicRoutePolicy
-	Stream    StreamRoutePolicy
+	Responses    ResponsesRoutePolicy
+	Anthropic    AnthropicRoutePolicy
+	Stream       StreamRoutePolicy
+	ChatMetadata ChatOptionMetadataPolicy
 }
 
 type ResponsesRoutePolicy struct {
@@ -36,6 +37,7 @@ func RoutePolicyForInstance(instance Instance) RoutePolicy {
 			Stream: StreamRoutePolicy{
 				ExposeProviderErrorClasses: true,
 			},
+			ChatMetadata: ChatOptionMetadataPolicy{codex: true, suppressCodexDefaultTier: true},
 		}
 	case "openrouter":
 		return RoutePolicy{
@@ -45,6 +47,14 @@ func RoutePolicyForInstance(instance Instance) RoutePolicy {
 			Anthropic: AnthropicRoutePolicy{
 				IncludeGenerationOptions: true,
 			},
+			ChatMetadata: ChatOptionMetadataPolicy{openrouter: true},
+		}
+	case "deepseek":
+		return RoutePolicy{
+			Anthropic: AnthropicRoutePolicy{
+				IncludeGenerationOptions: true,
+			},
+			ChatMetadata: ChatOptionMetadataPolicy{deepseek: true},
 		}
 	default:
 		return RoutePolicy{

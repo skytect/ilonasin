@@ -24,19 +24,6 @@ type ChatOptionMetadataPolicy struct {
 	suppressCodexDefaultTier bool
 }
 
-func ChatOptionMetadataPolicyForProviderType(providerType string) ChatOptionMetadataPolicy {
-	switch providerType {
-	case "codex":
-		return ChatOptionMetadataPolicy{codex: true, suppressCodexDefaultTier: true}
-	case "deepseek":
-		return ChatOptionMetadataPolicy{deepseek: true}
-	case "openrouter":
-		return ChatOptionMetadataPolicy{openrouter: true}
-	default:
-		return ChatOptionMetadataPolicy{}
-	}
-}
-
 func ExtractChatOptionMetadata(policy ChatOptionMetadataPolicy, req openai.ChatCompletionRequest) ChatOptionMetadata {
 	var out ChatOptionMetadata
 	applyTopLevelChatServiceTierMetadata(&out, policy, req)

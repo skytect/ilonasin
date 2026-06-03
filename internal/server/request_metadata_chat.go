@@ -26,6 +26,6 @@ func requestMetadataBase(start time.Time, token credentials.VerifiedLocalToken, 
 		ResolvedModel:             safeMetadataAddress(addr.ProviderModelID),
 		MaxOutputTokens:           requestedMaxOutputTokens(req),
 	}
-	applySafeOptionMetadata(&out, provider.ChatOptionMetadataPolicyForProviderType(instance.Type), req)
+	applySafeOptionMetadata(&out, provider.RoutePolicyForInstance(instance).ChatMetadata, req)
 	return out
 }

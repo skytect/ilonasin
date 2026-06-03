@@ -59,7 +59,7 @@ func Serve(opts Options) error {
 	codexAdapter.CaptureUpstreamIO = captureUpstreamIO
 	adapters := chatAdapters(nil, rt.IOLogger, captureUpstreamIO, rt.Logger)
 	adapters["codex"] = codexAdapter
-	stopKeepalive := startSubscriptionKeepalive(context.Background(), keepalive, rt.Registry, upstreams, codexAdapter, codexAdapter, rt.Logger)
+	stopKeepalive := startSubscriptionKeepalive(context.Background(), keepalive, keepaliveProviderRegistryFromProvider(rt.Registry), upstreams, keepaliveUsageClientFromProvider(codexAdapter), keepaliveChatClientFromProvider(codexAdapter), rt.Logger)
 	defer stopKeepalive()
 	srv := &http.Server{
 		Addr:              rt.Config.Server.Bind,

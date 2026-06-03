@@ -11,17 +11,16 @@ import (
 
 	"ilonasin/internal/credentials"
 	"ilonasin/internal/openai"
-	"ilonasin/internal/provider"
 )
 
 const keepalivePrompt = "Reply exactly: ok"
 
 type keepaliveRunner struct {
 	settings  subscriptionKeepaliveSettings
-	registry  provider.Registry
+	registry  keepaliveProviderRegistry
 	resolver  credentials.OAuthBearerResolver
-	usage     provider.CodexSubscriptionUsageClient
-	adapter   provider.ChatAdapter
+	usage     keepaliveUsageClient
+	adapter   keepaliveChatClient
 	logger    *slog.Logger
 	now       func() time.Time
 	completed map[string]bool
@@ -36,7 +35,7 @@ type subscriptionKeepaliveSettings struct {
 	OutputCapVerified bool
 }
 
-func startSubscriptionKeepalive(ctx context.Context, settings subscriptionKeepaliveSettings, registry provider.Registry, resolver credentials.OAuthBearerResolver, usage provider.CodexSubscriptionUsageClient, adapter provider.ChatAdapter, logger *slog.Logger) func() {
+func startSubscriptionKeepalive(ctx context.Context, settings subscriptionKeepaliveSettings, registry keepaliveProviderRegistry, resolver credentials.OAuthBearerResolver, usage keepaliveUsageClient, adapter keepaliveChatClient, logger *slog.Logger) func() {
 	if !settings.Enabled {
 		return func() {}
 	}
@@ -103,7 +102,7 @@ func (r *keepaliveRunner) runDue(ctx context.Context) {
 	}
 }
 
-func (r *keepaliveRunner) runCredential(ctx context.Context, now time.Time, slot string, instance provider.Instance, bearer credentials.ResolvedOAuthBearerCredential) {
+func (r *keepaliveRunner) runCredential(ctx context.Context, now time.Time, slot string, instance keepaliveProvider, bearer credentials.ResolvedOAuthBearerCredential) {
 	key := now.Format("2006-01-02") + "\x00" + slot + "\x00" + instance.ID + "\x00" + int64Key(bearer.ID)
 	r.mu.Lock()
 	if r.completed[key] {
@@ -113,19 +112,17 @@ func (r *keepaliveRunner) runCredential(ctx context.Context, now time.Time, slot
 	r.mu.Unlock()
 
 	req := keepaliveRequest(r.settings.Model, r.settings.MaxOutputTokens)
-	credential := provider.ChatCredential{
-		ID:                      bearer.ID,
-		ProviderInstanceID:      bearer.ProviderInstanceID,
-		Kind:                    provider.CredentialKindOAuthAccess,
-		BearerToken:             bearer.BearerToken,
-		ChatGPTAccountID:        bearer.ChatGPTAccountID,
-		ChatGPTAccountIsFedRAMP: bearer.ChatGPTAccountIsFedRAMP,
-	}
-	result, err := r.adapter.CompleteChat(ctx, provider.ChatRequest{
-		Instance:      instance,
+	result, err := r.adapter.CompleteKeepaliveChat(ctx, keepaliveChatRequest{
+		Provider:      instance,
 		UpstreamModel: req.Model,
 		Request:       req,
-		Credential:    credential,
+		Credential: keepaliveCredential{
+			ID:                      bearer.ID,
+			ProviderInstanceID:      bearer.ProviderInstanceID,
+			BearerToken:             bearer.BearerToken,
+			ChatGPTAccountID:        bearer.ChatGPTAccountID,
+			ChatGPTAccountIsFedRAMP: bearer.ChatGPTAccountIsFedRAMP,
+		},
 	})
 	if err != nil {
 		r.log(ctx, slog.LevelWarn, "subscription_keepalive_failed",
@@ -177,20 +174,16 @@ func keepaliveRequest(model string, maxOutputTokens int) openai.ChatCompletionRe
 	}
 }
 
-func (r *keepaliveRunner) refreshUsage(ctx context.Context, instance provider.Instance, bearer credentials.ResolvedOAuthBearerCredential) {
+func (r *keepaliveRunner) refreshUsage(ctx context.Context, instance keepaliveProvider, bearer credentials.ResolvedOAuthBearerCredential) {
 	if r.usage == nil {
 		return
 	}
-	_, _ = r.usage.FetchCodexSubscriptionUsage(ctx, provider.CodexSubscriptionUsageRequest{
-		Instance: instance,
-		Credential: provider.BearerCredential{
-			ID:                      bearer.ID,
-			ProviderInstanceID:      bearer.ProviderInstanceID,
-			Kind:                    provider.CredentialKindOAuthAccess,
-			BearerToken:             bearer.BearerToken,
-			ChatGPTAccountID:        bearer.ChatGPTAccountID,
-			ChatGPTAccountIsFedRAMP: bearer.ChatGPTAccountIsFedRAMP,
-		},
+	_ = r.usage.RefreshKeepaliveUsage(ctx, instance, keepaliveCredential{
+		ID:                      bearer.ID,
+		ProviderInstanceID:      bearer.ProviderInstanceID,
+		BearerToken:             bearer.BearerToken,
+		ChatGPTAccountID:        bearer.ChatGPTAccountID,
+		ChatGPTAccountIsFedRAMP: bearer.ChatGPTAccountIsFedRAMP,
 	})
 }
 

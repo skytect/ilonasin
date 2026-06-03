@@ -2,15 +2,12 @@ package management
 
 import (
 	"net/url"
-	"regexp"
 	"strings"
 	"unicode"
 
 	"ilonasin/internal/metadata"
 	"ilonasin/internal/privacy"
 )
-
-var unsafeSnapshotStringPattern = regexp.MustCompile(`(?i)(bearer|sk-|iln_|oauth|token|secret|authorization|raw|payload|prompt|completion|body|account|acct[-_]|request[_ -]?id|requestid|req[-_]|balance|credit|sse[_ -]?chunk|tool[_ -]?(argument|result)|eyj[a-z0-9_-]*\.[a-z0-9_-]*\.)`)
 
 func sanitizeSnapshot(out *ManagementSnapshotResponse) {
 	out.Runtime.Bind = safeSnapshotString(out.Runtime.Bind)
@@ -113,7 +110,7 @@ func safeSnapshotString(value string) string {
 	if value == "" {
 		return ""
 	}
-	if unsafeSnapshotStringPattern.MatchString(value) {
+	if privacy.UnsafeSnapshotString(value) {
 		return "[redacted]"
 	}
 	const maxRunes = 128
@@ -179,7 +176,7 @@ func safeSecretFragment(value string, maxLen int, allowedUnsafePrefixes ...strin
 	if len([]rune(value)) > maxLen {
 		return "[redacted]"
 	}
-	if unsafeSnapshotStringPattern.MatchString(value) && !hasAllowedUnsafePrefix(value, allowedUnsafePrefixes) {
+	if privacy.UnsafeSnapshotString(value) && !hasAllowedUnsafePrefix(value, allowedUnsafePrefixes) {
 		return "[redacted]"
 	}
 	return value
@@ -206,14 +203,14 @@ func safeBaseURL(raw string) string {
 	if err != nil {
 		return ""
 	}
-	if unsafeSnapshotStringPattern.MatchString(u.Host) {
+	if privacy.UnsafeSnapshotString(u.Host) {
 		return "[redacted]"
 	}
 	u.User = nil
 	u.RawQuery = ""
 	u.ForceQuery = false
 	u.Fragment = ""
-	if unsafeSnapshotStringPattern.MatchString(u.Path) {
+	if privacy.UnsafeSnapshotString(u.Path) {
 		u.Path = ""
 		u.RawPath = ""
 	}

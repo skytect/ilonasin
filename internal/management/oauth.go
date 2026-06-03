@@ -186,7 +186,7 @@ func safeManagementErrorClass(value string) string {
 
 func safeEventID(value string) string {
 	value = strings.TrimSpace(value)
-	if safeManagementTokenPattern.MatchString(value) && !unsafeSnapshotStringPattern.MatchString(value) {
+	if safeManagementTokenPattern.MatchString(value) && !privacy.UnsafeSnapshotString(value) {
 		return value
 	}
 	return ""

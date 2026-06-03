@@ -1,13 +1,9 @@
 package server
 
 import (
-	"regexp"
 	"strings"
-)
 
-var (
-	unsafeMetadataAddressPattern = regexp.MustCompile(`(?i)(bearer|sk-|iln_|oauth|token|secret|authorization|account|acct[-_:./]|request[-_:./ ]?id|requestid|req[-_:./]|balance|credit|sse[-_:./ ]?chunk|tool[-_:./ ]?(argument|result)|eyj[a-z0-9_-]*\.[a-z0-9_-]*\.)`)
-	unsafePayloadMarkerPattern   = regexp.MustCompile(`(?i)(^|[/:._+ -])(raw([_:./ -](payload|body))?|payload|request[-_:./ ]?body|response[-_:./ ]?body|prompt[-_:./ ](text|body|payload)|completion[-_:./ ](text|body|payload))($|[/:._+ -])`)
+	"ilonasin/internal/privacy"
 )
 
 func safeMetadataToken(value string) string {
@@ -30,7 +26,7 @@ func safeMetadataAddress(value string) string {
 		return ""
 	}
 	lower := strings.ToLower(value)
-	if unsafeMetadataAddressPattern.MatchString(lower) || unsafePayloadMarkerPattern.MatchString(lower) {
+	if privacy.UnsafeMetadataAddress(lower) {
 		return ""
 	}
 	return value

@@ -1,6 +1,38 @@
-package provider
+package openai
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
+
+type ModelMetadata struct {
+	ProviderInstanceID string
+	ModelID            string
+	DisplayName        string
+	CapabilityFlags    string
+	ContextLength      int
+	DefaultServiceTier string
+	ServiceTiers       []ModelServiceTier
+	InputModalities    []string
+}
+
+type ModelServiceTier struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+type ModelsResponse struct {
+	Object string           `json:"object"`
+	Data   []ModelListItem  `json:"data"`
+	Models []CodexModelInfo `json:"models"`
+}
+
+type ModelListItem struct {
+	ID      string `json:"id"`
+	Object  string `json:"object"`
+	OwnedBy string `json:"owned_by"`
+}
 
 type CodexModelInfo struct {
 	Slug                       string             `json:"slug"`
@@ -38,7 +70,36 @@ type CodexReasoning struct {
 	Description string `json:"description"`
 }
 
-func CodexModelInfoFromMetadata(row ModelMetadata, namespacedID string) (CodexModelInfo, bool) {
+func ModelsResponseFromMetadata(rows []ModelMetadata) ModelsResponse {
+	rows = sortedModelMetadata(rows)
+	data := make([]ModelListItem, 0, len(rows))
+	codexModels := make([]CodexModelInfo, 0, len(rows))
+	for _, row := range rows {
+		id := row.ProviderInstanceID + "/" + row.ModelID
+		data = append(data, ModelListItem{
+			ID:      id,
+			Object:  "model",
+			OwnedBy: row.ProviderInstanceID,
+		})
+		if codex, ok := codexModelInfoFromMetadata(row, id); ok {
+			codexModels = append(codexModels, codex)
+		}
+	}
+	return ModelsResponse{Object: "list", Data: data, Models: codexModels}
+}
+
+func sortedModelMetadata(rows []ModelMetadata) []ModelMetadata {
+	out := append([]ModelMetadata(nil), rows...)
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].ProviderInstanceID != out[j].ProviderInstanceID {
+			return out[i].ProviderInstanceID < out[j].ProviderInstanceID
+		}
+		return out[i].ModelID < out[j].ModelID
+	})
+	return out
+}
+
+func codexModelInfoFromMetadata(row ModelMetadata, namespacedID string) (CodexModelInfo, bool) {
 	capabilities := modelCapabilityList(row.CapabilityFlags)
 	if !hasModelCapability(capabilities, "responses") {
 		return CodexModelInfo{}, false

@@ -1,48 +1,39 @@
 package server
 
 import (
-	"sort"
-
+	"ilonasin/internal/openai"
 	"ilonasin/internal/provider"
 )
 
-type modelsResponse struct {
-	Object string                    `json:"object"`
-	Data   []modelListItem           `json:"data"`
-	Models []provider.CodexModelInfo `json:"models"`
+func modelsResponseFromMetadata(rows []provider.ModelMetadata) openai.ModelsResponse {
+	return openai.ModelsResponseFromMetadata(openAIModelMetadataFromProvider(rows))
 }
 
-type modelListItem struct {
-	ID      string `json:"id"`
-	Object  string `json:"object"`
-	OwnedBy string `json:"owned_by"`
-}
-
-func modelsResponseFromMetadata(rows []provider.ModelMetadata) modelsResponse {
-	rows = sortedModelMetadata(rows)
-	data := make([]modelListItem, 0, len(rows))
-	codexModels := make([]provider.CodexModelInfo, 0, len(rows))
+func openAIModelMetadataFromProvider(rows []provider.ModelMetadata) []openai.ModelMetadata {
+	out := make([]openai.ModelMetadata, 0, len(rows))
 	for _, row := range rows {
-		id := row.ProviderInstanceID + "/" + row.ModelID
-		data = append(data, modelListItem{
-			ID:      id,
-			Object:  "model",
-			OwnedBy: row.ProviderInstanceID,
+		out = append(out, openai.ModelMetadata{
+			ProviderInstanceID: row.ProviderInstanceID,
+			ModelID:            row.ModelID,
+			DisplayName:        row.DisplayName,
+			CapabilityFlags:    row.CapabilityFlags,
+			ContextLength:      row.ContextLength,
+			DefaultServiceTier: row.DefaultServiceTier,
+			ServiceTiers:       openAIModelServiceTiersFromProvider(row.ServiceTiers),
+			InputModalities:    row.InputModalities,
 		})
-		if codex, ok := provider.CodexModelInfoFromMetadata(row, id); ok {
-			codexModels = append(codexModels, codex)
-		}
 	}
-	return modelsResponse{Object: "list", Data: data, Models: codexModels}
+	return out
 }
 
-func sortedModelMetadata(rows []provider.ModelMetadata) []provider.ModelMetadata {
-	out := append([]provider.ModelMetadata(nil), rows...)
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].ProviderInstanceID != out[j].ProviderInstanceID {
-			return out[i].ProviderInstanceID < out[j].ProviderInstanceID
-		}
-		return out[i].ModelID < out[j].ModelID
-	})
+func openAIModelServiceTiersFromProvider(rows []provider.ModelServiceTier) []openai.ModelServiceTier {
+	out := make([]openai.ModelServiceTier, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, openai.ModelServiceTier{
+			ID:          row.ID,
+			Name:        row.Name,
+			Description: row.Description,
+		})
+	}
 	return out
 }

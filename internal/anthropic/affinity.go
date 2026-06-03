@@ -3,7 +3,8 @@ package anthropic
 import (
 	"encoding/json"
 	"strings"
-	"unicode/utf8"
+
+	"ilonasin/internal/privacy"
 )
 
 func anthropicAffinityKey(metadata map[string]any) string {
@@ -16,7 +17,10 @@ func anthropicAffinityKey(metadata map[string]any) string {
 		}
 	}
 	if value, ok := metadata["session_id"].(string); ok {
-		return safeAnthropicAffinityValue(value)
+		value = strings.TrimSpace(value)
+		if privacy.SafeStrictAffinityValue(value) {
+			return value
+		}
 	}
 	return ""
 }
@@ -31,13 +35,9 @@ func anthropicUserIDSession(value string) string {
 		return ""
 	}
 	sessionID, _ := fields["session_id"].(string)
-	return safeAnthropicAffinityValue(sessionID)
-}
-
-func safeAnthropicAffinityValue(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" || utf8.RuneCountInString(value) > 256 {
-		return ""
+	sessionID = strings.TrimSpace(sessionID)
+	if privacy.SafeStrictAffinityValue(sessionID) {
+		return sessionID
 	}
-	return value
+	return ""
 }

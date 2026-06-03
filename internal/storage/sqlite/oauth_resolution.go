@@ -11,7 +11,7 @@ import (
 
 func (s *Store) ResolveOAuthBearerCredentials(ctx context.Context, providerInstanceID string, now time.Time) ([]credentials.ResolvedOAuthBearerCredential, error) {
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT pc.id, pc.provider_instance_id, pc.fallback_group, ot.access_token_secret_id, ot.expires_at, COALESCE(ot.refresh_failure_class, '')
+		SELECT pc.id, pc.provider_instance_id, pc.pool_group, ot.access_token_secret_id, ot.expires_at, COALESCE(ot.refresh_failure_class, '')
 		FROM provider_credentials pc
 		LEFT JOIN oauth_tokens ot ON ot.credential_id = pc.id
 		WHERE pc.provider_instance_id = ?
@@ -123,7 +123,7 @@ func (s *Store) ResolveOAuthBearerCredentialByID(ctx context.Context, credential
 	var expires sql.NullString
 	var refreshFailure sql.NullString
 	err := s.DB.QueryRowContext(ctx, `
-		SELECT pc.id, pc.provider_instance_id, pc.fallback_group, ot.access_token_secret_id, ot.expires_at, COALESCE(ot.refresh_failure_class, '')
+		SELECT pc.id, pc.provider_instance_id, pc.pool_group, ot.access_token_secret_id, ot.expires_at, COALESCE(ot.refresh_failure_class, '')
 		FROM provider_credentials pc
 		JOIN oauth_tokens ot ON ot.credential_id = pc.id
 		JOIN credential_secrets access_secret

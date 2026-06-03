@@ -37,6 +37,42 @@ func addColumnIfMissing(table, column, definition string) migrationStep {
 	}
 }
 
+func renameColumnIfOnlyOldExists(table, oldColumn, newColumn string) migrationStep {
+	table, tableErr := validateMigrationIdentifier(table)
+	oldColumn, oldErr := validateMigrationIdentifier(oldColumn)
+	newColumn, newErr := validateMigrationIdentifier(newColumn)
+	return func(ctx context.Context, tx *sql.Tx) error {
+		if tableErr != nil {
+			return tableErr
+		}
+		if oldErr != nil {
+			return oldErr
+		}
+		if newErr != nil {
+			return newErr
+		}
+		oldExists, err := columnExists(ctx, tx, table, oldColumn)
+		if err != nil {
+			return err
+		}
+		newExists, err := columnExists(ctx, tx, table, newColumn)
+		if err != nil {
+			return err
+		}
+		switch {
+		case oldExists && !newExists:
+			_, err = tx.ExecContext(ctx, "ALTER TABLE "+table+" RENAME COLUMN "+oldColumn+" TO "+newColumn)
+			return err
+		case !oldExists && newExists:
+			return nil
+		case oldExists && newExists:
+			return fmt.Errorf("both migration columns exist: %s.%s and %s.%s", table, oldColumn, table, newColumn)
+		default:
+			return fmt.Errorf("neither migration column exists: %s.%s nor %s.%s", table, oldColumn, table, newColumn)
+		}
+	}
+}
+
 func columnExists(ctx context.Context, tx *sql.Tx, table, column string) (bool, error) {
 	rows, err := tx.QueryContext(ctx, "PRAGMA table_info("+table+")")
 	if err != nil {
@@ -338,6 +374,9 @@ var migrations = []migration{
 			FROM fallback_events`),
 		sqlStep(`DROP TABLE fallback_events`),
 		sqlStep(`ALTER TABLE fallback_events_new RENAME TO fallback_events`),
+	}},
+	{version: 12, name: "provider_credential_pool_group_column", steps: []migrationStep{
+		renameColumnIfOnlyOldExists("provider_credentials", "fallback_group", "pool_group"),
 	}},
 }
 

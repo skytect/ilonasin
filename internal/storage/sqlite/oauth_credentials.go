@@ -97,7 +97,7 @@ func findProviderAccountForUpdate(ctx context.Context, tx *sql.Tx, providerInsta
 func insertOAuthCredentialTx(ctx context.Context, tx *sql.Tx, meta credentials.NewOAuthCredential, accessToken, refreshToken, ts string) (credentials.OAuthCredentialMetadata, bool, error) {
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO provider_credentials(
-			provider_instance_id, kind, label, secret_prefix, secret_last4, fallback_group, created_at, updated_at
+			provider_instance_id, kind, label, secret_prefix, secret_last4, pool_group, created_at, updated_at
 		) VALUES(?, 'oauth', ?, '', '', ?, ?, ?)
 	`, meta.ProviderInstanceID, meta.Label, credentials.DefaultPoolGroup, ts, ts)
 	if err != nil {
@@ -224,7 +224,7 @@ func existingOAuthCredentialForAccount(ctx context.Context, tx *sql.Tx, account 
 func insertOAuthCredentialWithoutAccountTx(ctx context.Context, tx *sql.Tx, meta credentials.NewOAuthCredential, accessToken, refreshToken, ts string) (credentials.OAuthCredentialMetadata, error) {
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO provider_credentials(
-			provider_instance_id, kind, label, secret_prefix, secret_last4, fallback_group, created_at, updated_at
+			provider_instance_id, kind, label, secret_prefix, secret_last4, pool_group, created_at, updated_at
 		) VALUES(?, 'oauth', ?, '', '', ?, ?, ?)
 	`, meta.ProviderInstanceID, meta.Label, credentials.DefaultPoolGroup, ts, ts)
 	if err != nil {

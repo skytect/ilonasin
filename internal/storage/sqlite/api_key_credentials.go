@@ -16,7 +16,7 @@ func (s *Store) InsertAPIKeyCredential(ctx context.Context, meta credentials.New
 	defer tx.Rollback()
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO provider_credentials(
-			provider_instance_id, kind, label, secret_prefix, secret_last4, fallback_group, created_at, updated_at
+			provider_instance_id, kind, label, secret_prefix, secret_last4, pool_group, created_at, updated_at
 		) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
 	`, meta.ProviderInstanceID, meta.Kind, meta.Label, meta.SecretPrefix, meta.SecretLast4, meta.PoolGroup,
 		meta.CreatedAt.UTC().Format(time.RFC3339Nano), meta.CreatedAt.UTC().Format(time.RFC3339Nano))
@@ -53,7 +53,7 @@ func (s *Store) InsertAPIKeyCredential(ctx context.Context, meta credentials.New
 
 func (s *Store) ListUpstreamCredentials(ctx context.Context) ([]credentials.UpstreamCredentialMetadata, error) {
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT id, provider_instance_id, kind, label, secret_prefix, secret_last4, fallback_group, created_at, disabled_at
+		SELECT id, provider_instance_id, kind, label, secret_prefix, secret_last4, pool_group, created_at, disabled_at
 		FROM provider_credentials
 		WHERE kind = 'api_key'
 		ORDER BY id ASC
@@ -94,7 +94,7 @@ func (s *Store) DisableUpstreamCredential(ctx context.Context, id int64, disable
 
 func (s *Store) ResolveAPIKeyCredentials(ctx context.Context, providerInstanceID string) ([]credentials.ResolvedAPIKeyCredential, error) {
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT pc.id, pc.provider_instance_id, pc.label, pc.fallback_group, cs.secret_material
+		SELECT pc.id, pc.provider_instance_id, pc.label, pc.pool_group, cs.secret_material
 		FROM provider_credentials pc
 		JOIN credential_secrets cs ON cs.credential_id = pc.id AND cs.secret_kind = 'api_key'
 		WHERE pc.provider_instance_id = ?

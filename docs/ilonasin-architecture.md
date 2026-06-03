@@ -559,9 +559,12 @@ The daemon performs SQLite reads and writes behind that management boundary.
 
 The TUI does not edit `config.toml`.
 
-The management API should use a local-only internal transport, such as a Unix
-domain socket on Unix, and must not be exposed as part of the public
-local compatibility API surface.
+The current management API transport is local-only HTTP over a Unix-domain socket
+under the selected home runtime directory. The socket path is derived from the
+selected home, config path, and database path identity; the runtime directory and
+socket file are permission-tightened where Unix permissions apply. Management
+routes must not be exposed as part of the public local compatibility API surface.
+Non-Unix management transport remains deferred research.
 
 ## Conceptual SQLite Tables
 
@@ -606,7 +609,6 @@ Areas that still need research or stronger live evidence:
 
 - What is the exact policy for subscription account fallback under provider
   terms?
-- How should daemon management transport work on non-Unix platforms?
 - How much local Responses and Anthropic-compatible tool-family parity is
   necessary beyond the currently supported conversion paths?
 

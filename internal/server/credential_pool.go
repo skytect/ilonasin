@@ -148,27 +148,7 @@ func (t *credentialPressureTracker) reserveLeast(addr routing.ModelAddress, toke
 		return 0, provider.BearerCredential{}, func() {}, false
 	}
 	t.mu.Lock()
-	bestCount := -1
-	candidates := make([]int, 0, len(slots))
-	for i, slot := range slots {
-		credential := slot.credential
-		count := 0
-		if credential.ID != 0 {
-			count = t.inFlight[credentialPressureKey{
-				providerInstanceID: addr.ProviderInstanceID,
-				providerModelID:    addr.ProviderModelID,
-				credentialID:       credential.ID,
-			}]
-		}
-		switch {
-		case bestCount == -1 || count < bestCount:
-			bestCount = count
-			candidates = candidates[:0]
-			candidates = append(candidates, i)
-		case count == bestCount:
-			candidates = append(candidates, i)
-		}
-	}
+	candidates := t.leastPressureCandidates(addr, slots)
 	best := t.reserveLeastCandidate(addr, tokenID, slots, candidates)
 	if best == -1 {
 		t.mu.Unlock()
@@ -190,6 +170,62 @@ func (t *credentialPressureTracker) reserveLeast(addr routing.ModelAddress, toke
 			t.release(key)
 		}
 	}, true
+}
+
+func (t *credentialPressureTracker) reserveLeastStable(addr routing.ModelAddress, slots []credentialAttemptSlot) (int, provider.BearerCredential, func(), bool) {
+	if t == nil || len(slots) == 0 {
+		return 0, provider.BearerCredential{}, func() {}, false
+	}
+	t.mu.Lock()
+	candidates := t.leastPressureCandidates(addr, slots)
+	if len(candidates) == 0 {
+		t.mu.Unlock()
+		return 0, provider.BearerCredential{}, func() {}, false
+	}
+	slot := slots[candidates[0]]
+	credential := slot.credential
+	key := credentialPressureKey{
+		providerInstanceID: addr.ProviderInstanceID,
+		providerModelID:    addr.ProviderModelID,
+		credentialID:       credential.ID,
+	}
+	if credential.ID != 0 {
+		t.inFlight[key]++
+	}
+	t.mu.Unlock()
+	return slot.index, credential, func() {
+		if credential.ID != 0 {
+			t.release(key)
+		}
+	}, true
+}
+
+func (t *credentialPressureTracker) leastPressureCandidates(addr routing.ModelAddress, slots []credentialAttemptSlot) []int {
+	bestCount := -1
+	candidates := make([]int, 0, len(slots))
+	for i, slot := range slots {
+		count := t.inFlightCount(addr, slot.credential)
+		switch {
+		case bestCount == -1 || count < bestCount:
+			bestCount = count
+			candidates = candidates[:0]
+			candidates = append(candidates, i)
+		case count == bestCount:
+			candidates = append(candidates, i)
+		}
+	}
+	return candidates
+}
+
+func (t *credentialPressureTracker) inFlightCount(addr routing.ModelAddress, credential provider.BearerCredential) int {
+	if credential.ID == 0 {
+		return 0
+	}
+	return t.inFlight[credentialPressureKey{
+		providerInstanceID: addr.ProviderInstanceID,
+		providerModelID:    addr.ProviderModelID,
+		credentialID:       credential.ID,
+	}]
 }
 
 func (t *credentialPressureTracker) reserveLeastCandidate(addr routing.ModelAddress, tokenID int64, slots []credentialAttemptSlot, candidates []int) int {
@@ -275,9 +311,12 @@ func (s *Server) reserveCredentialAttempt(addr routing.ModelAddress, tokenID int
 	if len(slots) == 0 {
 		return 0, provider.BearerCredential{}, func() {}, false
 	}
-	if strings.TrimSpace(affinityKey) != "" || s == nil || s.pressure == nil {
+	if s == nil || s.pressure == nil {
 		slot := slots[0]
 		return slot.index, slot.credential, s.trackCredentialAttempt(addr, slot.credential), true
+	}
+	if strings.TrimSpace(affinityKey) != "" {
+		return s.pressure.reserveLeastStable(addr, slots)
 	}
 	return s.pressure.reserveLeast(addr, tokenID, slots)
 }

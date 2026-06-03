@@ -158,11 +158,7 @@ func safeRefreshFailureDescription(value string) string {
 }
 
 func safeRefreshFailureClass(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return ""
-	}
-	return safeErrorToken(value)
+	return privacy.RefreshFailureClass(value)
 }
 
 func safeMachineString(value string) string {

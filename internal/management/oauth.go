@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"ilonasin/internal/credentials"
+	"ilonasin/internal/privacy"
 )
 
 type StartOAuthDeviceLoginRequest struct {
@@ -143,7 +144,7 @@ func safeOAuthErrorClass(err error) (string, string) {
 		return "oauth_refresh_failed", ""
 	}
 	if class := credentials.OAuthRefreshErrorClass(err); class != "" {
-		return safeManagementErrorClass(class), ""
+		return privacy.RefreshFailureClass(class), ""
 	}
 	switch {
 	case errors.Is(err, credentials.ErrCredentialNotFound):

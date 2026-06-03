@@ -129,9 +129,9 @@ func (s Service) DisableLocalToken(ctx context.Context, req DisableLocalTokenReq
 func localTokenFromCredentials(row credentials.LocalTokenMetadata) LocalToken {
 	return LocalToken{
 		ID:          row.ID,
-		Label:       row.Label,
-		TokenPrefix: row.TokenPrefix,
-		TokenLast4:  row.TokenLast4,
+		Label:       safeSnapshotString(row.Label),
+		TokenPrefix: safeTokenFragment(row.TokenPrefix, 8),
+		TokenLast4:  safeTokenFragment(row.TokenLast4, 4),
 		CreatedAt:   row.CreatedAt,
 		DisabledAt:  row.DisabledAt,
 		Disabled:    row.Disabled,

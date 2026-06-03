@@ -31,7 +31,7 @@ func (s Service) LoadManagementSnapshot(ctx context.Context) (ManagementSnapshot
 		if err != nil {
 			return ManagementSnapshotResponse{}, err
 		}
-		poolGroups = visibleCredentialPoolGroups(poolGroups, s.Providers)
+		poolGroups = visibleCredentialPoolGroupMetadata(poolGroups, s.Providers)
 		out.CredentialPoolGroups = credentialPoolGroupsFromCredentials(poolGroups)
 	}
 	if s.OAuth != nil {

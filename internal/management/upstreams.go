@@ -27,39 +27,6 @@ type DisableUpstreamCredentialResponse struct {
 	Disabled bool `json:"disabled"`
 }
 
-func poolGroupCredentialKinds(instance ProviderInstance) map[string]bool {
-	out := map[string]bool{}
-	if instance.APIKey {
-		out[credentials.CredentialKindAPIKey] = true
-	}
-	if instance.OAuth && instance.Type == "codex" {
-		out[credentials.CredentialKindOAuth] = true
-	}
-	return out
-}
-
-func allowedPoolGroupCredentialKindsByProvider(providers []ProviderInstance) map[string]map[string]bool {
-	allowed := map[string]map[string]bool{}
-	for _, instance := range providers {
-		kinds := poolGroupCredentialKinds(instance)
-		if len(kinds) > 0 {
-			allowed[instance.ID] = kinds
-		}
-	}
-	return allowed
-}
-
-func visibleCredentialPoolGroupMetadata(rows []credentials.CredentialPoolGroupMetadata, providers []ProviderInstance) []credentials.CredentialPoolGroupMetadata {
-	allowed := allowedPoolGroupCredentialKindsByProvider(providers)
-	out := make([]credentials.CredentialPoolGroupMetadata, 0, len(rows))
-	for _, row := range rows {
-		if allowed[row.ProviderInstanceID][row.CredentialKind] && row.CredentialCount >= 2 {
-			out = append(out, row)
-		}
-	}
-	return out
-}
-
 type UpstreamCredentialClient interface {
 	AddUpstreamAPIKey(ctx context.Context, req AddUpstreamAPIKeyRequest) (AddUpstreamAPIKeyResponse, error)
 	DisableUpstreamCredential(ctx context.Context, req DisableUpstreamCredentialRequest) (DisableUpstreamCredentialResponse, error)

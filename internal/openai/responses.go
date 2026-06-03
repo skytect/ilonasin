@@ -595,7 +595,7 @@ func validateResponsesToolTranscript(items []ResponseInputItem) error {
 			outputs[item.CallID] = i
 			delete(pending, item.CallID)
 		case "message":
-			if len(pending) != 0 {
+			if len(pending) != 0 && !responsesInstructionMessage(item) {
 				return fmt.Errorf("input[%d].type cannot appear before function_call_output", i)
 			}
 		}
@@ -619,6 +619,10 @@ func responsesOutputMatchesCall(outputType, callType string) bool {
 	default:
 		return false
 	}
+}
+
+func responsesInstructionMessage(item ResponseInputItem) bool {
+	return item.Type == "message" && (item.Role == "system" || item.Role == "developer")
 }
 
 func parseResponsesContent(raw json.RawMessage, inputIndex int) ([]ResponseContentItem, error) {

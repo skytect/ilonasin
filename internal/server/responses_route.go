@@ -26,8 +26,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request, token c
 		err = readErr
 	}
 	if err != nil {
-		s.logHTTP(r, http.StatusBadRequest, "responses_route", "invalid_json")
-		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "invalid_json")
+		s.writeOpenAIInvalidJSON(w, r, "responses_route", err.Error())
 		return
 	}
 	addr, err := s.resolveModelAddress(r.Context(), responsesReq.Model)

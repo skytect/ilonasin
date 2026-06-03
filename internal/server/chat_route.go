@@ -25,8 +25,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 		err = readErr
 	}
 	if err != nil {
-		s.logHTTP(r, http.StatusBadRequest, "chat_route", "invalid_json")
-		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "invalid_json")
+		s.writeOpenAIInvalidJSON(w, r, "chat_route", err.Error())
 		return
 	}
 	applyHeaderAffinityFallback(r, &req)

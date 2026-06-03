@@ -25,14 +25,6 @@ func responsesRequestMetadataBase(start time.Time, token credentials.VerifiedLoc
 		ResolvedProviderInstance:  safeMetadataAddress(addr.ProviderInstanceID),
 		ResolvedModel:             safeMetadataAddress(addr.ProviderModelID),
 	}
-	if req.ServiceTier != nil {
-		out.RequestedServiceTier = safeServiceTier(*req.ServiceTier)
-	}
-	if effort, ok := req.Reasoning["effort"].(string); ok {
-		out.ReasoningEffort = safeReasoningEffort(effort)
-	}
-	if summary, ok := req.Reasoning["summary"].(string); ok {
-		out.ReasoningSummary = safeReasoningSummary(summary)
-	}
+	applyResponsesOptionMetadata(&out, req)
 	return out
 }

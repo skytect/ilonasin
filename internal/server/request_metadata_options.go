@@ -19,6 +19,18 @@ func applySafeOptionMetadata(out *metadata.Request, providerType string, req ope
 	}
 }
 
+func applyResponsesOptionMetadata(out *metadata.Request, req openai.ResponsesRequest) {
+	if req.ServiceTier != nil {
+		out.RequestedServiceTier = safeServiceTier(*req.ServiceTier)
+	}
+	if effort, ok := req.Reasoning["effort"].(string); ok {
+		out.ReasoningEffort = safeReasoningEffort(effort)
+	}
+	if summary, ok := req.Reasoning["summary"].(string); ok {
+		out.ReasoningSummary = safeReasoningSummary(summary)
+	}
+}
+
 func applyTopLevelServiceTierMetadata(out *metadata.Request, providerType string, req openai.ChatCompletionRequest) {
 	if req.ServiceTier != nil {
 		out.RequestedServiceTier = safeServiceTier(*req.ServiceTier)

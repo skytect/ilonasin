@@ -14,7 +14,6 @@ const (
 	PathHealth              = "/_ilonasin/manage/health"
 	PathLocalTokens         = "/_ilonasin/manage/local-tokens"
 	PathUpstreamCredentials = "/_ilonasin/manage/upstream-credentials"
-	PathFallbackPolicies    = "/_ilonasin/manage/fallback-policies"
 	PathOAuthDeviceLogin    = "/_ilonasin/manage/oauth-device-login"
 	PathOAuthCredentials    = "/_ilonasin/manage/oauth-credentials"
 )
@@ -99,32 +98,6 @@ func Handler(service HandlerService) http.Handler {
 			return
 		}
 		resp, err := service.DisableUpstreamCredential(r.Context(), req)
-		if err != nil {
-			writeManagementError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, resp)
-	})
-	mux.HandleFunc("POST "+PathFallbackPolicies+"/enable", func(w http.ResponseWriter, r *http.Request) {
-		var req FallbackPolicyRequest
-		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest)
-			return
-		}
-		resp, err := service.EnableFallbackPolicy(r.Context(), req)
-		if err != nil {
-			writeManagementError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, resp)
-	})
-	mux.HandleFunc("POST "+PathFallbackPolicies+"/disable", func(w http.ResponseWriter, r *http.Request) {
-		var req FallbackPolicyRequest
-		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest)
-			return
-		}
-		resp, err := service.DisableFallbackPolicy(r.Context(), req)
 		if err != nil {
 			writeManagementError(w, err)
 			return

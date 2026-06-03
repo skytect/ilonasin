@@ -104,7 +104,6 @@ func (m Model) footerLine(width int) string {
 			keyHint{"x", "disable"},
 			keyHint{"l", "login"},
 			keyHint{"o/r", "oauth"},
-			keyHint{"f/F", "fallback"},
 		)
 	case tabUsage:
 		hints = append(hints, keyHint{"u", "refresh"})

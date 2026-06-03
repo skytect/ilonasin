@@ -42,8 +42,6 @@ type UpstreamCredentialManager interface {
 	List(ctx context.Context) ([]UpstreamCredentialMetadata, error)
 	ListFallbackPolicies(ctx context.Context) ([]FallbackPolicyMetadata, error)
 	Disable(ctx context.Context, id int64) error
-	EnableFallbackGroup(ctx context.Context, providerInstanceID, credentialKind, groupLabel string) error
-	DisableFallbackGroup(ctx context.Context, providerInstanceID, credentialKind, groupLabel string) error
 }
 
 type UpstreamCredentialResolver interface {
@@ -74,7 +72,6 @@ type UpstreamCredentialRepository interface {
 	UpdateOAuthTokens(ctx context.Context, credentialID int64, update OAuthTokenUpdate) error
 	UpdateOAuthAccountMetadata(ctx context.Context, credentialID int64, displayLabel, planLabel string, updatedAt time.Time) error
 	ListFallbackPolicies(ctx context.Context) ([]FallbackPolicyMetadata, error)
-	SetFallbackGroupEnabled(ctx context.Context, providerInstanceID, credentialKind, groupLabel string, enabled bool, now time.Time) error
 	UpsertOAuthCredentialForAccountHash(ctx context.Context, meta NewOAuthCredential, accessToken, refreshToken string) (OAuthCredentialMetadata, error)
 	ListOAuthCredentials(ctx context.Context) ([]OAuthCredentialMetadata, error)
 	ListProviderAccounts(ctx context.Context) ([]ProviderAccountMetadata, error)
@@ -381,22 +378,6 @@ func (s *UpstreamService) Disable(ctx context.Context, id int64) error {
 
 func (s *UpstreamService) MarkOAuthRefreshFailure(ctx context.Context, credentialID int64, failureClass string) error {
 	return s.Repo.MarkOAuthRefreshFailure(ctx, credentialID, normalizeRefreshFailureClass(failureClass), "", s.now())
-}
-
-func (s *UpstreamService) EnableFallbackGroup(ctx context.Context, providerInstanceID, credentialKind, groupLabel string) error {
-	err := s.setFallbackGroup(ctx, providerInstanceID, credentialKind, groupLabel, true)
-	if err == nil {
-		s.logInfo(ctx, "fallback_policy_changed", slog.String("provider_instance", providerInstanceID), slog.String("credential_kind", credentialKind), slog.Bool("enabled", true))
-	}
-	return err
-}
-
-func (s *UpstreamService) DisableFallbackGroup(ctx context.Context, providerInstanceID, credentialKind, groupLabel string) error {
-	err := s.setFallbackGroup(ctx, providerInstanceID, credentialKind, groupLabel, false)
-	if err == nil {
-		s.logInfo(ctx, "fallback_policy_changed", slog.String("provider_instance", providerInstanceID), slog.String("credential_kind", credentialKind), slog.Bool("enabled", false))
-	}
-	return err
 }
 
 func (s *UpstreamService) ResolveAPIKeys(ctx context.Context, providerInstanceID string) ([]ResolvedAPIKeyCredential, error) {
@@ -1129,20 +1110,6 @@ func normalizeRefreshFailureClass(value string) string {
 	return value
 }
 
-func (s *UpstreamService) setFallbackGroup(ctx context.Context, providerInstanceID, credentialKind, groupLabel string, enabled bool) error {
-	if groupLabel == "" {
-		groupLabel = DefaultFallbackGroup
-	}
-	instance, ok := s.Registry.Get(providerInstanceID)
-	if !ok {
-		return ErrCredentialNotFound
-	}
-	if !ProviderAllowsFallbackCredentialKind(instance, credentialKind) {
-		return unsupportedFallbackCredentialKindError(providerInstanceID, credentialKind)
-	}
-	return s.Repo.SetFallbackGroupEnabled(ctx, providerInstanceID, credentialKind, groupLabel, enabled, s.now())
-}
-
 func ProviderAllowsFallbackCredentialKind(instance provider.Instance, credentialKind string) bool {
 	switch credentialKind {
 	case CredentialKindAPIKey:
@@ -1151,17 +1118,6 @@ func ProviderAllowsFallbackCredentialKind(instance provider.Instance, credential
 		return instance.OAuth && instance.Type == "codex"
 	default:
 		return false
-	}
-}
-
-func unsupportedFallbackCredentialKindError(providerInstanceID, credentialKind string) error {
-	switch credentialKind {
-	case CredentialKindAPIKey:
-		return fmt.Errorf("%w: provider %q does not support api-key fallback groups", ErrUnsupportedCredential, providerInstanceID)
-	case CredentialKindOAuth:
-		return fmt.Errorf("%w: provider %q does not support oauth fallback groups", ErrUnsupportedCredential, providerInstanceID)
-	default:
-		return fmt.Errorf("%w: provider %q does not support fallback groups", ErrUnsupportedCredential, providerInstanceID)
 	}
 }
 

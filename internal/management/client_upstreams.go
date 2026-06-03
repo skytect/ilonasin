@@ -20,19 +20,3 @@ func (c Client) DisableUpstreamCredential(ctx context.Context, req DisableUpstre
 	}
 	return out, nil
 }
-
-func (c Client) EnableFallbackPolicy(ctx context.Context, req FallbackPolicyRequest) (FallbackPolicyResponse, error) {
-	var out FallbackPolicyResponse
-	if err := c.do(ctx, http.MethodPost, PathFallbackPolicies+"/enable", req, &out); err != nil {
-		return FallbackPolicyResponse{}, err
-	}
-	return out, nil
-}
-
-func (c Client) DisableFallbackPolicy(ctx context.Context, req FallbackPolicyRequest) (FallbackPolicyResponse, error) {
-	var out FallbackPolicyResponse
-	if err := c.do(ctx, http.MethodPost, PathFallbackPolicies+"/disable", req, &out); err != nil {
-		return FallbackPolicyResponse{}, err
-	}
-	return out, nil
-}

@@ -2,9 +2,6 @@ package sqlite
 
 import (
 	"context"
-	"database/sql"
-	"errors"
-	"time"
 
 	"ilonasin/internal/credentials"
 )
@@ -42,35 +39,4 @@ func (s *Store) ListFallbackPolicies(ctx context.Context) ([]credentials.Fallbac
 		out = append(out, row)
 	}
 	return out, rows.Err()
-}
-
-func (s *Store) SetFallbackGroupEnabled(ctx context.Context, providerInstanceID, credentialKind, groupLabel string, enabled bool, now time.Time) error {
-	enabledInt := 0
-	if enabled {
-		enabledInt = 1
-	}
-	ts := now.UTC().Format(time.RFC3339Nano)
-	_, err := s.DB.ExecContext(ctx, `
-		INSERT INTO credential_fallback_policies(provider_instance_id, credential_kind, group_label, enabled, created_at, updated_at)
-		VALUES(?, ?, ?, ?, ?, ?)
-		ON CONFLICT(provider_instance_id, credential_kind, group_label)
-		DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at
-	`, providerInstanceID, credentialKind, groupLabel, enabledInt, ts, ts)
-	return err
-}
-
-func (s *Store) fallbackGroupEnabled(ctx context.Context, providerInstanceID, credentialKind, groupLabel string) (bool, error) {
-	var enabled int
-	err := s.DB.QueryRowContext(ctx, `
-		SELECT enabled
-		FROM credential_fallback_policies
-		WHERE provider_instance_id = ? AND credential_kind = ? AND group_label = ?
-	`, providerInstanceID, credentialKind, groupLabel).Scan(&enabled)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return false, nil
-		}
-		return false, err
-	}
-	return enabled == 1, nil
 }

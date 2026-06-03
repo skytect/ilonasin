@@ -53,20 +53,6 @@ func (m Model) updateControlSectionKey(key tea.KeyMsg) (tea.Model, tea.Cmd, bool
 		m.paneFocus[tabProviders] = providersPaneOAuth
 		next, cmd := m.cycleOAuthSelectionAction()
 		return next, cmd, true
-	case "f":
-		if m.activeTab != tabProviders {
-			return m, nil, true
-		}
-		m.paneFocus[tabProviders] = providersPaneFallback
-		next, cmd := m.enableFallbackPolicyAction()
-		return next, cmd, true
-	case "F":
-		if m.activeTab != tabProviders {
-			return m, nil, true
-		}
-		m.paneFocus[tabProviders] = providersPaneFallback
-		next, cmd := m.disableFallbackPolicyAction()
-		return next, cmd, true
 	}
 	return m, nil, false
 }

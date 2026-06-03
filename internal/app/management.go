@@ -31,10 +31,10 @@ func startManagementServer(ctx context.Context, homeDir, configPath, databasePat
 	usageClient.IOLogger = ioLogger
 	usageClient.CaptureUpstreamIO = captureUpstreamIO
 	upstreams := &credentials.UpstreamService{
-		Registry:       registry,
+		Registry:       credentialsProviderRegistry(registry),
 		Repo:           store,
-		OAuthRefresher: refresher,
-		OAuthLogin:     login,
+		OAuthRefresher: credentialsOAuthRefresher(refresher),
+		OAuthLogin:     credentialsOAuthDeviceLogin(login),
 		Logger:         logger,
 		SecretsChanged: secretRefresh,
 	}

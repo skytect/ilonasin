@@ -44,15 +44,15 @@ func Serve(opts Options) error {
 		auth.EphemeralSecretAdded = rt.IOLogger.AddEphemeralSecret
 	}
 	upstreams := &credentials.UpstreamService{
-		Registry:       rt.Registry,
+		Registry:       credentialsProviderRegistry(rt.Registry),
 		Repo:           rt.Store,
-		OAuthRefresher: provider.NewHTTPOAuthRefresher(nil),
+		OAuthRefresher: credentialsOAuthRefresher(provider.NewHTTPOAuthRefresher(nil)),
 		Logger:         rt.Logger,
 		SecretsChanged: secretRefresh,
 	}
 	refresher := provider.NewHTTPOAuthRefresher(nil)
 	refresher.Logger = rt.Logger
-	upstreams.OAuthRefresher = refresher
+	upstreams.OAuthRefresher = credentialsOAuthRefresher(refresher)
 	codexAdapter := provider.NewHTTPChatAdapter(nil)
 	codexAdapter.Logger = rt.Logger
 	codexAdapter.IOLogger = rt.IOLogger

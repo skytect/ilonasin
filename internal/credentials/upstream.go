@@ -17,7 +17,6 @@ import (
 
 	"ilonasin/internal/logging"
 	"ilonasin/internal/privacy"
-	"ilonasin/internal/provider"
 )
 
 var (
@@ -99,10 +98,10 @@ type OAuthDeviceLoginController interface {
 }
 
 type UpstreamService struct {
-	Registry       provider.Registry
+	Registry       ProviderInstanceLookup
 	Repo           UpstreamCredentialRepository
-	OAuthRefresher provider.OAuthTokenRefresher
-	OAuthLogin     provider.OAuthDeviceLoginProvider
+	OAuthRefresher OAuthTokenRefresher
+	OAuthLogin     OAuthDeviceLoginProvider
 	Now            func() time.Time
 	DeviceLogins   *OAuthDeviceLoginSessions
 	Logger         *slog.Logger
@@ -441,7 +440,7 @@ func (s *UpstreamService) StartOAuthDeviceLogin(ctx context.Context, providerIns
 	if err := sessions.checkCapacity(now); err != nil {
 		return OAuthDeviceLoginChallenge{}, err
 	}
-	challenge, err := s.OAuthLogin.RequestOAuthDeviceCode(ctx, provider.OAuthDeviceCodeRequest{
+	challenge, err := s.OAuthLogin.RequestOAuthDeviceCode(ctx, OAuthDeviceCodeRequest{
 		ProviderInstanceID: providerInstanceID,
 		ProviderType:       instance.Type,
 		AuthIssuer:         instance.AuthIssuer,
@@ -483,7 +482,7 @@ func (s *UpstreamService) CompleteOAuthDeviceLogin(ctx context.Context, handle s
 		return OAuthCredentialMetadata{}, ErrNoEligibleCredential
 	}
 	now := s.now()
-	result, err := s.OAuthLogin.CompleteOAuthDeviceLogin(ctx, provider.OAuthDeviceLoginRequest{
+	result, err := s.OAuthLogin.CompleteOAuthDeviceLogin(ctx, OAuthDeviceLoginRequest{
 		ProviderInstanceID: session.ProviderInstanceID,
 		ProviderType:       session.ProviderType,
 		AuthIssuer:         session.AuthIssuer,
@@ -588,7 +587,7 @@ func (s *UpstreamService) refreshOAuthCredential(ctx context.Context, credential
 		return err
 	}
 	now := s.now()
-	result, err := s.OAuthRefresher.RefreshOAuthToken(ctx, provider.OAuthRefreshRequest{
+	result, err := s.OAuthRefresher.RefreshOAuthToken(ctx, OAuthRefreshRequest{
 		ProviderType: instance.Type,
 		AuthIssuer:   instance.AuthIssuer,
 		RefreshToken: refreshToken,
@@ -921,10 +920,6 @@ func OAuthDeviceLoginErrorClass(err error) string {
 	if errors.As(err, &c) {
 		return strings.TrimSpace(c.OAuthDeviceLoginErrorClass())
 	}
-	var loginErr provider.OAuthDeviceLoginError
-	if errors.As(err, &loginErr) {
-		return strings.TrimSpace(loginErr.Class)
-	}
 	return ""
 }
 
@@ -936,10 +931,6 @@ func OAuthDeviceLoginErrorEventID(err error) string {
 	if errors.As(err, &i) {
 		return strings.TrimSpace(i.OAuthDeviceLoginErrorEventID())
 	}
-	var loginErr provider.OAuthDeviceLoginError
-	if errors.As(err, &loginErr) {
-		return strings.TrimSpace(loginErr.EventID)
-	}
 	return ""
 }
 
@@ -950,10 +941,6 @@ func OAuthRefreshErrorClass(err error) string {
 	var c classified
 	if errors.As(err, &c) {
 		return strings.TrimSpace(c.OAuthRefreshErrorClass())
-	}
-	var refreshErr provider.OAuthRefreshError
-	if errors.As(err, &refreshErr) {
-		return strings.TrimSpace(refreshErr.Class)
 	}
 	type refreshClassified interface {
 		RefreshFailureClass() string
@@ -1128,9 +1115,8 @@ func (s *UpstreamService) logError(ctx context.Context, event string, err error,
 		return
 	}
 	eventID := logging.EventID()
-	var loginErr provider.OAuthDeviceLoginError
-	if errors.As(err, &loginErr) && loginErr.EventID != "" {
-		eventID = loginErr.EventID
+	if providerEventID := OAuthDeviceLoginErrorEventID(err); providerEventID != "" {
+		eventID = providerEventID
 	}
 	attrs = append([]slog.Attr{
 		slog.String("event", event),
@@ -1144,13 +1130,11 @@ func safeCredentialErrorClass(err error) string {
 	if err == nil {
 		return ""
 	}
-	var loginErr provider.OAuthDeviceLoginError
-	if errors.As(err, &loginErr) && loginErr.Class != "" {
-		return loginErr.Class
+	if class := OAuthDeviceLoginErrorClass(err); class != "" {
+		return class
 	}
-	var refreshErr provider.OAuthRefreshError
-	if errors.As(err, &refreshErr) && refreshErr.Class != "" {
-		return refreshErr.Class
+	if class := OAuthRefreshErrorClass(err); class != "" {
+		return class
 	}
 	switch {
 	case errors.Is(err, ErrCredentialNotFound):

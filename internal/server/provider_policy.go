@@ -10,25 +10,19 @@ import (
 )
 
 func responsesConversionPolicy(instance provider.Instance) openai.ResponsesConversionPolicy {
-	switch instance.Type {
-	case "codex":
-		return openai.ResponsesConversionPolicy{
-			PreserveCodexInput: true,
-			PreserveCodexTools: true,
-			AllowCodexOptions:  true,
-		}
-	case "openrouter":
-		return openai.ResponsesConversionPolicy{
-			AllowParallelToolCalls: true,
-		}
-	default:
-		return openai.ResponsesConversionPolicy{}
+	policy := provider.RoutePolicyForInstance(instance).Responses
+	return openai.ResponsesConversionPolicy{
+		PreserveCodexInput:     policy.PreserveResponsesInput,
+		PreserveCodexTools:     policy.PreserveResponsesTools,
+		AllowCodexOptions:      policy.AllowProviderOptions,
+		AllowParallelToolCalls: policy.AllowParallelTools,
 	}
 }
 
 func anthropicConversionPolicy(instance provider.Instance) anthropic.ChatConversionPolicy {
+	policy := provider.RoutePolicyForInstance(instance).Anthropic
 	return anthropic.ChatConversionPolicy{
-		IncludeGenerationOptions: instance.Type != "codex",
+		IncludeGenerationOptions: policy.IncludeGenerationOptions,
 	}
 }
 
@@ -37,8 +31,9 @@ type streamErrorExposurePolicy struct {
 }
 
 func streamErrorExposurePolicyFor(instance provider.Instance) streamErrorExposurePolicy {
+	policy := provider.RoutePolicyForInstance(instance).Stream
 	return streamErrorExposurePolicy{
-		exposeProviderErrorClasses: instance.Type == "codex",
+		exposeProviderErrorClasses: policy.ExposeProviderErrorClasses,
 	}
 }
 

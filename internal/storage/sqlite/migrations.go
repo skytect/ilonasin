@@ -315,6 +315,9 @@ var migrations = []migration{
 		addColumnIfMissing("model_cache", "service_tiers_json", `service_tiers_json TEXT NOT NULL DEFAULT '[]'`),
 		addColumnIfMissing("model_cache", "input_modalities_json", `input_modalities_json TEXT NOT NULL DEFAULT '[]'`),
 	}},
+	{version: 10, name: "drop_credential_fallback_policy_table", steps: []migrationStep{
+		sqlStep(`DROP TABLE IF EXISTS credential_fallback_policies`),
+	}},
 }
 
 func sqlSteps(stmts []string) []migrationStep {

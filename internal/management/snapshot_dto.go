@@ -3,23 +3,24 @@ package management
 import "time"
 
 type ManagementSnapshotResponse struct {
-	Runtime             RuntimeStatus             `json:"runtime"`
-	Providers           []ProviderInstance        `json:"providers"`
-	LocalTokens         []LocalToken              `json:"local_tokens"`
-	UpstreamCredentials []UpstreamCredential      `json:"upstream_credentials"`
-	FallbackPolicies    []CredentialPoolGroup     `json:"fallback_policies"`
-	OAuthCredentials    []OAuthCredential         `json:"oauth_credentials"`
-	ProviderAccounts    []ProviderAccount         `json:"provider_accounts"`
-	ModelCache          []ModelMetadata           `json:"model_cache"`
-	RecentRequests      []RequestSummary          `json:"recent_requests"`
-	Usage               []UsageSummary            `json:"usage"`
-	Latency             []LatencySummary          `json:"latency"`
-	Streams             []StreamSummary           `json:"streams"`
-	Health              []HealthSummary           `json:"health"`
-	Fallbacks           []FallbackSummary         `json:"fallbacks"`
-	Quotas              []QuotaSummary            `json:"quotas"`
-	SubscriptionUsage   SubscriptionUsageResponse `json:"subscription_usage"`
-	PruningAvailable    bool                      `json:"pruning_available"`
+	Runtime              RuntimeStatus             `json:"runtime"`
+	Providers            []ProviderInstance        `json:"providers"`
+	LocalTokens          []LocalToken              `json:"local_tokens"`
+	UpstreamCredentials  []UpstreamCredential      `json:"upstream_credentials"`
+	CredentialPoolGroups []CredentialPoolGroup     `json:"credential_pool_groups"`
+	FallbackPolicies     []CredentialPoolGroup     `json:"fallback_policies"`
+	OAuthCredentials     []OAuthCredential         `json:"oauth_credentials"`
+	ProviderAccounts     []ProviderAccount         `json:"provider_accounts"`
+	ModelCache           []ModelMetadata           `json:"model_cache"`
+	RecentRequests       []RequestSummary          `json:"recent_requests"`
+	Usage                []UsageSummary            `json:"usage"`
+	Latency              []LatencySummary          `json:"latency"`
+	Streams              []StreamSummary           `json:"streams"`
+	Health               []HealthSummary           `json:"health"`
+	Fallbacks            []FallbackSummary         `json:"fallbacks"`
+	Quotas               []QuotaSummary            `json:"quotas"`
+	SubscriptionUsage    SubscriptionUsageResponse `json:"subscription_usage"`
+	PruningAvailable     bool                      `json:"pruning_available"`
 }
 
 type RuntimeStatus struct {

@@ -30,10 +30,8 @@ func sanitizeSnapshot(out *ManagementSnapshotResponse) {
 		out.UpstreamCredentials[i].SecretLast4 = safeSecretFragment(out.UpstreamCredentials[i].SecretLast4, 4)
 		out.UpstreamCredentials[i].FallbackGroup = safeSnapshotString(out.UpstreamCredentials[i].FallbackGroup)
 	}
-	for i := range out.FallbackPolicies {
-		out.FallbackPolicies[i].ProviderInstanceID = safeMachineString(out.FallbackPolicies[i].ProviderInstanceID)
-		out.FallbackPolicies[i].GroupLabel = safeSnapshotString(out.FallbackPolicies[i].GroupLabel)
-	}
+	sanitizeCredentialPoolGroups(out.CredentialPoolGroups)
+	sanitizeCredentialPoolGroups(out.FallbackPolicies)
 	for i := range out.OAuthCredentials {
 		out.OAuthCredentials[i].ProviderInstanceID = safeMachineString(out.OAuthCredentials[i].ProviderInstanceID)
 		out.OAuthCredentials[i].Label = safeSnapshotString(out.OAuthCredentials[i].Label)
@@ -195,6 +193,13 @@ func hasAllowedUnsafePrefix(value string, prefixes []string) bool {
 		}
 	}
 	return false
+}
+
+func sanitizeCredentialPoolGroups(rows []CredentialPoolGroup) {
+	for i := range rows {
+		rows[i].ProviderInstanceID = safeMachineString(rows[i].ProviderInstanceID)
+		rows[i].GroupLabel = safeSnapshotString(rows[i].GroupLabel)
+	}
 }
 
 func safeBaseURL(raw string) string {

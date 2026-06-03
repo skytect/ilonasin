@@ -27,12 +27,13 @@ func (s Service) LoadManagementSnapshot(ctx context.Context) (ManagementSnapshot
 		}
 		rows = visibleUpstreamCredentials(rows, s.Providers)
 		out.UpstreamCredentials = upstreamCredentialsFromCredentials(rows)
-		policies, err := s.Upstreams.ListCredentialPoolGroups(ctx)
+		poolGroups, err := s.Upstreams.ListCredentialPoolGroups(ctx)
 		if err != nil {
 			return ManagementSnapshotResponse{}, err
 		}
-		policies = visibleCredentialPoolGroups(policies, s.Providers)
-		out.FallbackPolicies = credentialPoolGroupsFromCredentials(policies)
+		poolGroups = visibleCredentialPoolGroups(poolGroups, s.Providers)
+		out.CredentialPoolGroups = credentialPoolGroupsFromCredentials(poolGroups)
+		out.FallbackPolicies = append([]CredentialPoolGroup(nil), out.CredentialPoolGroups...)
 	}
 	if s.OAuth != nil {
 		rows, err := s.OAuth.ListOAuthCredentials(ctx)

@@ -59,6 +59,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request, token c
 		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "unsupported_request")
 		return
 	}
+	applyHeaderAffinityFallback(r, &chatReq)
 	if err := chatReq.Validate(); err != nil {
 		s.recordResponsesEarly(r, start, token, addr, instance, responsesReq, http.StatusBadRequest, "unsupported_request")
 		s.logHTTP(r, http.StatusBadRequest, "responses_route", "unsupported_request")

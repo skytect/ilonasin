@@ -29,6 +29,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "invalid_json")
 		return
 	}
+	applyHeaderAffinityFallback(r, &req)
 	if err := req.Validate(); err != nil {
 		_ = s.record(r.Context(), earlyChatRequestMetadata(start, token, req, metadataEndpointChatCompletions, http.StatusBadRequest, "unsupported_request"))
 		s.logHTTP(r, http.StatusBadRequest, "chat_route", "unsupported_request")

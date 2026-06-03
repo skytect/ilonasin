@@ -55,6 +55,7 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request,
 		writeAnthropicError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	applyHeaderAffinityFallback(r, &chatReq)
 	if err := chatReq.Validate(); err != nil {
 		s.recordAnthropicEarly(r, start, token, addr, instance, chatReq, req, http.StatusBadRequest, "unsupported_request")
 		s.logHTTP(r, http.StatusBadRequest, "anthropic_route", "unsupported_request")

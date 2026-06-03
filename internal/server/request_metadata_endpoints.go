@@ -1,8 +1,10 @@
 package server
 
+import "ilonasin/internal/metadata"
+
 const (
-	metadataEndpointChatCompletions      = "chat_completions"
-	metadataEndpointResponses            = "responses"
-	metadataEndpointAnthropicMessages    = "anthropic_messages"
-	metadataEndpointAnthropicCountTokens = "anthropic_count_tokens"
+	metadataEndpointChatCompletions      = metadata.EndpointChatCompletions
+	metadataEndpointResponses            = metadata.EndpointResponses
+	metadataEndpointAnthropicMessages    = metadata.EndpointAnthropicMessages
+	metadataEndpointAnthropicCountTokens = metadata.EndpointAnthropicCountTokens
 )

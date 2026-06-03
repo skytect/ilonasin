@@ -5,6 +5,7 @@ import (
 	"strings"
 	"unicode"
 
+	"ilonasin/internal/metadata"
 	"ilonasin/internal/privacy"
 )
 
@@ -144,13 +145,7 @@ func safeTokenFragmentDisplay(value string, maxRunes int) string {
 }
 
 func safeEndpointDisplay(value string) string {
-	value = strings.TrimSpace(value)
-	switch value {
-	case "chat_completions", "responses", "anthropic_messages", "anthropic_count_tokens":
-		return value
-	default:
-		return ""
-	}
+	return metadata.SafeEndpoint(value)
 }
 
 func safeRefreshFailureDescriptionDisplay(value string) string {

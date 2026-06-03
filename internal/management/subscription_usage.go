@@ -42,7 +42,7 @@ func (s Service) RefreshSubscriptionUsage(ctx context.Context) (SubscriptionUsag
 	var recordedErrors int
 	var firstErr error
 	for _, instance := range s.Providers {
-		if instance.Type != "codex" || !instance.OAuth {
+		if !SupportsCodexOAuth(instance) {
 			continue
 		}
 		for _, meta := range oauthRows {

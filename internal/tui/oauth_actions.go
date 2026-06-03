@@ -103,7 +103,7 @@ func (m *Model) refreshSelectedOAuthCredential() error {
 
 func firstOAuthLoginProvider(providers []management.ProviderInstance) (string, bool) {
 	for _, instance := range providers {
-		if instance.Type == "codex" && instance.OAuth {
+		if management.SupportsCodexOAuth(instance) {
 			return instance.ID, true
 		}
 	}

@@ -63,7 +63,7 @@ func poolGroupCredentialKinds(instance ProviderInstance) map[string]bool {
 	if instance.APIKey {
 		out[credentials.CredentialKindAPIKey] = true
 	}
-	if instance.OAuth && instance.Type == "codex" {
+	if SupportsCodexOAuth(instance) {
 		out[credentials.CredentialKindOAuth] = true
 	}
 	return out

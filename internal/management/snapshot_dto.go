@@ -40,6 +40,10 @@ type ProviderInstance struct {
 	ModelDiscovery bool   `json:"model_discovery"`
 }
 
+func SupportsCodexOAuth(instance ProviderInstance) bool {
+	return instance.Type == "codex" && instance.OAuth
+}
+
 type UpstreamCredential struct {
 	ID                 int64      `json:"id"`
 	ProviderInstanceID string     `json:"provider_instance_id"`

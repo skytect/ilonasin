@@ -52,6 +52,27 @@ func remainingBar(value float64, width int) string {
 	return style.Render(fill) + emptyBarStyle.Render(empty)
 }
 
+func meterRow(label, bar, value string, width int, trailing ...string) string {
+	label = safeMetricLabel(label)
+	value = safeChromeDisplay(value)
+	parts := make([]string, 0, 3+len(trailing))
+	if label != "" {
+		parts = append(parts, mutedStyle.Render(label))
+	}
+	if bar != "" {
+		parts = append(parts, bar)
+	}
+	if value != "" {
+		parts = append(parts, valueStyle.Render(value))
+	}
+	for _, item := range trailing {
+		if strings.TrimSpace(item) != "" {
+			parts = append(parts, item)
+		}
+	}
+	return wrapTargetedLines(width, metricLine(parts...))
+}
+
 func percentText(value float64) string {
 	return fmt.Sprintf("%5.1f%%", boundedTUIFloat(value, 0, 100))
 }

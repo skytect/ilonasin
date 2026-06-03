@@ -196,9 +196,9 @@ func compactRateBars(width int, rates ...rateMetric) string {
 			continue
 		}
 		value := boundedTUIFloat(rate.value, 0, 100)
-		parts = append(parts, mutedStyle.Render(label)+" "+percentBar(value, barWidth)+" "+valueStyle.Render(compactPercentText(value)))
+		parts = append(parts, meterRow(label, percentBar(value, barWidth), compactPercentText(value), 0))
 	}
-	return metricLine(parts...)
+	return wrappedMetricLine(width, parts...)
 }
 
 type rateMetric struct {

@@ -3,7 +3,7 @@
 Status: draft architecture plan.
 
 Access date: 2026-05-30. This document captures the high-level design decisions
-for `ilonasin`, a local OpenAI-compatible LLM router with provider credentials,
+for `ilonasin`, a local LLM router with compatibility APIs, provider credentials,
 OAuth-capable accounts, metadata-only observability, and a polished TUI.
 
 ## Product Shape
@@ -13,7 +13,7 @@ configured provider instances.
 
 The first product target is not a hosted SaaS. It is a local service that:
 
-- exposes an OpenAI-compatible HTTP API for local clients,
+- exposes local compatibility APIs for local clients,
 - stores mutable credentials and usage metadata in local SQLite owned by the
   daemon,
 - uses static TOML config for provider instances and daemon bootstrap,
@@ -35,7 +35,7 @@ ilonasin serve
 ilonasin manage
 ```
 
-`serve` runs the OpenAI-compatible local daemon.
+`serve` runs the local compatibility API daemon.
 
 `manage` opens the local management TUI.
 
@@ -157,8 +157,7 @@ existing provider instance is a daemon management operation surfaced through
 
 ### Local API Auth
 
-Every OpenAI-compatible API request to `ilonasin serve` must use an ilonasin
-client token:
+Every local API request to `ilonasin serve` must use an ilonasin client token:
 
 ```http
 Authorization: Bearer <ilonasin_token>
@@ -170,19 +169,36 @@ Ilonasin client tokens are separate from upstream provider credentials. A client
 token must never double as a provider API key, OAuth token, TUI admin token, or
 provider bearer token.
 
-### OpenAI-Compatible Surface
+### Local API Surface
 
-The first API surface is a strict subset:
+The local daemon exposes bounded compatibility surfaces for local clients.
 
+OpenAI-compatible routes:
+
+- `GET /models`
 - `GET /v1/models`
 - `POST /v1/chat/completions`
 - streaming chat completions
 
-Unsupported fields should return clear errors. The initial API should not
+Responses-compatible routes:
+
+- `POST /responses`
+- `POST /v1/responses`
+
+Anthropic-compatible routes:
+
+- `POST /v1/messages`
+- `POST /v1/messages/count_tokens`
+
+Unsupported fields should return clear local errors. The daemon should not
 silently forward unknown or unsupported fields to providers.
 
 Provider-specific escape hatches can exist, but they should be explicit and
 namespaced.
+
+Responses and Anthropic-compatible routes are local compatibility surfaces, not
+claims of universal upstream feature parity. They should convert into the local
+strict request model or reject unsupported features before provider dispatch.
 
 ### Model Addressing
 
@@ -413,9 +429,9 @@ looking at request or response bodies.
 ## High-Level Runtime Architecture
 
 ```text
-OpenAI-compatible clients
+Local API clients
   -> HTTP API auth
-    -> OpenAI-compatible request parser
+    -> local API request parser/converter
       -> strict request validator
         -> model address resolver
           -> routing policy
@@ -499,13 +515,13 @@ The TUI does not edit `config.toml`.
 
 The management API should use a local-only internal transport, such as a Unix
 domain socket on Unix, and must not be exposed as part of the public
-OpenAI-compatible API surface.
+local compatibility API surface.
 
 ## Conceptual SQLite Tables
 
 Exact schema is deferred, but the architecture should cover these concepts:
 
-- `client_tokens`: local ilonasin API tokens for OpenAI-compatible clients.
+- `client_tokens`: local ilonasin API tokens for local API clients.
 - `provider_credentials`: API-key, OAuth, command, or other credentials bound to
   configured provider instance IDs.
 - `oauth_tokens`: access/refresh token material, expiry data, refresh failure
@@ -528,34 +544,17 @@ as extracted error metadata, not as raw token endpoint responses.
 
 ## Deferred Research
 
-Do not choose implementation libraries in this architecture document.
+Do not choose speculative implementation libraries in this architecture
+document.
 
-These decisions must be researched before implementation, preferably with
-parallel subagents:
+Areas that still need research or stronger live evidence:
 
-- HTTP server/router stack.
-- SQLite driver.
-- SQL/query layer.
-- Migration library and embedded migration strategy.
-- TOML config parser.
-- Logging library.
-- Metrics library.
-- OAuth helper libraries.
-- Token generation and hashing strategy.
-- Test framework and mocking strategy.
-- Provider adapter testing strategy.
-- Whether to use generated clients or handwritten provider adapters.
 - XDG path support.
-- Exact Codex request fields for fast mode, reasoning effort, and subscription
-  auth behavior.
-
-Known candidate areas, not decisions:
-
-- Go standard library HTTP versus a small router.
-- SQLite driver options with and without CGO.
-- `sqlc`, `sqlx`, Ent, Bun, GORM, or another query layer.
-- Goose, golang-migrate, or another embedded migration approach.
-- Bubble Tea, Lipgloss, and Bubbles for TUI implementation.
+- Non-Unix management transport.
+- Provider adapter test strategy for hosted/deferred/namespaced tool families.
+- OpenRouter provider/model behavior for Codex CLI tool-response paths.
+- Exact provider-term boundaries for subscription account keepalive and quota
+  pooling.
 
 ## Open Questions
 
@@ -567,6 +566,8 @@ Known candidate areas, not decisions:
   terms?
 - How should daemon management transport work on non-Unix platforms?
 - Should metadata pruning be manual, scheduled, or both?
+- How much local Responses and Anthropic-compatible tool-family parity is
+  necessary beyond the currently supported conversion paths?
 
 ## MVP Target
 
@@ -578,9 +579,14 @@ The architecture supports an MVP with:
 - SQLite-backed local API tokens,
 - SQLite-backed upstream API keys and OAuth tokens,
 - DeepSeek, OpenRouter, and Codex provider adapters,
+- `/models`,
 - `/v1/models`,
 - `/v1/chat/completions`,
 - streaming chat completions,
+- `/responses`,
+- `/v1/responses`,
+- `/v1/messages`,
+- `/v1/messages/count_tokens`,
 - strict request validation,
 - same-provider-instance and same-model credential fallback,
 - metadata-only usage ledger,

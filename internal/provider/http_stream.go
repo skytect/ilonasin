@@ -22,6 +22,21 @@ const DefaultMaxStreamEvents = 1_000_000
 const DefaultStreamIdleTimeout = 120 * time.Second
 const DefaultStreamHeaderTimeout = 30 * time.Second
 
+type streamProviderPolicy struct {
+	extractOpenRouterCost     bool
+	classifyOpenRouterCredits bool
+}
+
+func streamProviderPolicyForInstance(instance Instance) streamProviderPolicy {
+	if instance.Type != "openrouter" {
+		return streamProviderPolicy{}
+	}
+	return streamProviderPolicy{
+		extractOpenRouterCost:     true,
+		classifyOpenRouterCredits: true,
+	}
+}
+
 func (a HTTPChatAdapter) StreamChat(ctx context.Context, req ChatRequest, sink ChatStreamSink) (ChatStreamSummary, error) {
 	start := time.Now()
 	if req.Instance.Type == "codex" {
@@ -93,8 +108,9 @@ func (a HTTPChatAdapter) StreamChat(ctx context.Context, req ChatRequest, sink C
 		StatusCode:       http.StatusOK,
 		CompletionStatus: "completed",
 	}
+	policy := streamProviderPolicyForInstance(req.Instance)
 	streamCapture := upstreamStreamCapture{instance: req.Instance, credentialID: req.Credential.ID, endpoint: "chat_completions_stream", status: resp.StatusCode, id: ioID}
-	if err := a.readStream(streamCtx, resp.Body, sink, &summary, start, req.Instance.Type, streamCapture); err != nil {
+	if err := a.readStream(streamCtx, resp.Body, sink, &summary, start, policy, streamCapture); err != nil {
 		if summary.ErrorClass == "" {
 			summary.ErrorClass = classifyStreamReadError(streamCtx, err)
 		}
@@ -212,7 +228,7 @@ type upstreamStreamCapture struct {
 	eventIndex   int
 }
 
-func (a HTTPChatAdapter) readStream(ctx context.Context, body io.ReadCloser, sink ChatStreamSink, summary *ChatStreamSummary, start time.Time, providerType string, capture upstreamStreamCapture) error {
+func (a HTTPChatAdapter) readStream(ctx context.Context, body io.ReadCloser, sink ChatStreamSink, summary *ChatStreamSummary, start time.Time, policy streamProviderPolicy, capture upstreamStreamCapture) error {
 	reader := bufio.NewReaderSize(body, a.maxStreamLineBytes()+1)
 	var parts [][]byte
 	eventBytes := 0
@@ -224,7 +240,7 @@ func (a HTTPChatAdapter) readStream(ctx context.Context, body io.ReadCloser, sin
 					data := bytes.Join(parts, []byte("\n"))
 					capture.eventIndex++
 					capture.id = a.recordUpstreamSSE(capture.instance, capture.credentialID, capture.endpoint, capture.status, data, capture.id, capture.eventIndex)
-					if err := a.handleStreamEvent(ctx, data, sink, summary, start, providerType); err != nil {
+					if err := a.handleStreamEvent(ctx, data, sink, summary, start, policy); err != nil {
 						return err
 					}
 					if summary.Done {
@@ -248,7 +264,7 @@ func (a HTTPChatAdapter) readStream(ctx context.Context, body io.ReadCloser, sin
 			data := bytes.Join(parts, []byte("\n"))
 			capture.eventIndex++
 			capture.id = a.recordUpstreamSSE(capture.instance, capture.credentialID, capture.endpoint, capture.status, data, capture.id, capture.eventIndex)
-			if err := a.handleStreamEvent(ctx, data, sink, summary, start, providerType); err != nil {
+			if err := a.handleStreamEvent(ctx, data, sink, summary, start, policy); err != nil {
 				return err
 			}
 			parts = nil
@@ -317,7 +333,7 @@ func (a HTTPChatAdapter) readStreamLine(ctx context.Context, body io.Closer, rea
 	}
 }
 
-func (a HTTPChatAdapter) handleStreamEvent(ctx context.Context, data []byte, sink ChatStreamSink, summary *ChatStreamSummary, start time.Time, providerType string) error {
+func (a HTTPChatAdapter) handleStreamEvent(ctx context.Context, data []byte, sink ChatStreamSink, summary *ChatStreamSummary, start time.Time, policy streamProviderPolicy) error {
 	if bytes.Equal(bytes.TrimSpace(data), []byte("[DONE]")) {
 		if err := sink.WriteDone(ctx); err != nil {
 			summary.ErrorClass = "client_disconnected"
@@ -328,7 +344,7 @@ func (a HTTPChatAdapter) handleStreamEvent(ctx context.Context, data []byte, sin
 		return nil
 	}
 	if openai.IsStreamError(data) {
-		summary.ErrorClass = streamErrorClass(data, providerType)
+		summary.ErrorClass = streamErrorClass(data, policy)
 		summary.CompletionStatus = "upstream_error"
 		if !summary.Started {
 			summary.StatusCode = streamErrorStatus(summary.ErrorClass)
@@ -365,7 +381,7 @@ func (a HTTPChatAdapter) handleStreamEvent(ctx context.Context, data []byte, sin
 		summary.ResolvedModel = chunk.ResolvedModel
 	}
 	if chunk.HasUsage {
-		if providerType == "openrouter" {
+		if policy.extractOpenRouterCost {
 			chunk.Usage.CostMicrounits = openRouterCostMicrounitsFromStreamChunk(data)
 		}
 		summary.Usage = chunk.Usage
@@ -382,7 +398,7 @@ func (a HTTPChatAdapter) handleStreamEvent(ctx context.Context, data []byte, sin
 	return nil
 }
 
-func streamErrorClass(data []byte, providerType string) string {
+func streamErrorClass(data []byte, policy streamProviderPolicy) string {
 	var parsed struct {
 		Error struct {
 			Code    any    `json:"code"`
@@ -409,7 +425,7 @@ func streamErrorClass(data []byte, providerType string) string {
 	if strings.Contains(text, "insufficient_quota") || strings.Contains(text, "insufficient balance") || strings.Contains(text, "payment required") {
 		return "insufficient_quota"
 	}
-	if providerType == "openrouter" && strings.Contains(text, "credits") {
+	if policy.classifyOpenRouterCredits && strings.Contains(text, "credits") {
 		return "insufficient_quota"
 	}
 	return "upstream_stream_error"

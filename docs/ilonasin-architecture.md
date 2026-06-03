@@ -443,8 +443,11 @@ Telemetry fields may include:
 
 Telemetry retention default: keep forever until pruned.
 
-Manual pruning is available through the daemon-owned management API and TUI.
-Scheduled pruning remains a policy question.
+Manual pruning is available through the daemon-owned management API and TUI. The
+current TUI operation prunes metadata-only request, stream, fallback, health, and
+quota rows older than 30 days. Scheduled pruning and configurable retention
+durations are not part of the current architecture; they would need a separate
+retention-policy design before implementation.
 
 Debugging features that capture bodies must remain behind the explicit
 `capture_io` switch and must write only to the local IO log.
@@ -604,7 +607,6 @@ Areas that still need research or stronger live evidence:
 - What is the exact policy for subscription account fallback under provider
   terms?
 - How should daemon management transport work on non-Unix platforms?
-- Should metadata pruning be manual, scheduled, or both?
 - How much local Responses and Anthropic-compatible tool-family parity is
   necessary beyond the currently supported conversion paths?
 

@@ -1110,17 +1110,6 @@ func normalizeRefreshFailureClass(value string) string {
 	return value
 }
 
-func ProviderAllowsFallbackCredentialKind(instance provider.Instance, credentialKind string) bool {
-	switch credentialKind {
-	case CredentialKindAPIKey:
-		return instance.APIKey
-	case CredentialKindOAuth:
-		return instance.OAuth && instance.Type == "codex"
-	default:
-		return false
-	}
-}
-
 func (s *UpstreamService) now() time.Time {
 	if s.Now != nil {
 		return s.Now().UTC()

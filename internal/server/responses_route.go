@@ -54,16 +54,16 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request, token c
 	adapter := preflight.Adapter
 	chatReq, err := responsesReq.ToChatCompletionRequest(instance.Type)
 	if err != nil {
-		s.recordResponsesEarly(r, start, token, addr, instance, responsesReq, http.StatusBadRequest, "unsupported_request")
-		s.logHTTP(r, http.StatusBadRequest, "responses_route", "unsupported_request")
-		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "unsupported_request")
+		s.writeOpenAIUnsupportedRequest(w, r, "responses_route", err.Error(), func(status int, errorClass string) {
+			s.recordResponsesEarly(r, start, token, addr, instance, responsesReq, status, errorClass)
+		})
 		return
 	}
 	applyHeaderAffinityFallback(r, &chatReq)
 	if err := chatReq.Validate(); err != nil {
-		s.recordResponsesEarly(r, start, token, addr, instance, responsesReq, http.StatusBadRequest, "unsupported_request")
-		s.logHTTP(r, http.StatusBadRequest, "responses_route", "unsupported_request")
-		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "unsupported_request")
+		s.writeOpenAIUnsupportedRequest(w, r, "responses_route", err.Error(), func(status int, errorClass string) {
+			s.recordResponsesEarly(r, start, token, addr, instance, responsesReq, status, errorClass)
+		})
 		return
 	}
 	preflight = preflightAdapterRequest(adapter, instance, chatReq)

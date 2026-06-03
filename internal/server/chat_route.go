@@ -31,9 +31,9 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 	}
 	applyHeaderAffinityFallback(r, &req)
 	if err := req.Validate(); err != nil {
-		_ = s.record(r.Context(), earlyChatRequestMetadata(start, token, req, metadataEndpointChatCompletions, http.StatusBadRequest, "unsupported_request"))
-		s.logHTTP(r, http.StatusBadRequest, "chat_route", "unsupported_request")
-		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "unsupported_request")
+		s.writeOpenAIUnsupportedRequest(w, r, "chat_route", err.Error(), func(status int, errorClass string) {
+			_ = s.record(r.Context(), earlyChatRequestMetadata(start, token, req, metadataEndpointChatCompletions, status, errorClass))
+		})
 		return
 	}
 	addr, err := s.resolveModelAddress(r.Context(), req.Model)

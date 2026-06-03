@@ -30,6 +30,12 @@ func (s *Server) writeOpenAIInvalidModel(w http.ResponseWriter, r *http.Request,
 	writeError(w, http.StatusBadRequest, message, "invalid_request_error", "invalid_model")
 }
 
+func (s *Server) writeOpenAIUnsupportedRequest(w http.ResponseWriter, r *http.Request, routeEvent, message string, record func(status int, errorClass string)) {
+	record(http.StatusBadRequest, "unsupported_request")
+	s.logHTTP(r, http.StatusBadRequest, routeEvent, "unsupported_request")
+	writeError(w, http.StatusBadRequest, message, "invalid_request_error", "unsupported_request")
+}
+
 func writeOpenAICredentialUnavailable(w http.ResponseWriter, record func(status int, errorClass string)) {
 	record(http.StatusUnauthorized, "credential_unavailable")
 	writeError(w, http.StatusUnauthorized, "no eligible upstream credential is available", "invalid_request_error", "credential_unavailable")

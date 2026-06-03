@@ -46,14 +46,14 @@ func (m Model) writeRecentRequests(b *strings.Builder) {
 func requestSummaryRow(row management.RequestSummary, nowTime time.Time, width int) string {
 	state := statusState(row.HTTPStatus, row.ErrorClass)
 	head := requestTableRow(row, nowTime, state, width)
-	model := requestWrappedFieldLine(width, "model", requestModelRoute(row))
-	tokens := requestDetailLine(width, "tokens",
+	route := requestDetailLine(width, "route",
+		cardTitleStyle.Render(requestModelRoute(row)),
+		mutedStyle.Render(fullCredentialDisplay(row.CredentialID, row.CredentialLabel)),
+	)
+	usage := requestDetailLine(width, "usage",
 		compactTokenMixLine(row.PromptTokens, row.CompletionTokens, row.ReasoningTokens, row.CacheHitTokens, row.CacheMissTokens, row.CacheWriteTokens, width),
 		metricChip("total", compactInt(row.TotalTokens)),
 		compactRateBars(width, rateMetric{"hit", row.CacheHitRate * 100}),
-	)
-	retry := requestDetailLine(width, "retry",
-		mutedStyle.Render(fullCredentialDisplay(row.CredentialID, row.CredentialLabel)),
 		metricChip("try", fmt.Sprintf("%d", row.AttemptCount)),
 		metricChip("auth", fmt.Sprintf("%d", row.AuthRetryCount)),
 		metricChip("fb", fmt.Sprintf("%d", row.FallbackCount)),
@@ -62,15 +62,11 @@ func requestSummaryRow(row management.RequestSummary, nowTime time.Time, width i
 		tpsText("tps", row.OutputTokensPerSecondTotal),
 	)
 	extras := requestSummaryExtras(row, width)
-	lines := []string{head, model, tokens, retry}
+	lines := []string{head, route, usage}
 	if extras != "" {
 		lines = append(lines, extras)
 	}
 	return wrapTargetedLinesPreserveBlank(width, lines...)
-}
-
-func requestWrappedFieldLine(width int, label, value string) string {
-	return wrappedDisplayField(label, value, width)
 }
 
 func requestDetailLine(width int, label string, parts ...string) string {

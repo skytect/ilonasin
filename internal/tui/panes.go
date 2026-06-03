@@ -22,7 +22,7 @@ const (
 	providersPaneInstances = iota
 	providersPaneCredentials
 	providersPaneOAuth
-	providersPaneFallback
+	providersPanePoolGroups
 )
 
 const (

@@ -17,7 +17,7 @@ func (m Model) providerPanes() []dashboardPane {
 		{id: providersPaneInstances, title: "runtime + models", content: m.providerInstancesBody},
 		{id: providersPaneCredentials, title: "upstream keys", content: m.providerCredentialsBody},
 		{id: providersPaneOAuth, title: "oauth + accounts", content: m.oauthBody},
-		{id: providersPaneFallback, title: "fallback groups", content: m.providerFallbackBody},
+		{id: providersPanePoolGroups, title: "pool groups", content: m.providerPoolGroupsBody},
 	}
 }
 
@@ -114,7 +114,7 @@ func (m Model) providerCredentialsBody(width int) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func (m Model) providerFallbackBody(width int) string {
+func (m Model) providerPoolGroupsBody(width int) string {
 	var b strings.Builder
 	m = m.withRenderWidth(width)
 	m.writeCredentialPoolGroups(&b)

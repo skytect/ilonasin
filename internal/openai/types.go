@@ -7,7 +7,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"unicode/utf8"
+
+	"ilonasin/internal/privacy"
 )
 
 type ChatCompletionRequest struct {
@@ -144,12 +145,12 @@ func DecodeChatCompletion(r io.Reader) (ChatCompletionRequest, error) {
 
 func chatAffinityKey(req ChatCompletionRequest) string {
 	if req.SessionID != nil {
-		if value := strings.TrimSpace(*req.SessionID); safeChatAffinityValue(value) {
+		if value := strings.TrimSpace(*req.SessionID); privacy.SafeStrictAffinityValue(value) {
 			return value
 		}
 	}
 	if req.User != nil {
-		if value := strings.TrimSpace(*req.User); safeChatAffinityValue(value) {
+		if value := strings.TrimSpace(*req.User); privacy.SafeStrictAffinityValue(value) {
 			return value
 		}
 	}
@@ -163,33 +164,11 @@ func chatMetadataAffinityKey(metadata map[string]string) string {
 			continue
 		}
 		value = strings.TrimSpace(value)
-		if safeChatAffinityValue(value) {
+		if privacy.SafeStrictAffinityValue(value) {
 			return value
 		}
 	}
 	return ""
-}
-
-func safeChatAffinityValue(value string) bool {
-	if value == "" || utf8.RuneCountInString(value) > 256 {
-		return false
-	}
-	if strings.HasPrefix(value, "{") {
-		return false
-	}
-	lower := strings.ToLower(value)
-	if strings.HasPrefix(lower, "eyj") && strings.Contains(lower, ".") {
-		return false
-	}
-	for _, marker := range []string{
-		"account", "acct_", "account_uuid", "device", "device_id", "bearer",
-		"token", "secret", "authorization", "oauth", "sk-",
-	} {
-		if strings.Contains(lower, marker) {
-			return false
-		}
-	}
-	return true
 }
 
 func (r ChatCompletionRequest) HasField(key string) bool {

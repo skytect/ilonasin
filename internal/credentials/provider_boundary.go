@@ -18,6 +18,14 @@ type ProviderInstance struct {
 	OAuthRefresh bool
 }
 
+func supportsCodexOAuthCredentials(instance ProviderInstance) bool {
+	return instance.Type == "codex" && instance.OAuth
+}
+
+func supportsCodexOAuthRefresh(instance ProviderInstance) bool {
+	return supportsCodexOAuthCredentials(instance) && instance.OAuthRefresh
+}
+
 type OAuthTokenRefresher interface {
 	RefreshOAuthToken(ctx context.Context, req OAuthRefreshRequest) (OAuthRefreshResult, error)
 }

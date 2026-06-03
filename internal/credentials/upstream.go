@@ -393,7 +393,7 @@ func (s *UpstreamService) ResolveOAuthBearers(ctx context.Context, providerInsta
 	if !ok {
 		return nil, ErrCredentialNotFound
 	}
-	if !instance.OAuth || instance.Type != "codex" {
+	if !supportsCodexOAuthCredentials(instance) {
 		return nil, fmt.Errorf("%w: provider %q does not support oauth credential pooling", ErrUnsupportedCredential, providerInstanceID)
 	}
 	if now.IsZero() {
@@ -418,7 +418,7 @@ func (s *UpstreamService) ResolveOAuthBearerByID(ctx context.Context, credential
 	if !ok {
 		return ResolvedOAuthBearerCredential{}, ErrCredentialNotFound
 	}
-	if !instance.OAuth || instance.Type != "codex" {
+	if !supportsCodexOAuthCredentials(instance) {
 		return ResolvedOAuthBearerCredential{}, fmt.Errorf("%w: provider %q does not support oauth credentials", ErrUnsupportedCredential, credential.ProviderInstanceID)
 	}
 	return credential, nil
@@ -432,7 +432,7 @@ func (s *UpstreamService) StartOAuthDeviceLogin(ctx context.Context, providerIns
 	if !ok {
 		return OAuthDeviceLoginChallenge{}, ErrCredentialNotFound
 	}
-	if !instance.OAuth || instance.Type != "codex" {
+	if !supportsCodexOAuthCredentials(instance) {
 		return OAuthDeviceLoginChallenge{}, fmt.Errorf("%w: provider %q does not support oauth device login", ErrUnsupportedCredential, providerInstanceID)
 	}
 	sessions := s.loginSessions()
@@ -553,7 +553,7 @@ func (s *UpstreamService) RefreshOAuthProviderCredential(ctx context.Context, pr
 		if !ok {
 			return ErrCredentialNotFound
 		}
-		if !instance.OAuth || !instance.OAuthRefresh || instance.Type != "codex" {
+		if !supportsCodexOAuthRefresh(instance) {
 			return fmt.Errorf("%w: provider %q does not support oauth refresh", ErrUnsupportedCredential, providerInstanceID)
 		}
 		if _, err := s.ResolveOAuthBearers(ctx, providerInstanceID, s.now()); err == nil {
@@ -576,7 +576,7 @@ func (s *UpstreamService) refreshOAuthCredential(ctx context.Context, credential
 	if !ok {
 		return ErrCredentialNotFound
 	}
-	if !instance.OAuth || !instance.OAuthRefresh || instance.Type != "codex" {
+	if !supportsCodexOAuthRefresh(instance) {
 		return fmt.Errorf("%w: provider %q does not support oauth refresh", ErrUnsupportedCredential, credential.ProviderInstanceID)
 	}
 	if s.OAuthRefresher == nil {

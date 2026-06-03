@@ -137,9 +137,7 @@ func fallbackPolicyFromCredentials(row credentials.FallbackPolicyMetadata) Fallb
 		ProviderInstanceID: safeMachineString(row.ProviderInstanceID),
 		CredentialKind:     row.CredentialKind,
 		GroupLabel:         safeSnapshotString(row.GroupLabel),
-		Enabled:            row.Enabled,
 		CredentialCount:    row.CredentialCount,
-		Explicit:           row.Explicit,
 	}
 }
 

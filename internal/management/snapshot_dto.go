@@ -57,9 +57,7 @@ type FallbackPolicy struct {
 	ProviderInstanceID string `json:"provider_instance_id"`
 	CredentialKind     string `json:"credential_kind"`
 	GroupLabel         string `json:"group_label"`
-	Enabled            bool   `json:"enabled"`
 	CredentialCount    int    `json:"credential_count"`
-	Explicit           bool   `json:"explicit"`
 }
 
 type OAuthCredential struct {

@@ -217,9 +217,7 @@ type FallbackPolicyMetadata struct {
 	ProviderInstanceID string
 	CredentialKind     string
 	GroupLabel         string
-	Enabled            bool
 	CredentialCount    int
-	Explicit           bool
 }
 
 type ResolvedAPIKeyCredential struct {

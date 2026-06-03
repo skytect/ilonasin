@@ -14,12 +14,12 @@ func (m Model) writeFallbackPolicies(b *strings.Builder) {
 		return
 	}
 	width := m.viewWidth()
-	b.WriteString(renderSectionBanner(width, "Credential fallback metadata", fmt.Sprintf("groups %d", len(m.fallbackPolicies))))
+	b.WriteString(renderSectionBanner(width, "Credential pool groups", fmt.Sprintf("groups %d", len(m.fallbackPolicies))))
 	b.WriteByte('\n')
 	if len(m.fallbackPolicies) == 0 {
 		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("110"), "credential groups",
-			metricLine(metricChip("groups", "0"), metricChip("policy", "default")),
-			metricLine(metricChip("pool", "same-provider"), metricChip("scope", "metadata")),
+			metricLine(metricChip("groups", "0"), metricChip("pool", "same-provider")),
+			metricLine(metricChip("scope", "metadata"), metricChip("min creds", "2")),
 		))
 		b.WriteByte('\n')
 		return
@@ -31,20 +31,11 @@ func (m Model) writeFallbackPolicies(b *strings.Builder) {
 }
 
 func fallbackPolicyRow(row management.FallbackPolicy) string {
-	state := "disabled"
-	if row.Enabled {
-		state = "enabled"
-	}
-	explicit := "default"
-	if row.Explicit {
-		explicit = "explicit"
-	}
 	return metricLine(
-		statusBadge(state),
+		statusBadge("pool"),
 		cardTitleStyle.Render(safeDisplay(row.ProviderInstanceID)+" "+safeDisplay(row.GroupLabel)),
 		metricChip("kind", row.CredentialKind),
-		metricChip("keys", fmt.Sprintf("%d", row.CredentialCount)),
-		metricChip("policy", explicit),
+		metricChip("creds", fmt.Sprintf("%d", row.CredentialCount)),
 		metricChip("scope", "same-provider"),
 	)
 }

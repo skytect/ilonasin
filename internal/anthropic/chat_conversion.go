@@ -9,7 +9,11 @@ import (
 	"ilonasin/internal/openai"
 )
 
-func (r Request) ToChatCompletion(providerType string) (openai.ChatCompletionRequest, error) {
+type ChatConversionPolicy struct {
+	IncludeGenerationOptions bool
+}
+
+func (r Request) ToChatCompletion(policy ChatConversionPolicy) (openai.ChatCompletionRequest, error) {
 	messages := []openai.Message{}
 	if len(r.System) > 0 {
 		system, err := blocksText(r.System, "system")
@@ -63,7 +67,7 @@ func (r Request) ToChatCompletion(providerType string) (openai.ChatCompletionReq
 		AffinityKey:   anthropicAffinityKey(r.Metadata),
 		PresentFields: map[string]bool{"model": true, "messages": true},
 	}
-	if providerType != "codex" {
+	if policy.IncludeGenerationOptions {
 		out.MaxTokens = &r.MaxTokens
 		out.PresentFields["max_tokens"] = true
 		if r.Temperature != nil {

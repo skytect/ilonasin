@@ -48,7 +48,7 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request,
 		writeAnthropicError(w, http.StatusNotFound, "provider instance is not configured")
 		return
 	}
-	chatReq, err := req.ToChatCompletion(instance.Type)
+	chatReq, err := req.ToChatCompletion(anthropicConversionPolicy(instance))
 	if err != nil {
 		_ = s.record(r.Context(), earlyAnthropicRequestMetadata(start, token, req, http.StatusBadRequest, "unsupported_request"))
 		s.logHTTP(r, http.StatusBadRequest, "anthropic_route", "unsupported_request")

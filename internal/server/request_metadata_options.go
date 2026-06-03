@@ -8,57 +8,73 @@ import (
 )
 
 func applySafeOptionMetadata(out *metadata.Request, providerType string, req openai.ChatCompletionRequest) {
+	applyTopLevelServiceTierMetadata(out, providerType, req)
+	switch providerType {
+	case "codex":
+		applyCodexOptionMetadata(out, req)
+	case "deepseek":
+		applyDeepSeekOptionMetadata(out, req)
+	case "openrouter":
+		applyOpenRouterOptionMetadata(out, req)
+	}
+}
+
+func applyTopLevelServiceTierMetadata(out *metadata.Request, providerType string, req openai.ChatCompletionRequest) {
 	if req.ServiceTier != nil {
 		out.RequestedServiceTier = safeServiceTier(*req.ServiceTier)
 		if providerType != "codex" || out.RequestedServiceTier != "default" {
 			out.EffectiveServiceTier = out.RequestedServiceTier
 		}
 	}
-	switch providerType {
-	case "codex":
-		opts, _ := req.ReasoningOptions["codex"].(map[string]any)
-		if tier, ok := opts["service_tier"].(string); ok {
-			out.RequestedServiceTier = safeServiceTier(tier)
-			switch out.RequestedServiceTier {
-			case "default":
-				out.EffectiveServiceTier = ""
-			case "fast":
-				out.EffectiveServiceTier = "priority"
-			default:
-				out.EffectiveServiceTier = out.RequestedServiceTier
-			}
+}
+
+func applyCodexOptionMetadata(out *metadata.Request, req openai.ChatCompletionRequest) {
+	opts, _ := req.ReasoningOptions["codex"].(map[string]any)
+	if tier, ok := opts["service_tier"].(string); ok {
+		out.RequestedServiceTier = safeServiceTier(tier)
+		switch out.RequestedServiceTier {
+		case "default":
+			out.EffectiveServiceTier = ""
+		case "fast":
+			out.EffectiveServiceTier = "priority"
+		default:
+			out.EffectiveServiceTier = out.RequestedServiceTier
 		}
-		reasoning, _ := opts["reasoning"].(map[string]any)
-		if effort, ok := reasoning["effort"].(string); ok {
-			out.ReasoningEffort = safeReasoningEffort(effort)
-		}
-		if summary, ok := reasoning["summary"].(string); ok {
-			out.ReasoningSummary = safeReasoningSummary(summary)
-		}
-	case "deepseek":
-		opts, _ := req.ReasoningOptions["deepseek"].(map[string]any)
-		if effort, ok := opts["reasoning_effort"].(string); ok {
-			out.ReasoningEffort = safeReasoningEffort(effort)
-		}
-		thinking, _ := opts["thinking"].(map[string]any)
-		if typ, ok := thinking["type"].(string); ok {
-			out.ThinkingType = safeThinkingType(typ)
-		}
-	case "openrouter":
-		opts, _ := req.ReasoningOptions["openrouter"].(map[string]any)
-		reasoning, _ := opts["reasoning"].(map[string]any)
-		if effort, ok := reasoning["effort"].(string); ok {
-			out.ReasoningEffort = safeReasoningEffort(effort)
-		}
-		if maxTokens, ok := intFromMetadataNumber(reasoning["max_tokens"]); ok {
-			out.ReasoningMaxTokens = maxTokens
-		}
-		if enabled, ok := reasoning["enabled"].(bool); ok {
-			out.ReasoningEnabled = enabled
-		}
-		if exclude, ok := reasoning["exclude"].(bool); ok {
-			out.ReasoningExclude = exclude
-		}
+	}
+	reasoning, _ := opts["reasoning"].(map[string]any)
+	if effort, ok := reasoning["effort"].(string); ok {
+		out.ReasoningEffort = safeReasoningEffort(effort)
+	}
+	if summary, ok := reasoning["summary"].(string); ok {
+		out.ReasoningSummary = safeReasoningSummary(summary)
+	}
+}
+
+func applyDeepSeekOptionMetadata(out *metadata.Request, req openai.ChatCompletionRequest) {
+	opts, _ := req.ReasoningOptions["deepseek"].(map[string]any)
+	if effort, ok := opts["reasoning_effort"].(string); ok {
+		out.ReasoningEffort = safeReasoningEffort(effort)
+	}
+	thinking, _ := opts["thinking"].(map[string]any)
+	if typ, ok := thinking["type"].(string); ok {
+		out.ThinkingType = safeThinkingType(typ)
+	}
+}
+
+func applyOpenRouterOptionMetadata(out *metadata.Request, req openai.ChatCompletionRequest) {
+	opts, _ := req.ReasoningOptions["openrouter"].(map[string]any)
+	reasoning, _ := opts["reasoning"].(map[string]any)
+	if effort, ok := reasoning["effort"].(string); ok {
+		out.ReasoningEffort = safeReasoningEffort(effort)
+	}
+	if maxTokens, ok := intFromMetadataNumber(reasoning["max_tokens"]); ok {
+		out.ReasoningMaxTokens = maxTokens
+	}
+	if enabled, ok := reasoning["enabled"].(bool); ok {
+		out.ReasoningEnabled = enabled
+	}
+	if exclude, ok := reasoning["exclude"].(bool); ok {
+		out.ReasoningExclude = exclude
 	}
 }
 

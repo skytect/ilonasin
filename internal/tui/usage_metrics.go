@@ -13,7 +13,7 @@ func (m Model) writeUsageMetrics(b *strings.Builder) {
 	width := m.viewWidth()
 	b.WriteString(renderPaneSubhead(width, "Token usage", fmt.Sprintf("providers %d", len(m.usageRows))))
 	b.WriteByte('\n')
-	if summary := usageMetricsSummaryLine(width, m.usageRows, m.latencyRows, m.streamRows); summary != "" {
+	if summary := usageMetricsOverview(width, m.usageRows, m.latencyRows, m.streamRows); summary != "" {
 		b.WriteString(summary)
 		b.WriteByte('\n')
 	}
@@ -61,13 +61,55 @@ func (m Model) writeUsageMetrics(b *strings.Builder) {
 	}
 }
 
-func usageMetricsSummaryLine(width int, usageRows []management.UsageSummary, latencyRows []management.LatencySummary, streamRows []management.StreamSummary) string {
+type usageMetricsOverviewData struct {
+	Requests         int
+	PromptTokens     int
+	CompletionTokens int
+	TotalTokens      int
+	ReasoningTokens  int
+	CacheHitTokens   int
+	CacheMissTokens  int
+	CacheWriteTokens int
+	LatencyRequests  int
+	AverageLatencyMS int64
+	AverageTTFTMS    int64
+	Streams          int
+	Chunks           int
+}
+
+func usageMetricsOverview(width int, usageRows []management.UsageSummary, latencyRows []management.LatencySummary, streamRows []management.StreamSummary) string {
+	data := usageMetricsOverviewDataFromRows(usageRows, latencyRows, streamRows)
+	if data.Requests == 0 && data.LatencyRequests == 0 && data.Streams == 0 {
+		return ""
+	}
+	return strings.Join([]string{
+		wrappedMetricLine(width,
+			statusBadge("fresh"),
+			metricChip("requests", compactInt(data.Requests)),
+			metricChip("tokens", compactInt(data.TotalTokens)),
+			metricChip("streams", compactInt(data.Streams)),
+			metricChip("chunks", compactInt(data.Chunks)),
+		),
+		compactTokenMixLine(data.PromptTokens, data.CompletionTokens, data.ReasoningTokens, data.CacheHitTokens, data.CacheMissTokens, data.CacheWriteTokens, width),
+		usageOverviewRateLine(width, data),
+		wrappedMetricLine(width,
+			mutedStyle.Render("latency"),
+			durationBar("avg", data.AverageLatencyMS, 10_000, compactMetricBarWidth(width)),
+			durationBar("ttft", data.AverageTTFTMS, 5_000, compactMetricBarWidth(width)),
+		),
+	}, "\n")
+}
+
+func usageMetricsOverviewDataFromRows(usageRows []management.UsageSummary, latencyRows []management.LatencySummary, streamRows []management.StreamSummary) usageMetricsOverviewData {
+	var data usageMetricsOverviewData
 	requests := 0
 	promptTokens := 0
 	completionTokens := 0
 	totalTokens := 0
 	reasoningTokens := 0
 	cacheHitTokens := 0
+	cacheMissTokens := 0
+	cacheWriteTokens := 0
 	for _, row := range usageRows {
 		requests += row.RequestCount
 		promptTokens += row.PromptTokens
@@ -75,6 +117,8 @@ func usageMetricsSummaryLine(width int, usageRows []management.UsageSummary, lat
 		totalTokens += row.TotalTokens
 		reasoningTokens += row.ReasoningTokens
 		cacheHitTokens += row.CacheHitTokens
+		cacheMissTokens += row.CacheMissTokens
+		cacheWriteTokens += row.CacheWriteTokens
 	}
 	latencyRequests := 0
 	weightedLatency := int64(0)
@@ -90,34 +134,42 @@ func usageMetricsSummaryLine(width int, usageRows []management.UsageSummary, lat
 		streams += row.StreamCount
 		chunks += row.ChunkCount
 	}
-	if requests == 0 && latencyRequests == 0 && streams == 0 {
-		return ""
-	}
 	avgLatency := int64(0)
 	avgTTFT := int64(0)
 	if latencyRequests > 0 {
 		avgLatency = weightedLatency / int64(latencyRequests)
 		avgTTFT = weightedTTFT / int64(latencyRequests)
 	}
-	reasonRate := 0.0
-	cacheRate := 0.0
-	if completionTokens > 0 {
-		reasonRate = float64(reasoningTokens) / float64(completionTokens) * 100
-	}
-	if promptTokens > 0 {
-		cacheRate = float64(cacheHitTokens) / float64(promptTokens) * 100
-	}
-	return wrappedMetricLine(width,
-		statusBadge("fresh"),
-		metricChip("requests", fmt.Sprintf("%d", requests)),
-		metricChip("tokens", compactInt(totalTokens)),
-		compactPercentMetric("cache", cacheRate),
-		compactPercentMetric("reason", reasonRate),
-		msText("lat", avgLatency),
-		msText("ttft", avgTTFT),
-		metricChip("streams", compactInt(streams)),
-		metricChip("chunks", compactInt(chunks)),
+	data.Requests = requests
+	data.PromptTokens = promptTokens
+	data.CompletionTokens = completionTokens
+	data.TotalTokens = totalTokens
+	data.ReasoningTokens = reasoningTokens
+	data.CacheHitTokens = cacheHitTokens
+	data.CacheMissTokens = cacheMissTokens
+	data.CacheWriteTokens = cacheWriteTokens
+	data.LatencyRequests = latencyRequests
+	data.AverageLatencyMS = avgLatency
+	data.AverageTTFTMS = avgTTFT
+	data.Streams = streams
+	data.Chunks = chunks
+	return data
+}
+
+func usageOverviewRateLine(width int, data usageMetricsOverviewData) string {
+	return compactRateBars(width,
+		rateMetric{"hit", tokenRatePercent(data.CacheHitTokens, data.PromptTokens)},
+		rateMetric{"miss", tokenRatePercent(data.CacheMissTokens, data.PromptTokens)},
+		rateMetric{"write", tokenRatePercent(data.CacheWriteTokens, data.PromptTokens)},
+		rateMetric{"reason", tokenRatePercent(data.ReasoningTokens, data.CompletionTokens)},
 	)
+}
+
+func tokenRatePercent(numerator, denominator int) float64 {
+	if denominator <= 0 {
+		return 0
+	}
+	return float64(numerator) / float64(denominator) * 100
 }
 
 func usageSummaryRow(row management.UsageSummary, width int) string {

@@ -108,8 +108,9 @@ func validateMigrationIdentifier(value string) (string, error) {
 	return value, nil
 }
 
-// migration001, migration002, and migration003 are historical compatibility
-// contracts. Future schema changes must use new migration versions.
+// migration001 is the historical base schema. Later migration entries preserve
+// upgrade compatibility for older databases; new schema changes must use new
+// migration versions.
 var migration001 = []string{
 	`CREATE TABLE IF NOT EXISTS migrations (
 		version INTEGER PRIMARY KEY,

@@ -154,22 +154,7 @@ func (t *credentialPressureTracker) reserveLeast(addr routing.ModelAddress, toke
 		t.mu.Unlock()
 		return 0, provider.BearerCredential{}, func() {}, false
 	}
-	slot := slots[best]
-	credential := slot.credential
-	key := credentialPressureKey{
-		providerInstanceID: addr.ProviderInstanceID,
-		providerModelID:    addr.ProviderModelID,
-		credentialID:       credential.ID,
-	}
-	if credential.ID != 0 {
-		t.inFlight[key]++
-	}
-	t.mu.Unlock()
-	return slot.index, credential, func() {
-		if credential.ID != 0 {
-			t.release(key)
-		}
-	}, true
+	return t.reserveSlotLocked(addr, slots, best)
 }
 
 func (t *credentialPressureTracker) reserveLeastStable(addr routing.ModelAddress, slots []credentialAttemptSlot) (int, provider.BearerCredential, func(), bool) {
@@ -182,7 +167,15 @@ func (t *credentialPressureTracker) reserveLeastStable(addr routing.ModelAddress
 		t.mu.Unlock()
 		return 0, provider.BearerCredential{}, func() {}, false
 	}
-	slot := slots[candidates[0]]
+	return t.reserveSlotLocked(addr, slots, candidates[0])
+}
+
+func (t *credentialPressureTracker) reserveSlotLocked(addr routing.ModelAddress, slots []credentialAttemptSlot, slotPosition int) (int, provider.BearerCredential, func(), bool) {
+	if slotPosition < 0 || slotPosition >= len(slots) {
+		t.mu.Unlock()
+		return 0, provider.BearerCredential{}, func() {}, false
+	}
+	slot := slots[slotPosition]
 	credential := slot.credential
 	key := credentialPressureKey{
 		providerInstanceID: addr.ProviderInstanceID,

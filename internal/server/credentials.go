@@ -32,7 +32,7 @@ func (s *Server) resolveModelCredentials(ctx context.Context, instance provider.
 			return nil, credentials.ErrNoEligibleCredential
 		}
 		credentialsSet, err := s.oauth.ResolveOAuthBearers(ctx, instance.ID, s.now().UTC())
-		if err != nil && errors.Is(err, credentials.ErrNoEligibleCredential) && s.refresh != nil && instance.Type == "codex" {
+		if s.canRefreshCodexOAuth(instance) && errors.Is(err, credentials.ErrNoEligibleCredential) {
 			if refreshErr := s.refresh.RefreshOAuthProviderCredential(ctx, instance.ID); refreshErr == nil {
 				credentialsSet, err = s.oauth.ResolveOAuthBearers(ctx, instance.ID, s.now().UTC())
 				if err != nil {
@@ -62,19 +62,27 @@ func (s *Server) resolveModelCredentials(ctx context.Context, instance provider.
 }
 
 func (s *Server) shouldRefreshOAuthAfterChat401(instance provider.Instance, result provider.ChatResult) bool {
-	return instance.Type == "codex" && instance.OAuth && result.StatusCode == http.StatusUnauthorized && result.ErrorClass == "upstream_auth_failed" && s.refresh != nil
+	return s.canRefreshCodexOAuth(instance) && result.StatusCode == http.StatusUnauthorized && result.ErrorClass == "upstream_auth_failed"
 }
 
 func (s *Server) shouldRefreshOAuthAfterStream401(instance provider.Instance, summary provider.ChatStreamSummary) bool {
-	return instance.Type == "codex" && instance.OAuth && summary.StatusCode == http.StatusUnauthorized && summary.ErrorClass == "upstream_auth_failed" && summary.PreStreamError && !summary.Started && s.refresh != nil
+	return s.canRefreshCodexOAuth(instance) && summary.StatusCode == http.StatusUnauthorized && summary.ErrorClass == "upstream_auth_failed" && summary.PreStreamError && !summary.Started
 }
 
 func (s *Server) shouldRefreshModelCredentialAfterChat401(instance provider.Instance, result provider.ChatResult, credential provider.BearerCredential) bool {
-	return instance.Type == "codex" && instance.OAuth && credential.ID != 0 && result.StatusCode == http.StatusUnauthorized && result.ErrorClass == "model_discovery_auth_failed" && s.refresh != nil
+	return s.canRefreshCodexOAuth(instance) && hasRefreshableBearerCredentialID(credential) && result.StatusCode == http.StatusUnauthorized && result.ErrorClass == "model_discovery_auth_failed"
 }
 
 func (s *Server) shouldRefreshModelCredentialAfterStream401(instance provider.Instance, summary provider.ChatStreamSummary, credential provider.BearerCredential) bool {
-	return instance.Type == "codex" && instance.OAuth && credential.ID != 0 && summary.StatusCode == http.StatusUnauthorized && summary.ErrorClass == "model_discovery_auth_failed" && summary.PreStreamError && !summary.Started && s.refresh != nil
+	return s.canRefreshCodexOAuth(instance) && hasRefreshableBearerCredentialID(credential) && summary.StatusCode == http.StatusUnauthorized && summary.ErrorClass == "model_discovery_auth_failed" && summary.PreStreamError && !summary.Started
+}
+
+func (s *Server) canRefreshCodexOAuth(instance provider.Instance) bool {
+	return instance.Type == "codex" && instance.OAuth && s.refresh != nil
+}
+
+func hasRefreshableBearerCredentialID(credential provider.BearerCredential) bool {
+	return credential.ID != 0
 }
 
 func authRetryableChatAttempt(result provider.ChatResult) bool {

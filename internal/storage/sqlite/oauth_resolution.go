@@ -9,66 +9,6 @@ import (
 	"ilonasin/internal/credentials"
 )
 
-func (s *Store) ResolveOAuthBearerCredential(ctx context.Context, providerInstanceID string, now time.Time) (credentials.ResolvedOAuthBearerCredential, error) {
-	var out credentials.ResolvedOAuthBearerCredential
-	var accessSecretID sql.NullInt64
-	var expires sql.NullString
-	var refreshFailure sql.NullString
-	err := s.DB.QueryRowContext(ctx, `
-		SELECT pc.id, pc.provider_instance_id, pc.fallback_group, ot.access_token_secret_id, ot.expires_at, COALESCE(ot.refresh_failure_class, '')
-		FROM provider_credentials pc
-		LEFT JOIN oauth_tokens ot ON ot.credential_id = pc.id
-		WHERE pc.provider_instance_id = ?
-			AND pc.kind = 'oauth'
-			AND pc.disabled_at IS NULL
-			AND COALESCE(ot.refresh_failure_class, '') NOT IN (
-				'refresh_token_expired', 'refresh_token_invalidated', 'refresh_token_reused',
-				'refresh_invalid_grant', 'refresh_access_denied'
-			)
-		ORDER BY pc.id ASC
-		LIMIT 1
-	`, providerInstanceID).Scan(&out.ID, &out.ProviderInstanceID, &out.FallbackGroup, &accessSecretID, &expires, &refreshFailure)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return credentials.ResolvedOAuthBearerCredential{}, credentials.ErrNoEligibleCredential
-		}
-		return credentials.ResolvedOAuthBearerCredential{}, err
-	}
-	if !accessSecretID.Valid {
-		return credentials.ResolvedOAuthBearerCredential{}, credentials.ErrNoEligibleCredential
-	}
-	if terminalOAuthRefreshFailure(refreshFailure.String) {
-		return credentials.ResolvedOAuthBearerCredential{}, credentials.ErrNoEligibleCredential
-	}
-	if expires.Valid {
-		expiresAt, err := parseSQLiteTime(expires.String)
-		if err != nil {
-			return credentials.ResolvedOAuthBearerCredential{}, err
-		}
-		expiresAt = expiresAt.UTC()
-		if !expiresAt.After(now.UTC()) {
-			return credentials.ResolvedOAuthBearerCredential{}, credentials.ErrNoEligibleCredential
-		}
-		out.ExpiresAt = &expiresAt
-	}
-	if err := s.DB.QueryRowContext(ctx, `
-		SELECT secret_material
-		FROM credential_secrets
-		WHERE id = ?
-			AND credential_id = ?
-			AND secret_kind = 'oauth_access'
-	`, accessSecretID.Int64, out.ID).Scan(&out.BearerToken); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return credentials.ResolvedOAuthBearerCredential{}, credentials.ErrNoEligibleCredential
-		}
-		return credentials.ResolvedOAuthBearerCredential{}, err
-	}
-	routing := credentials.ParseChatGPTRoutingClaims(out.BearerToken)
-	out.ChatGPTAccountID = routing.AccountID
-	out.ChatGPTAccountIsFedRAMP = routing.FedRAMP
-	return out, nil
-}
-
 func (s *Store) ResolveOAuthBearerCredentials(ctx context.Context, providerInstanceID string, now time.Time) ([]credentials.ResolvedOAuthBearerCredential, error) {
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT pc.id, pc.provider_instance_id, pc.fallback_group, ot.access_token_secret_id, ot.expires_at, COALESCE(ot.refresh_failure_class, '')

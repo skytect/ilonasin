@@ -47,12 +47,10 @@ type UpstreamCredentialManager interface {
 }
 
 type UpstreamCredentialResolver interface {
-	ResolveAPIKey(ctx context.Context, providerInstanceID string) (ResolvedAPIKeyCredential, error)
 	ResolveAPIKeys(ctx context.Context, providerInstanceID string) ([]ResolvedAPIKeyCredential, error)
 }
 
 type OAuthBearerResolver interface {
-	ResolveOAuthBearer(ctx context.Context, providerInstanceID string, now time.Time) (ResolvedOAuthBearerCredential, error)
 	ResolveOAuthBearers(ctx context.Context, providerInstanceID string, now time.Time) ([]ResolvedOAuthBearerCredential, error)
 }
 
@@ -67,9 +65,7 @@ type UpstreamCredentialRepository interface {
 	InsertAPIKeyCredential(ctx context.Context, meta NewUpstreamCredential, apiKey string) (UpstreamCredentialMetadata, error)
 	ListUpstreamCredentials(ctx context.Context) ([]UpstreamCredentialMetadata, error)
 	DisableUpstreamCredential(ctx context.Context, id int64, disabledAt time.Time) error
-	ResolveAPIKeyCredential(ctx context.Context, providerInstanceID string) (ResolvedAPIKeyCredential, error)
 	ResolveAPIKeyCredentials(ctx context.Context, providerInstanceID string) ([]ResolvedAPIKeyCredential, error)
-	ResolveOAuthBearerCredential(ctx context.Context, providerInstanceID string, now time.Time) (ResolvedOAuthBearerCredential, error)
 	ResolveOAuthBearerCredentials(ctx context.Context, providerInstanceID string, now time.Time) ([]ResolvedOAuthBearerCredential, error)
 	ResolveOAuthBearerCredentialByID(ctx context.Context, credentialID int64, now time.Time) (ResolvedOAuthBearerCredential, error)
 	ResolveOAuthRefreshCredential(ctx context.Context, credentialID int64) (ResolvedOAuthRefreshCredential, error)
@@ -403,17 +399,6 @@ func (s *UpstreamService) DisableFallbackGroup(ctx context.Context, providerInst
 	return err
 }
 
-func (s *UpstreamService) ResolveAPIKey(ctx context.Context, providerInstanceID string) (ResolvedAPIKeyCredential, error) {
-	instance, ok := s.Registry.Get(providerInstanceID)
-	if !ok {
-		return ResolvedAPIKeyCredential{}, ErrCredentialNotFound
-	}
-	if !instance.APIKey {
-		return ResolvedAPIKeyCredential{}, fmt.Errorf("%w: provider %q does not support api-key credentials", ErrUnsupportedCredential, providerInstanceID)
-	}
-	return s.Repo.ResolveAPIKeyCredential(ctx, providerInstanceID)
-}
-
 func (s *UpstreamService) ResolveAPIKeys(ctx context.Context, providerInstanceID string) ([]ResolvedAPIKeyCredential, error) {
 	instance, ok := s.Registry.Get(providerInstanceID)
 	if !ok {
@@ -423,20 +408,6 @@ func (s *UpstreamService) ResolveAPIKeys(ctx context.Context, providerInstanceID
 		return nil, fmt.Errorf("%w: provider %q does not support api-key credentials", ErrUnsupportedCredential, providerInstanceID)
 	}
 	return s.Repo.ResolveAPIKeyCredentials(ctx, providerInstanceID)
-}
-
-func (s *UpstreamService) ResolveOAuthBearer(ctx context.Context, providerInstanceID string, now time.Time) (ResolvedOAuthBearerCredential, error) {
-	instance, ok := s.Registry.Get(providerInstanceID)
-	if !ok {
-		return ResolvedOAuthBearerCredential{}, ErrCredentialNotFound
-	}
-	if !instance.OAuth || instance.Type != "codex" {
-		return ResolvedOAuthBearerCredential{}, fmt.Errorf("%w: provider %q does not support oauth credentials", ErrUnsupportedCredential, providerInstanceID)
-	}
-	if now.IsZero() {
-		now = s.now()
-	}
-	return s.Repo.ResolveOAuthBearerCredential(ctx, providerInstanceID, now.UTC())
 }
 
 func (s *UpstreamService) ResolveOAuthBearers(ctx context.Context, providerInstanceID string, now time.Time) ([]ResolvedOAuthBearerCredential, error) {
@@ -607,7 +578,7 @@ func (s *UpstreamService) RefreshOAuthProviderCredential(ctx context.Context, pr
 		if !instance.OAuth || !instance.OAuthRefresh || instance.Type != "codex" {
 			return fmt.Errorf("%w: provider %q does not support oauth refresh", ErrUnsupportedCredential, providerInstanceID)
 		}
-		if _, err := s.ResolveOAuthBearer(ctx, providerInstanceID, s.now()); err == nil {
+		if _, err := s.ResolveOAuthBearers(ctx, providerInstanceID, s.now()); err == nil {
 			return nil
 		}
 		credential, err := s.Repo.ResolveOAuthRefreshCredentialForProvider(ctx, providerInstanceID)

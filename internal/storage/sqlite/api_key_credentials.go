@@ -3,7 +3,6 @@ package sqlite
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"time"
 
 	"ilonasin/internal/credentials"
@@ -91,27 +90,6 @@ func (s *Store) DisableUpstreamCredential(ctx context.Context, id int64, disable
 		return credentials.ErrCredentialNotFound
 	}
 	return nil
-}
-
-func (s *Store) ResolveAPIKeyCredential(ctx context.Context, providerInstanceID string) (credentials.ResolvedAPIKeyCredential, error) {
-	row := s.DB.QueryRowContext(ctx, `
-		SELECT pc.id, pc.provider_instance_id, pc.label, pc.fallback_group, cs.secret_material
-		FROM provider_credentials pc
-		JOIN credential_secrets cs ON cs.credential_id = pc.id AND cs.secret_kind = 'api_key'
-		WHERE pc.provider_instance_id = ?
-			AND pc.kind = 'api_key'
-			AND pc.disabled_at IS NULL
-		ORDER BY pc.id ASC
-		LIMIT 1
-	`, providerInstanceID)
-	var out credentials.ResolvedAPIKeyCredential
-	if err := row.Scan(&out.ID, &out.ProviderInstanceID, &out.Label, &out.FallbackGroup, &out.APIKey); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return credentials.ResolvedAPIKeyCredential{}, credentials.ErrNoEligibleCredential
-		}
-		return credentials.ResolvedAPIKeyCredential{}, err
-	}
-	return out, nil
 }
 
 func (s *Store) ResolveAPIKeyCredentials(ctx context.Context, providerInstanceID string) ([]credentials.ResolvedAPIKeyCredential, error) {

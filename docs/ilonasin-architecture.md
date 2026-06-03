@@ -405,6 +405,13 @@ request metadata, or stored in normal metadata tables. All observable account
 references should use local credential IDs, safe display labels, or one-way
 account hashes.
 
+Durable request, health, fallback, and quota metadata rows should reference
+upstream credentials by local credential ID. Management summaries and TUI views
+may display current safe credential labels by joining credential metadata at
+read time. Those labels are operator display metadata only: they must be
+sanitized before snapshots or TUI rendering, and they must not be treated as
+credential selectors, account IDs, bearer tokens, or durable secret copies.
+
 Telemetry fields may include:
 
 - timestamp,
@@ -590,7 +597,6 @@ Areas that still need research or stronger live evidence:
 
 ## Open Questions
 
-- Should credential records use labels visible in telemetry?
 - What is the exact policy for subscription account fallback under provider
   terms?
 - How should daemon management transport work on non-Unix platforms?

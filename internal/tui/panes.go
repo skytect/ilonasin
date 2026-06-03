@@ -157,7 +157,7 @@ func (m Model) renderPane(placement panePlacement, focused bool) string {
 	}
 	title := paneTitleLine(placement.pane.title, focused, showScrollMarker, offset, maxOffset, len(contentLines), innerWidth)
 	body := make([]string, 0, innerHeight)
-	body = append(body, paneTitleStyle.Render(title))
+	body = append(body, title)
 	for i := 0; i < visibleContentHeight; i++ {
 		line := ""
 		index := offset + i
@@ -189,8 +189,11 @@ func paneTitleLine(title string, focused, scrollable bool, offset, maxOffset, to
 	if title == "" {
 		title = "pane"
 	}
+	title = safeWrappedChromeDisplay(title)
 	if focused {
-		title = ">" + title
+		title = focusedTitleStyle.Render(" " + title + " ")
+	} else {
+		title = paneTitleStyle.Render(title)
 	}
 	if !scrollable || maxOffset <= 0 {
 		return clipPlainLine(title, width)
@@ -209,7 +212,7 @@ func paneTitleLine(title string, focused, scrollable bool, offset, maxOffset, to
 	marker := fmt.Sprintf(" %d/%d", position, totalLines)
 	markerWidth := ansi.StringWidth(marker)
 	if markerWidth >= width {
-		return clipPlainLine(marker, width)
+		return ansi.Truncate(marker, width, "")
 	}
 	titleWidth := width - markerWidth
 	return clipPlainLine(title, titleWidth) + mutedStyle.Render(marker)

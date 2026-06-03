@@ -11,9 +11,7 @@ import (
 func (m Model) View() string {
 	var b strings.Builder
 	width := m.viewWidth()
-	header := fmt.Sprintf("ilonasin  providers %d  bind %s", len(m.providers), m.runtime.Bind)
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212")).Render(clipPlainLine(header, width))
-	b.WriteString(title)
+	b.WriteString(m.headerLine(width))
 	b.WriteByte('\n')
 	b.WriteString(m.tabBar(width))
 	b.WriteByte('\n')
@@ -29,16 +27,28 @@ func (m Model) View() string {
 	return b.String()
 }
 
+func (m Model) headerLine(width int) string {
+	enabledTokens, disabledTokens := localTokenStateCounts(m.tokenRows)
+	parts := []string{
+		appTitleStyle.Render("ilonasin"),
+		metricChip("bind", m.runtime.Bind),
+		metricChip("providers", fmt.Sprintf("%d", len(m.providers))),
+		metricChip("keys", fmt.Sprintf("%d", len(m.tokenRows))),
+		metricChip("on", fmt.Sprintf("%d", enabledTokens)),
+		metricChip("off", fmt.Sprintf("%d", disabledTokens)),
+		metricChip("oauth", fmt.Sprintf("%d", len(m.oauthRows))),
+		metricChip("accounts", fmt.Sprintf("%d", len(m.accountRows))),
+	}
+	return singleLineMetric(width, parts...)
+}
+
 func (m Model) tabBar(width int) string {
-	active := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
-	inactive := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 	parts := make([]string, 0, len(tuiTabs))
 	for _, tab := range tuiTabs {
-		label := " " + tab.label + " "
 		if tab.id == m.activeTab {
-			parts = append(parts, active.Render("["+label+"]"))
+			parts = append(parts, tabActiveStyle.Render(" "+tab.label+" "))
 		} else {
-			parts = append(parts, inactive.Render(" "+label+" "))
+			parts = append(parts, tabInactiveStyle.Render(" "+tab.label+" "))
 		}
 	}
 	line := strings.Join(parts, " ")
@@ -54,11 +64,7 @@ func (m Model) tabAtViewPosition(x, y int) (tuiTab, bool) {
 	}
 	position := 0
 	for _, tab := range tuiTabs {
-		label := " " + tab.label + " "
-		display := " " + label + " "
-		if tab.id == m.activeTab {
-			display = "[" + label + "]"
-		}
+		display := tabDisplay(tab.label)
 		width := lipgloss.Width(display)
 		if x >= position && x < position+width {
 			return tab.id, true
@@ -66,6 +72,10 @@ func (m Model) tabAtViewPosition(x, y int) (tuiTab, bool) {
 		position += width + 1
 	}
 	return tabAPI, false
+}
+
+func tabDisplay(label string) string {
+	return " " + label + " "
 }
 
 func (m Model) statusLine() string {

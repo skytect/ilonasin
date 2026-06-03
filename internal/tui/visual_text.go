@@ -64,6 +64,30 @@ func wrappedMetricLine(width int, parts ...string) string {
 	return strings.Join(lines, "\n")
 }
 
+func singleLineMetric(width int, parts ...string) string {
+	line := metricLine(parts...)
+	if width <= 0 || ansi.StringWidth(line) <= width {
+		return line
+	}
+	compact := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		compact = append(compact, part)
+		candidate := metricLine(compact...)
+		if ansi.StringWidth(candidate) > width {
+			compact = compact[:len(compact)-1]
+			break
+		}
+	}
+	if len(compact) == 0 {
+		return clipPlainLine(line, width)
+	}
+	return metricLine(compact...)
+}
+
 func wrappedMetricBlock(width int, parts ...string) string {
 	return wrapTargetedLines(width, wrappedMetricLine(width, parts...))
 }
@@ -250,6 +274,7 @@ type keyHint struct {
 
 func renderKeyMap(width int, hints []keyHint) string {
 	parts := make([]string, 0, len(hints))
+	shortParts := make([]string, 0, len(hints))
 	compactParts := make([]string, 0, len(hints))
 	for _, hint := range hints {
 		key := safeChromeDisplay(hint.key)
@@ -259,11 +284,16 @@ func renderKeyMap(width int, hints []keyHint) string {
 		}
 		keyChip := chipStyle.Render(key)
 		parts = append(parts, keyChip+" "+mutedStyle.Render(label))
+		shortParts = append(shortParts, keyChip+mutedStyle.Render(":"+label))
 		compactParts = append(compactParts, keyChip)
 	}
 	line := strings.Join(parts, "  ")
 	if width <= 0 || ansi.StringWidth(line) <= width {
 		return line
+	}
+	short := strings.Join(shortParts, " ")
+	if ansi.StringWidth(short) <= width {
+		return short
 	}
 	compact := strings.Join(compactParts, " ")
 	if ansi.StringWidth(compact) <= width {

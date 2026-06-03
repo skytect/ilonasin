@@ -1,6 +1,6 @@
 # Ilonasin Architecture
 
-Status: draft architecture plan.
+Status: active target architecture for current implementation work.
 
 Access date: 2026-05-30. This document captures the high-level design decisions
 for `ilonasin`, a local LLM router with compatibility APIs, provider credentials,
@@ -583,9 +583,10 @@ socket file are permission-tightened where Unix permissions apply. Management
 routes must not be exposed as part of the public local compatibility API surface.
 Non-Unix management transport remains deferred research.
 
-## Conceptual SQLite Tables
+## SQLite Tables
 
-Exact schema is deferred, but the architecture should cover these concepts:
+Concrete schema details live in SQLite migrations. This architecture names the
+durable state boundaries those migrations must preserve:
 
 - `client_tokens`: local ilonasin API tokens for local API clients.
 - `provider_credentials`: API-key, OAuth, command, or other credentials bound to
@@ -619,17 +620,12 @@ Areas that still need research or stronger live evidence:
 - Non-Unix management transport.
 - Provider adapter test strategy for hosted/deferred/namespaced tool families.
 - OpenRouter provider/model behavior for Codex CLI tool-response paths.
-- Exact provider-term boundaries for subscription account keepalive and quota
-  pooling.
+- Exact provider-term policy for subscription account keepalive, quota pooling,
+  and any subscription account fallback.
 
-## Open Questions
+## Current Implemented Surface
 
-- What is the exact policy for subscription account fallback under provider
-  terms?
-
-## MVP Target
-
-The architecture supports an MVP with:
+The current implemented product surface includes:
 
 - `ilonasin serve`,
 - `ilonasin manage`,

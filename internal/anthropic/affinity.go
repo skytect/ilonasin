@@ -8,6 +8,8 @@ import (
 )
 
 func anthropicAffinityKey(metadata map[string]any) string {
+	// Claude Code sends a session_id inside metadata.user_id JSON in observed
+	// traffic. Safe plain metadata.session_id is the only fallback field.
 	if len(metadata) == 0 {
 		return ""
 	}

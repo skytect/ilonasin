@@ -778,6 +778,8 @@ func (r ResponsesRequest) ToChatCompletionRequest(policy ResponsesConversionPoli
 }
 
 func (r ResponsesRequest) AffinityKey() string {
+	// Codex CLI sends prompt_cache_key in the audited Responses path. Generic
+	// clients may omit it, so empty affinity is valid and handled by routing.
 	if value := strings.TrimSpace(r.PromptCacheKey); privacy.SafeStrictAffinityValue(value) {
 		return value
 	}
@@ -788,6 +790,9 @@ func (r ResponsesRequest) AffinityKey() string {
 }
 
 func responsesMetadataAffinityKey(metadata map[string]string) string {
+	// Only selected session/cache-locality fields may influence credential
+	// affinity. Raw input, installation IDs, request IDs, and account-like
+	// values must stay out of routing.
 	for _, key := range []string{"prompt_cache_key", "session_id", "thread_id", "conversation_id"} {
 		value, ok := metadata[key]
 		if !ok {

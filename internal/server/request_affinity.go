@@ -21,8 +21,8 @@ func requestHeaderAffinity(r *http.Request) string {
 	if r == nil {
 		return ""
 	}
-	// Body affinity is preferred. Headers are fallback signals from clients
-	// whose stable session identifiers are not represented in the body.
+	// Body affinity is preferred. Headers are last-resort stable-session
+	// fallbacks, not generic request metadata.
 	for _, header := range []string{
 		"session-id",
 		"thread-id",

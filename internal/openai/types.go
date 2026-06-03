@@ -146,6 +146,8 @@ func DecodeChatCompletion(r io.Reader) (ChatCompletionRequest, error) {
 }
 
 func chatAffinityKey(req ChatCompletionRequest) string {
+	// Chat clients often omit all stable affinity fields. Use only safe
+	// optional fields, never prompt/message bodies or request IDs.
 	if req.SessionID != nil {
 		if value := strings.TrimSpace(*req.SessionID); privacy.SafeStrictAffinityValue(value) {
 			return value
@@ -163,6 +165,8 @@ func chatAffinityKey(req ChatCompletionRequest) string {
 }
 
 func chatMetadataAffinityKey(metadata map[string]string) string {
+	// Keep this list tied to the architecture signal map. Do not add
+	// installation, account, device, authorization, or request-id fields here.
 	for _, key := range []string{"session_id", "thread_id", "conversation_id", "prompt_cache_key"} {
 		value, ok := metadata[key]
 		if !ok {

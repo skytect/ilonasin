@@ -67,6 +67,8 @@ func affinityCredentialOrder(addr routing.ModelAddress, tokenID int64, affinityK
 	if len(credentials) < 2 {
 		return credentials
 	}
+	// Empty affinity is expected for minimal clients. The local token plus
+	// provider/model route still seeds a deterministic spread.
 	start := credentialAffinityStart(addr, tokenID, affinityKey, len(credentials))
 	if start == 0 {
 		return credentials
@@ -311,6 +313,8 @@ func (s *Server) reserveCredentialAttempt(addr routing.ModelAddress, tokenID int
 	if strings.TrimSpace(affinityKey) != "" {
 		return s.pressure.reserveLeastStable(addr, slots)
 	}
+	// With no safe client affinity, spread eligible credentials by in-flight
+	// pressure and a token-scoped cursor for equal-pressure candidates.
 	return s.pressure.reserveLeast(addr, tokenID, slots)
 }
 

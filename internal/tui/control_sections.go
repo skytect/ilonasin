@@ -117,7 +117,7 @@ func (m Model) providerCredentialsBody(width int) string {
 func (m Model) providerFallbackBody(width int) string {
 	var b strings.Builder
 	m = m.withRenderWidth(width)
-	m.writeFallbackPolicies(&b)
+	m.writeCredentialPoolGroups(&b)
 	return strings.TrimRight(b.String(), "\n")
 }
 

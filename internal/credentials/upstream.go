@@ -40,7 +40,7 @@ const (
 type UpstreamCredentialManager interface {
 	AddAPIKey(ctx context.Context, providerInstanceID, label, apiKey string) (UpstreamCredentialMetadata, error)
 	List(ctx context.Context) ([]UpstreamCredentialMetadata, error)
-	ListFallbackPolicies(ctx context.Context) ([]FallbackPolicyMetadata, error)
+	ListCredentialPoolGroups(ctx context.Context) ([]CredentialPoolGroupMetadata, error)
 	Disable(ctx context.Context, id int64) error
 }
 
@@ -71,7 +71,7 @@ type UpstreamCredentialRepository interface {
 	ResolveOAuthRefreshToken(ctx context.Context, credentialID, refreshSecretID int64) (string, error)
 	UpdateOAuthTokens(ctx context.Context, credentialID int64, update OAuthTokenUpdate) error
 	UpdateOAuthAccountMetadata(ctx context.Context, credentialID int64, displayLabel, planLabel string, updatedAt time.Time) error
-	ListFallbackPolicies(ctx context.Context) ([]FallbackPolicyMetadata, error)
+	ListCredentialPoolGroups(ctx context.Context) ([]CredentialPoolGroupMetadata, error)
 	UpsertOAuthCredentialForAccountHash(ctx context.Context, meta NewOAuthCredential, accessToken, refreshToken string) (OAuthCredentialMetadata, error)
 	ListOAuthCredentials(ctx context.Context) ([]OAuthCredentialMetadata, error)
 	ListProviderAccounts(ctx context.Context) ([]ProviderAccountMetadata, error)
@@ -213,7 +213,7 @@ type ProviderAccountMetadata struct {
 	CreatedAt          time.Time
 }
 
-type FallbackPolicyMetadata struct {
+type CredentialPoolGroupMetadata struct {
 	ProviderInstanceID string
 	CredentialKind     string
 	GroupLabel         string
@@ -354,8 +354,8 @@ func (s *UpstreamService) List(ctx context.Context) ([]UpstreamCredentialMetadat
 	return s.Repo.ListUpstreamCredentials(ctx)
 }
 
-func (s *UpstreamService) ListFallbackPolicies(ctx context.Context) ([]FallbackPolicyMetadata, error) {
-	return s.Repo.ListFallbackPolicies(ctx)
+func (s *UpstreamService) ListCredentialPoolGroups(ctx context.Context) ([]CredentialPoolGroupMetadata, error) {
+	return s.Repo.ListCredentialPoolGroups(ctx)
 }
 
 func (s *UpstreamService) ListOAuthCredentials(ctx context.Context) ([]OAuthCredentialMetadata, error) {

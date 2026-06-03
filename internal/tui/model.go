@@ -23,7 +23,7 @@ type Model struct {
 	tokenRows                   []management.LocalToken
 	providers                   []management.ProviderInstance
 	credentials                 []management.UpstreamCredential
-	fallbackPolicies            []management.FallbackPolicy
+	credentialPoolGroups        []management.CredentialPoolGroup
 	oauthRows                   []management.OAuthCredential
 	accountRows                 []management.ProviderAccount
 	modelRows                   []management.ModelMetadata

@@ -22,10 +22,10 @@ func upstreamCredentialsFromCredentials(rows []credentials.UpstreamCredentialMet
 	return out
 }
 
-func fallbackPoliciesFromCredentials(rows []credentials.FallbackPolicyMetadata) []FallbackPolicy {
-	out := make([]FallbackPolicy, 0, len(rows))
+func credentialPoolGroupsFromCredentials(rows []credentials.CredentialPoolGroupMetadata) []CredentialPoolGroup {
+	out := make([]CredentialPoolGroup, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, fallbackPolicyFromCredentials(row))
+		out = append(out, credentialPoolGroupFromCredentials(row))
 	}
 	return out
 }

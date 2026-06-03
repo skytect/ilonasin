@@ -64,7 +64,7 @@ type Service struct {
 
 type UpstreamMetadataReader interface {
 	List(ctx context.Context) ([]credentials.UpstreamCredentialMetadata, error)
-	ListFallbackPolicies(ctx context.Context) ([]credentials.FallbackPolicyMetadata, error)
+	ListCredentialPoolGroups(ctx context.Context) ([]credentials.CredentialPoolGroupMetadata, error)
 }
 
 type OAuthMetadataReader interface {

@@ -7,7 +7,7 @@ type ManagementSnapshotResponse struct {
 	Providers           []ProviderInstance        `json:"providers"`
 	LocalTokens         []LocalToken              `json:"local_tokens"`
 	UpstreamCredentials []UpstreamCredential      `json:"upstream_credentials"`
-	FallbackPolicies    []FallbackPolicy          `json:"fallback_policies"`
+	FallbackPolicies    []CredentialPoolGroup     `json:"fallback_policies"`
 	OAuthCredentials    []OAuthCredential         `json:"oauth_credentials"`
 	ProviderAccounts    []ProviderAccount         `json:"provider_accounts"`
 	ModelCache          []ModelMetadata           `json:"model_cache"`
@@ -53,7 +53,7 @@ type UpstreamCredential struct {
 	Disabled           bool       `json:"disabled"`
 }
 
-type FallbackPolicy struct {
+type CredentialPoolGroup struct {
 	ProviderInstanceID string `json:"provider_instance_id"`
 	CredentialKind     string `json:"credential_kind"`
 	GroupLabel         string `json:"group_label"`

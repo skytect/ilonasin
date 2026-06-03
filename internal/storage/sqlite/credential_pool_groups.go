@@ -6,7 +6,7 @@ import (
 	"ilonasin/internal/credentials"
 )
 
-func (s *Store) ListFallbackPolicies(ctx context.Context) ([]credentials.FallbackPolicyMetadata, error) {
+func (s *Store) ListCredentialPoolGroups(ctx context.Context) ([]credentials.CredentialPoolGroupMetadata, error) {
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT provider_instance_id, kind AS credential_kind, fallback_group AS group_label, COUNT(*) AS credential_count
 		FROM provider_credentials
@@ -19,9 +19,9 @@ func (s *Store) ListFallbackPolicies(ctx context.Context) ([]credentials.Fallbac
 		return nil, err
 	}
 	defer rows.Close()
-	var out []credentials.FallbackPolicyMetadata
+	var out []credentials.CredentialPoolGroupMetadata
 	for rows.Next() {
-		var row credentials.FallbackPolicyMetadata
+		var row credentials.CredentialPoolGroupMetadata
 		if err := rows.Scan(&row.ProviderInstanceID, &row.CredentialKind, &row.GroupLabel, &row.CredentialCount); err != nil {
 			return nil, err
 		}

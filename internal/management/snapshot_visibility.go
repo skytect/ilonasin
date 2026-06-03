@@ -15,8 +15,8 @@ func visibleUpstreamCredentials(rows []credentials.UpstreamCredentialMetadata, p
 	return out
 }
 
-func visibleFallbackPolicies(rows []credentials.FallbackPolicyMetadata, providers []ProviderInstance) []credentials.FallbackPolicyMetadata {
-	return visibleFallbackPolicyMetadata(rows, providers)
+func visibleCredentialPoolGroups(rows []credentials.CredentialPoolGroupMetadata, providers []ProviderInstance) []credentials.CredentialPoolGroupMetadata {
+	return visibleCredentialPoolGroupMetadata(rows, providers)
 }
 
 func apiKeyProviderIDs(providers []ProviderInstance) map[string]bool {

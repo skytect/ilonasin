@@ -54,9 +54,9 @@ func allowedFallbackCredentialKindsByProvider(providers []ProviderInstance) map[
 	return allowed
 }
 
-func visibleFallbackPolicyMetadata(rows []credentials.FallbackPolicyMetadata, providers []ProviderInstance) []credentials.FallbackPolicyMetadata {
+func visibleCredentialPoolGroupMetadata(rows []credentials.CredentialPoolGroupMetadata, providers []ProviderInstance) []credentials.CredentialPoolGroupMetadata {
 	allowed := allowedFallbackCredentialKindsByProvider(providers)
-	out := make([]credentials.FallbackPolicyMetadata, 0, len(rows))
+	out := make([]credentials.CredentialPoolGroupMetadata, 0, len(rows))
 	for _, row := range rows {
 		if allowed[row.ProviderInstanceID][row.CredentialKind] && row.CredentialCount >= 2 {
 			out = append(out, row)
@@ -117,8 +117,8 @@ func upstreamCredentialFromCredentials(row credentials.UpstreamCredentialMetadat
 	}
 }
 
-func fallbackPolicyFromCredentials(row credentials.FallbackPolicyMetadata) FallbackPolicy {
-	return FallbackPolicy{
+func credentialPoolGroupFromCredentials(row credentials.CredentialPoolGroupMetadata) CredentialPoolGroup {
+	return CredentialPoolGroup{
 		ProviderInstanceID: safeMachineString(row.ProviderInstanceID),
 		CredentialKind:     row.CredentialKind,
 		GroupLabel:         safeSnapshotString(row.GroupLabel),

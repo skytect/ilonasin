@@ -325,7 +325,7 @@ priority order:
 | Codex app-server Responses | App-server turn APIs can forward turn-scoped `responsesapi_client_metadata` into Responses `client_metadata`. | Use only selected safe `client_metadata` session, thread, conversation, or prompt-cache keys. Ignore installation, account, device, token, and request-id-shaped values. |
 | Claude Code Anthropic | Captured traffic uses Anthropic `metadata.user_id` as a JSON string containing `session_id`, plus `X-Claude-Code-Session-Id`. | Prefer the safe nested `metadata.user_id.session_id`. Use the safe session header only if body affinity is absent. |
 | Generic OpenAI Chat | Many clients send only `model` and `messages`. `session_id`, `prompt_cache_key`, `user`, and `metadata` are optional. | Prefer safe `session_id`, then safe top-level `prompt_cache_key`, then safe `user`, then selected safe metadata keys: `session_id`, `thread_id`, `conversation_id`, and `prompt_cache_key`. |
-| Generic Responses | `prompt_cache_key` and `client_metadata` are optional. Many clients may send neither. | Prefer safe body `prompt_cache_key`, then selected safe `client_metadata` keys: `prompt_cache_key`, `session_id`, `thread_id`, and `conversation_id`. |
+| Generic Responses | `prompt_cache_key` and top-level `metadata` are optional. Many clients may send neither. | Prefer safe body `prompt_cache_key`, then selected safe `metadata` keys: `prompt_cache_key`, `session_id`, `thread_id`, and `conversation_id`. |
 | Minimal clients | Often send only model plus a local ilonasin API token. | Route by local token identity, provider instance, provider model, least-in-flight credential pressure, and round-robin tie breaking. |
 
 Affinity is best-effort locality, not a quota or correctness boundary. It must

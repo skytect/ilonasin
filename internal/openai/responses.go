@@ -26,6 +26,7 @@ type ResponsesRequest struct {
 	Text              map[string]any
 	PromptCacheKey    string
 	ClientMetadata    map[string]string
+	Metadata          map[string]string
 }
 
 type ResponseInputItem struct {
@@ -114,7 +115,8 @@ func DecodeResponses(r io.Reader) (ResponsesRequest, error) {
 	if err != nil {
 		return ResponsesRequest{}, err
 	}
-	clientMetadata := responseClientMetadata(raw["client_metadata"])
+	clientMetadata := responseMetadataPairs(raw["client_metadata"])
+	metadata := responseMetadataPairs(raw["metadata"])
 	promptCacheKey := responseAffinityPromptCacheKey(raw["prompt_cache_key"])
 	if err := validateResponsesInclude(raw["include"], reasoning != nil); err != nil {
 		return ResponsesRequest{}, err
@@ -132,6 +134,7 @@ func DecodeResponses(r io.Reader) (ResponsesRequest, error) {
 		Text:              text,
 		PromptCacheKey:    promptCacheKey,
 		ClientMetadata:    clientMetadata,
+		Metadata:          metadata,
 	}, nil
 }
 
@@ -153,7 +156,7 @@ func responseAffinityPromptCacheKey(raw json.RawMessage) string {
 	return value
 }
 
-func responseClientMetadata(raw json.RawMessage) map[string]string {
+func responseMetadataPairs(raw json.RawMessage) map[string]string {
 	if len(bytes.TrimSpace(raw)) == 0 || isJSONNull(raw) {
 		return nil
 	}
@@ -205,6 +208,7 @@ func validateResponsesTopLevelKeys(raw map[string]json.RawMessage) error {
 		"text":                true,
 		"prompt_cache_key":    true,
 		"client_metadata":     true,
+		"metadata":            true,
 	}
 	keys := make([]string, 0, len(raw))
 	for key := range raw {
@@ -770,7 +774,10 @@ func (r ResponsesRequest) AffinityKey() string {
 	if value := strings.TrimSpace(r.PromptCacheKey); privacy.SafeStrictAffinityValue(value) {
 		return value
 	}
-	return responsesMetadataAffinityKey(r.ClientMetadata)
+	if value := responsesMetadataAffinityKey(r.ClientMetadata); value != "" {
+		return value
+	}
+	return responsesMetadataAffinityKey(r.Metadata)
 }
 
 func responsesMetadataAffinityKey(metadata map[string]string) string {

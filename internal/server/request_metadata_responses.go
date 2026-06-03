@@ -19,7 +19,7 @@ func responsesRequestMetadataBase(start time.Time, token credentials.VerifiedLoc
 		ProviderType:              safeMetadataToken(instance.Type),
 		MessageCount:              len(req.Input),
 		ToolCount:                 len(req.Tools),
-		ImageCount:                countResponsesImages(req),
+		ImageCount:                openai.ResponsesRequestImageCount(req),
 		RequestedProviderInstance: safeMetadataAddress(addr.ProviderInstanceID),
 		RequestedModel:            safeMetadataAddress(addr.ProviderModelID),
 		ResolvedProviderInstance:  safeMetadataAddress(addr.ProviderInstanceID),

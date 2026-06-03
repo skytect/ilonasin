@@ -125,7 +125,3 @@ func (s *Server) discoverModelsWithCredentials(ctx context.Context, instance pro
 	}
 	return modelDiscoveryAttempt{}
 }
-
-func (s *Server) shouldRefreshOAuthAfterModel401(instance provider.Instance, result provider.ModelResult) bool {
-	return s.canRefreshCodexOAuth(instance) && result.StatusCode == http.StatusUnauthorized
-}

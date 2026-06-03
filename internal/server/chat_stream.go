@@ -37,16 +37,6 @@ type streamExecution struct {
 	attemptCount      int
 }
 
-type streamErrorExposurePolicy struct {
-	exposeProviderErrorClasses bool
-}
-
-func streamErrorExposurePolicyFor(instance provider.Instance) streamErrorExposurePolicy {
-	return streamErrorExposurePolicy{
-		exposeProviderErrorClasses: instance.Type == "codex",
-	}
-}
-
 func retryableStreamAttempt(summary provider.ChatStreamSummary, err error, sinkStarted bool) bool {
 	if err == nil || sinkStarted || summary.Started {
 		return false

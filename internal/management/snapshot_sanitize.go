@@ -31,7 +31,6 @@ func sanitizeSnapshot(out *ManagementSnapshotResponse) {
 		out.UpstreamCredentials[i].FallbackGroup = safeSnapshotString(out.UpstreamCredentials[i].FallbackGroup)
 	}
 	sanitizeCredentialPoolGroups(out.CredentialPoolGroups)
-	sanitizeCredentialPoolGroups(out.FallbackPolicies)
 	for i := range out.OAuthCredentials {
 		out.OAuthCredentials[i].ProviderInstanceID = safeMachineString(out.OAuthCredentials[i].ProviderInstanceID)
 		out.OAuthCredentials[i].Label = safeSnapshotString(out.OAuthCredentials[i].Label)

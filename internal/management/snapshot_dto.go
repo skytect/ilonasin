@@ -8,7 +8,6 @@ type ManagementSnapshotResponse struct {
 	LocalTokens          []LocalToken              `json:"local_tokens"`
 	UpstreamCredentials  []UpstreamCredential      `json:"upstream_credentials"`
 	CredentialPoolGroups []CredentialPoolGroup     `json:"credential_pool_groups"`
-	FallbackPolicies     []CredentialPoolGroup     `json:"fallback_policies"`
 	OAuthCredentials     []OAuthCredential         `json:"oauth_credentials"`
 	ProviderAccounts     []ProviderAccount         `json:"provider_accounts"`
 	ModelCache           []ModelMetadata           `json:"model_cache"`

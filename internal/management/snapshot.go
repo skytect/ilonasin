@@ -33,7 +33,6 @@ func (s Service) LoadManagementSnapshot(ctx context.Context) (ManagementSnapshot
 		}
 		poolGroups = visibleCredentialPoolGroups(poolGroups, s.Providers)
 		out.CredentialPoolGroups = credentialPoolGroupsFromCredentials(poolGroups)
-		out.FallbackPolicies = append([]CredentialPoolGroup(nil), out.CredentialPoolGroups...)
 	}
 	if s.OAuth != nil {
 		rows, err := s.OAuth.ListOAuthCredentials(ctx)

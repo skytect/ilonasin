@@ -318,6 +318,27 @@ var migrations = []migration{
 	{version: 10, name: "drop_credential_fallback_policy_table", steps: []migrationStep{
 		sqlStep(`DROP TABLE IF EXISTS credential_fallback_policies`),
 	}},
+	{version: 11, name: "drop_fallback_event_policy_column", steps: []migrationStep{
+		sqlStep(`CREATE TABLE IF NOT EXISTS fallback_events_new (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			request_metadata_id INTEGER REFERENCES request_metadata(id) ON DELETE CASCADE,
+			occurred_at TEXT NOT NULL,
+			provider_instance_id TEXT NOT NULL,
+			model_id TEXT NOT NULL,
+			from_credential_id INTEGER REFERENCES provider_credentials(id) ON DELETE SET NULL,
+			to_credential_id INTEGER REFERENCES provider_credentials(id) ON DELETE SET NULL,
+			reason TEXT NOT NULL
+		)`),
+		sqlStep(`INSERT INTO fallback_events_new(
+				id, request_metadata_id, occurred_at, provider_instance_id,
+				model_id, from_credential_id, to_credential_id, reason
+			)
+			SELECT id, request_metadata_id, occurred_at, provider_instance_id,
+				model_id, from_credential_id, to_credential_id, reason
+			FROM fallback_events`),
+		sqlStep(`DROP TABLE fallback_events`),
+		sqlStep(`ALTER TABLE fallback_events_new RENAME TO fallback_events`),
+	}},
 }
 
 func sqlSteps(stmts []string) []migrationStep {

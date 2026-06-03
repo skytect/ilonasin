@@ -49,18 +49,14 @@ func (s *Store) RecordHealthEvent(ctx context.Context, m metadata.HealthEvent) e
 }
 
 func (s *Store) RecordFallbackEvent(ctx context.Context, m metadata.FallbackEvent) error {
-	allowed := 0
-	if m.AllowedByPolicy {
-		allowed = 1
-	}
 	_, err := s.DB.ExecContext(ctx, `
 		INSERT INTO fallback_events(
 			request_metadata_id, occurred_at, provider_instance_id, model_id,
-			from_credential_id, to_credential_id, reason, allowed_by_policy
-		) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+			from_credential_id, to_credential_id, reason
+		) VALUES(?, ?, ?, ?, ?, ?, ?)
 	`, m.RequestMetadataID, m.OccurredAt.UTC().Format(time.RFC3339Nano),
 		m.ProviderInstanceID, m.ModelID, nullableInt64(m.FromCredentialID),
-		nullableInt64(m.ToCredentialID), m.Reason, allowed)
+		nullableInt64(m.ToCredentialID), m.Reason)
 	if err == nil && s.Logger != nil {
 		s.Logger.LogAttrs(ctx, slog.LevelInfo, "fallback event recorded",
 			slog.String("event", "fallback_recorded"),
@@ -68,7 +64,6 @@ func (s *Store) RecordFallbackEvent(ctx context.Context, m metadata.FallbackEven
 			slog.Int64("metadata_id", m.RequestMetadataID),
 			slog.Int64("from_credential_id", m.FromCredentialID),
 			slog.Int64("to_credential_id", m.ToCredentialID),
-			slog.Bool("allowed", m.AllowedByPolicy),
 		)
 	}
 	return err

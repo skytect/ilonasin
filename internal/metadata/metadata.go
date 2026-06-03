@@ -74,7 +74,6 @@ type FallbackEvent struct {
 	FromCredentialID   int64
 	ToCredentialID     int64
 	Reason             string
-	AllowedByPolicy    bool
 }
 
 type QuotaObservation struct {

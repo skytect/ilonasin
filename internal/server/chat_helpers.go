@@ -51,6 +51,5 @@ func chatFallbackEvent(occurredAt time.Time, addr routing.ModelAddress, from pro
 		FromCredentialID:   from.ID,
 		ToCredentialID:     to.ID,
 		Reason:             reason,
-		AllowedByPolicy:    true,
 	}
 }

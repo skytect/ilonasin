@@ -561,22 +561,13 @@ func validateResponsesToolTranscript(items []ResponseInputItem) error {
 	}
 	calls := map[string]callInfo{}
 	outputs := map[string]int{}
-	pending := map[string]bool{}
-	acceptingOutputs := false
 	for i, item := range items {
 		switch item.Type {
 		case "function_call", "custom_tool_call", "tool_search_call":
-			if acceptingOutputs && len(pending) != 0 {
-				return fmt.Errorf("input[%d].type cannot appear before all function_call_output items", i)
-			}
-			if acceptingOutputs {
-				acceptingOutputs = false
-			}
 			if _, exists := calls[item.CallID]; exists {
 				return fmt.Errorf("input[%d].call_id is duplicated", i)
 			}
 			calls[item.CallID] = callInfo{index: i, typ: item.Type}
-			pending[item.CallID] = true
 		case "function_call_output", "custom_tool_call_output", "tool_search_output":
 			if _, exists := outputs[item.CallID]; exists {
 				return fmt.Errorf("input[%d].call_id output is duplicated", i)
@@ -588,16 +579,7 @@ func validateResponsesToolTranscript(items []ResponseInputItem) error {
 			if !responsesOutputMatchesCall(item.Type, call.typ) {
 				return fmt.Errorf("input[%d].call_id output type does not match prior call", i)
 			}
-			if _, exists := pending[item.CallID]; !exists {
-				return fmt.Errorf("input[%d].call_id output is out of order", i)
-			}
-			acceptingOutputs = true
 			outputs[item.CallID] = i
-			delete(pending, item.CallID)
-		case "message":
-			if len(pending) != 0 && !responsesInstructionMessage(item) {
-				return fmt.Errorf("input[%d].type cannot appear before function_call_output", i)
-			}
 		}
 	}
 	for callID, call := range calls {
@@ -619,10 +601,6 @@ func responsesOutputMatchesCall(outputType, callType string) bool {
 	default:
 		return false
 	}
-}
-
-func responsesInstructionMessage(item ResponseInputItem) bool {
-	return item.Type == "message" && (item.Role == "system" || item.Role == "developer")
 }
 
 func parseResponsesContent(raw json.RawMessage, inputIndex int) ([]ResponseContentItem, error) {

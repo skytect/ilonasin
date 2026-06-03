@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"ilonasin/internal/privacy"
 )
 
 type ResponsesRequest struct {
@@ -145,7 +147,7 @@ func responseAffinityPromptCacheKey(raw json.RawMessage) string {
 	if value == "" || utf8.RuneCountInString(value) > 256 {
 		return ""
 	}
-	if !safeResponsesAffinityValue(value) {
+	if !privacy.SafeStrictAffinityValue(value) {
 		return ""
 	}
 	return value
@@ -765,7 +767,7 @@ func (r ResponsesRequest) ToChatCompletionRequest(providerType string) (ChatComp
 }
 
 func (r ResponsesRequest) AffinityKey() string {
-	if value := strings.TrimSpace(r.PromptCacheKey); safeResponsesAffinityValue(value) {
+	if value := strings.TrimSpace(r.PromptCacheKey); privacy.SafeStrictAffinityValue(value) {
 		return value
 	}
 	return responsesMetadataAffinityKey(r.ClientMetadata)
@@ -778,35 +780,11 @@ func responsesMetadataAffinityKey(metadata map[string]string) string {
 			continue
 		}
 		value = strings.TrimSpace(value)
-		if safeResponsesAffinityValue(value) {
+		if privacy.SafeStrictAffinityValue(value) {
 			return value
 		}
 	}
 	return ""
-}
-
-func safeResponsesAffinityValue(value string) bool {
-	if value == "" || utf8.RuneCountInString(value) > 256 {
-		return false
-	}
-	if strings.HasPrefix(value, "{") {
-		return false
-	}
-	lower := strings.ToLower(value)
-	if strings.HasPrefix(lower, "eyj") && strings.Contains(lower, ".") {
-		return false
-	}
-	for _, marker := range []string{
-		"account", "acct_", "account_uuid", "device", "device_id", "bearer",
-		"token", "secret", "authorization", "oauth", "sk-", "requestid",
-		"request_id", "request-id", "request.id", "request:id", "request/id",
-		"request id", "req_", "req-", "req.", "req:", "req/",
-	} {
-		if strings.Contains(lower, marker) {
-			return false
-		}
-	}
-	return true
 }
 
 func codexResponsesInputAndInstructions(raw []json.RawMessage, input []ResponseInputItem, instructions string) ([]json.RawMessage, string, error) {

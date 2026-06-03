@@ -3,9 +3,9 @@ package server
 import (
 	"net/http"
 	"strings"
-	"unicode/utf8"
 
 	"ilonasin/internal/openai"
+	"ilonasin/internal/privacy"
 )
 
 func applyHeaderAffinityFallback(r *http.Request, req *openai.ChatCompletionRequest) {
@@ -40,32 +40,8 @@ func safeHeaderAffinityValue(header, value string) string {
 		value, _, _ = strings.Cut(value, ":")
 		value = strings.TrimSpace(value)
 	}
-	if !safeRequestAffinityValue(value) {
+	if !privacy.SafeStrictAffinityValue(value) {
 		return ""
 	}
 	return value
-}
-
-func safeRequestAffinityValue(value string) bool {
-	if value == "" || utf8.RuneCountInString(value) > 256 {
-		return false
-	}
-	if strings.HasPrefix(value, "{") {
-		return false
-	}
-	lower := strings.ToLower(value)
-	if strings.HasPrefix(lower, "eyj") && strings.Contains(lower, ".") {
-		return false
-	}
-	for _, marker := range []string{
-		"account", "acct_", "account_uuid", "device", "device_id", "bearer",
-		"token", "secret", "authorization", "oauth", "sk-", "requestid",
-		"request_id", "request-id", "request.id", "request:id", "request/id",
-		"request id", "req_", "req-", "req.", "req:", "req/",
-	} {
-		if strings.Contains(lower, marker) {
-			return false
-		}
-	}
-	return true
 }

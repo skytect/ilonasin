@@ -34,13 +34,12 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 		}
 		b.WriteString(subscriptionGroupHeader(group, width))
 		b.WriteString("\n\n")
-		for rowIndex, row := range group.rows {
-			if rowIndex > 0 {
-				b.WriteString("\n\n")
-			}
-			b.WriteString(subscriptionAccountRow(row, width, now))
-			b.WriteByte('\n')
+		cards := make([]string, 0, len(group.rows))
+		for _, row := range group.rows {
+			cards = append(cards, subscriptionAccountRow(row, subscriptionAccountTileWidth(width), now))
 		}
+		b.WriteString(renderSubscriptionAccountGrid(width, cards))
+		b.WriteByte('\n')
 	}
 	b.WriteString("\n")
 	b.WriteString(renderPaneSubhead(width, "Subscription pools", fmt.Sprintf("pools %d", len(m.subscriptionPools))))
@@ -258,38 +257,45 @@ func subscriptionAccountRow(row management.SubscriptionUsageRow, width int, now 
 	if row.ErrorClass != "" {
 		state = "error"
 	}
-	lines := []string{
-		subscriptionAccountHeaderLine(row, width, now, state),
-		wrappedSubscriptionIdentity(row.AccountDisplayLabel, width),
-	}
+	lines := []string{wrappedSubscriptionIdentity(row.AccountDisplayLabel, width)}
+	lines = append(lines, subscriptionAccountHeaderLines(row, width, now, state)...)
 	if row.ErrorClass != "" {
 		lines = append(lines, wrappedDisplayField("error", safeFullWrappedDisplay(row.ErrorClass), width))
 	} else {
-		lines = append(lines, subscriptionAccountWindowLines(row, subscriptionCardWidth(width), now)...)
+		lines = append(lines, subscriptionAccountWindowLines(row, width, now)...)
 	}
-	return subscriptionAccountBlock(width, lines...)
+	return renderMetricAccentCard(width, subscriptionAccountAccent(state), lines...)
 }
 
-func subscriptionAccountHeaderLine(row management.SubscriptionUsageRow, width int, now time.Time, state string) string {
+func subscriptionAccountHeaderLines(row management.SubscriptionUsageRow, width int, now time.Time, state string) []string {
 	parts := []string{
 		statusBadge(state),
 		metricChip("credential", fmt.Sprintf("%d", row.CredentialID)),
-		wrappedMetricChip("provider", row.ProviderInstanceID),
+	}
+	if row.ProviderInstanceID != "" {
+		parts = append(parts, wrappedMetricChip("provider", row.ProviderInstanceID))
 	}
 	if row.PlanLabel != "" {
 		parts = append(parts, wrappedMetricChip("plan", row.PlanLabel))
 	}
-	if row.Source != "" {
-		parts = append(parts, metricChip("source", row.Source))
-	}
-	if row.ReachedType != "" {
-		parts = append(parts, metricChip("reached", row.ReachedType))
-	}
 	if row.PlanType != "" {
 		parts = append(parts, metricChip("type", row.PlanType))
 	}
-	parts = append(parts, timeChip("observed", now, row.ObservedAt))
-	return wrappedMetricLine(width, parts...)
+	line := wrappedMetricLine(width, parts...)
+	secondary := []string{}
+	if row.Source != "" {
+		secondary = append(secondary, metricChip("source", row.Source))
+	}
+	if row.ReachedType != "" {
+		secondary = append(secondary, metricChip("reached", row.ReachedType))
+	}
+	if observed := timeChip("seen", now, row.ObservedAt); observed != "" {
+		secondary = append(secondary, observed)
+	}
+	if len(secondary) == 0 {
+		return []string{line}
+	}
+	return []string{line, wrappedMetricLine(width, secondary...)}
 }
 
 func wrappedSubscriptionIdentity(label string, width int) string {
@@ -325,22 +331,15 @@ func safeSubscriptionWrappedAccountDisplay(value string) string {
 	return safeFullWrappedAccountDisplay(value)
 }
 
-func subscriptionAccountBlock(width int, lines ...string) string {
-	return wrapTargetedLinesPreserveBlank(width, joinSubscriptionBlockLines(lines)...)
-}
-
-func joinSubscriptionBlockLines(lines []string) []string {
-	out := make([]string, 0, len(lines)*2)
-	for _, line := range lines {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		if len(out) > 0 {
-			out = append(out, "")
-		}
-		out = append(out, line)
+func subscriptionAccountAccent(state string) lipgloss.Color {
+	switch state {
+	case "error":
+		return lipgloss.Color("160")
+	case "stale", "warning":
+		return lipgloss.Color("214")
+	default:
+		return lipgloss.Color("42")
 	}
-	return out
 }
 
 func subscriptionUsageSummary(width int, rows []management.SubscriptionUsageRow, pools []management.SubscriptionUsageAggregate) string {
@@ -509,6 +508,8 @@ func subscriptionPoolWindowLines(row management.SubscriptionUsageAggregate, widt
 
 func gaugeBarWidth(width int) int {
 	switch {
+	case width < 44:
+		return 6
 	case width < 60:
 		return 10
 	case width < 90:
@@ -529,11 +530,35 @@ func poolGaugeBarWidth(width int) int {
 	}
 }
 
-func subscriptionCardWidth(width int) int {
-	if width >= 160 {
+func subscriptionAccountTileWidth(width int) int {
+	if width >= 118 {
 		return (width - 2) / 2
 	}
 	return width
+}
+
+func renderSubscriptionAccountGrid(width int, cards []string) string {
+	if len(cards) == 0 {
+		return ""
+	}
+	if width < 118 || len(cards) == 1 {
+		return strings.Join(cards, "\n\n")
+	}
+	gap := 2
+	rows := make([]string, 0, (len(cards)+1)/2)
+	for i := 0; i < len(cards); i += 2 {
+		if i+1 >= len(cards) {
+			rows = append(rows, cards[i])
+			continue
+		}
+		joined := lipgloss.JoinHorizontal(lipgloss.Top, cards[i], strings.Repeat(" ", gap), cards[i+1])
+		if lipgloss.Width(joined) > width {
+			rows = append(rows, cards[i], cards[i+1])
+			continue
+		}
+		rows = append(rows, joined)
+	}
+	return strings.Join(rows, "\n\n")
 }
 
 func windowLabel(label string, minutes int) string {

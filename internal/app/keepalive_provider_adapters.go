@@ -24,6 +24,10 @@ type keepaliveProvider struct {
 	ModelDiscovery bool
 }
 
+func supportsCodexOAuthKeepalive(instance keepaliveProvider) bool {
+	return instance.Type == "codex" && instance.OAuth
+}
+
 type keepaliveCredential struct {
 	ID                      int64
 	ProviderInstanceID      string

@@ -85,7 +85,7 @@ func (r *keepaliveRunner) runDue(ctx context.Context) {
 		return
 	}
 	for _, instance := range r.registry.List() {
-		if instance.Type != "codex" || !instance.OAuth {
+		if !supportsCodexOAuthKeepalive(instance) {
 			continue
 		}
 		bearers, err := r.resolver.ResolveOAuthBearers(ctx, instance.ID, now.UTC())

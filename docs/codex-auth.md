@@ -219,7 +219,7 @@ Recommended router shape:
 
 1. Define a `CredentialProvider` interface with `resolve()`, `refresh(reason)`, `account_id()`, `expires_at()`, and `redacted_debug()`.
 2. Define explicit credential types: API key, OAuth authorization-code account, OAuth device account, external bearer command, AWS SigV4, unauthenticated local, and manual bearer token.
-3. Store credentials per upstream provider/account with encrypted local storage and least-privilege scopes.
+3. For a generic router, consider encrypted credential storage and least-privilege scopes per upstream provider/account. Ilonasin's current architecture deliberately uses plaintext SQLite with local file permissions, redaction, and user-visible warnings; database-level encryption is future hardening, not a current requirement.
 4. Expose an OpenAI-compatible frontend, but keep internal upstream routing policy transparent: selected provider, selected account, reason for failover, and whether failover is allowed for the error class.
 5. For 429, prefer queueing, backoff, user-visible quota state, or switching to a separately paid provider/account only when explicitly configured as legitimate capacity. Do not implement hidden account cycling for quota evasion.
 6. Build a TUI around the structured state Codex already hints at: auth status, token expiry, refresh failures, active rate-limit window, reset time, provider health, last request ID, and storage backend.

@@ -200,12 +200,6 @@ func normalizeModels(instance Instance, body []byte) ([]ModelMetadata, error) {
 				metadata.ModelCapabilityStream,
 				metadata.ModelCapabilityTools,
 			)
-		case "codex":
-			meta.CapabilityFlags = metadata.FormatModelCapabilities(
-				metadata.ModelCapabilityChat,
-				metadata.ModelCapabilityReasoning,
-				metadata.ModelCapabilityStream,
-			)
 		}
 		models = append(models, meta)
 	}

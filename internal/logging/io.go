@@ -189,8 +189,9 @@ func (s *IOScrubber) scrubJSON(value any) any {
 	switch v := value.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(v))
+		toolFields := sensitiveToolPayloadKeys(v)
 		for key, child := range v {
-			if IsCredentialKey(key) {
+			if IsIOSensitiveKey(key) || toolFields[normalizedSecretKey(key)] {
 				out[key] = "[redacted]"
 				continue
 			}
@@ -208,6 +209,36 @@ func (s *IOScrubber) scrubJSON(value any) any {
 	default:
 		return v
 	}
+}
+
+func sensitiveToolPayloadKeys(value map[string]any) map[string]bool {
+	typ, _ := value["type"].(string)
+	switch typ {
+	case "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output", "tool_search_call", "tool_use":
+		return map[string]bool{
+			"arguments": true,
+			"input":     true,
+			"output":    true,
+		}
+	case "tool_result":
+		return map[string]bool{
+			"content": true,
+			"output":  true,
+		}
+	case "tool_search_output":
+		return map[string]bool{
+			"tools": true,
+		}
+	}
+	if role, _ := value["role"].(string); role == "tool" {
+		return map[string]bool{"content": true}
+	}
+	if _, hasName := value["name"]; hasName {
+		if _, hasArguments := value["arguments"]; hasArguments {
+			return map[string]bool{"arguments": true}
+		}
+	}
+	return nil
 }
 
 func scrubSecretMarkers(value string) string {
@@ -259,7 +290,7 @@ func (s *IOScrubber) scrubFormBody(body []byte) (string, bool) {
 	changed := false
 	for key, items := range values {
 		for i := range items {
-			if IsCredentialKey(key) {
+			if IsIOSensitiveKey(key) {
 				items[i] = "[redacted]"
 				changed = true
 				continue
@@ -313,7 +344,7 @@ func redactHeaderLines(value string) string {
 		if !ok {
 			continue
 		}
-		if IsCredentialKey(name) {
+		if IsIOSensitiveKey(name) {
 			suffix := ""
 			if strings.HasSuffix(line, "\n") {
 				suffix = "\n"
@@ -327,7 +358,7 @@ func redactHeaderLines(value string) string {
 func redactKeyValueMarkers(value string) string {
 	return keyValuePattern.ReplaceAllStringFunc(value, func(match string) string {
 		parts := keyValuePattern.FindStringSubmatch(match)
-		if len(parts) != 4 || !IsCredentialKey(parts[1]) {
+		if len(parts) != 4 || !IsIOSensitiveKey(parts[1]) {
 			return match
 		}
 		return parts[1] + parts[2] + "[redacted]"

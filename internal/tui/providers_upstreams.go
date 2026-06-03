@@ -58,7 +58,7 @@ func upstreamCredentialRow(cred management.UpstreamCredential, now time.Time, wi
 		statusBadge(state),
 		cardTitleStyle.Render(upstreamCredentialIdentity(cred.ID, cred.Label)),
 		wrappedMetricChip("provider", cred.ProviderInstanceID),
-		wrappedMetricChip("group", cred.FallbackGroup),
+		wrappedMetricChip("group", cred.PoolGroup),
 		machineChip("kind", cred.Kind),
 		fragmentChip("key", cred.SecretPrefix, cred.SecretLast4),
 	)

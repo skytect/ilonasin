@@ -29,7 +29,7 @@ func (s *Store) ResolveOAuthBearerCredentials(ctx context.Context, providerInsta
 		if err := rows.Scan(&row.credential.ID, &row.credential.ProviderInstanceID, &row.fallback, &row.accessSecret, &row.expires, &row.refreshFailure); err != nil {
 			return nil, err
 		}
-		row.credential.FallbackGroup = row.fallback
+		row.credential.PoolGroup = row.fallback
 		candidates = append(candidates, row)
 	}
 	if err := rows.Err(); err != nil {
@@ -134,7 +134,7 @@ func (s *Store) ResolveOAuthBearerCredentialByID(ctx context.Context, credential
 			AND pc.kind = 'oauth'
 			AND pc.disabled_at IS NULL
 			AND ot.access_token_secret_id IS NOT NULL
-	`, credentialID).Scan(&out.ID, &out.ProviderInstanceID, &out.FallbackGroup, &accessSecretID, &expires, &refreshFailure)
+	`, credentialID).Scan(&out.ID, &out.ProviderInstanceID, &out.PoolGroup, &accessSecretID, &expires, &refreshFailure)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return credentials.ResolvedOAuthBearerCredential{}, credentials.ErrNoEligibleCredential

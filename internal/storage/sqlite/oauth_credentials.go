@@ -99,7 +99,7 @@ func insertOAuthCredentialTx(ctx context.Context, tx *sql.Tx, meta credentials.N
 		INSERT INTO provider_credentials(
 			provider_instance_id, kind, label, secret_prefix, secret_last4, fallback_group, created_at, updated_at
 		) VALUES(?, 'oauth', ?, '', '', ?, ?, ?)
-	`, meta.ProviderInstanceID, meta.Label, credentials.DefaultFallbackGroup, ts, ts)
+	`, meta.ProviderInstanceID, meta.Label, credentials.DefaultPoolGroup, ts, ts)
 	if err != nil {
 		if isUniqueConstraint(err) {
 			return credentials.OAuthCredentialMetadata{}, false, credentials.ErrDuplicateCredential
@@ -226,7 +226,7 @@ func insertOAuthCredentialWithoutAccountTx(ctx context.Context, tx *sql.Tx, meta
 		INSERT INTO provider_credentials(
 			provider_instance_id, kind, label, secret_prefix, secret_last4, fallback_group, created_at, updated_at
 		) VALUES(?, 'oauth', ?, '', '', ?, ?, ?)
-	`, meta.ProviderInstanceID, meta.Label, credentials.DefaultFallbackGroup, ts, ts)
+	`, meta.ProviderInstanceID, meta.Label, credentials.DefaultPoolGroup, ts, ts)
 	if err != nil {
 		if isUniqueConstraint(err) {
 			return credentials.OAuthCredentialMetadata{}, credentials.ErrDuplicateCredential

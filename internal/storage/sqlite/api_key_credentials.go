@@ -18,7 +18,7 @@ func (s *Store) InsertAPIKeyCredential(ctx context.Context, meta credentials.New
 		INSERT INTO provider_credentials(
 			provider_instance_id, kind, label, secret_prefix, secret_last4, fallback_group, created_at, updated_at
 		) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
-	`, meta.ProviderInstanceID, meta.Kind, meta.Label, meta.SecretPrefix, meta.SecretLast4, meta.FallbackGroup,
+	`, meta.ProviderInstanceID, meta.Kind, meta.Label, meta.SecretPrefix, meta.SecretLast4, meta.PoolGroup,
 		meta.CreatedAt.UTC().Format(time.RFC3339Nano), meta.CreatedAt.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		if isUniqueConstraint(err) {
@@ -46,7 +46,7 @@ func (s *Store) InsertAPIKeyCredential(ctx context.Context, meta credentials.New
 		Label:              meta.Label,
 		SecretPrefix:       meta.SecretPrefix,
 		SecretLast4:        meta.SecretLast4,
-		FallbackGroup:      meta.FallbackGroup,
+		PoolGroup:          meta.PoolGroup,
 		CreatedAt:          meta.CreatedAt.UTC(),
 	}, nil
 }
@@ -109,7 +109,7 @@ func (s *Store) ResolveAPIKeyCredentials(ctx context.Context, providerInstanceID
 	var all []credentials.ResolvedAPIKeyCredential
 	for rows.Next() {
 		var out credentials.ResolvedAPIKeyCredential
-		if err := rows.Scan(&out.ID, &out.ProviderInstanceID, &out.Label, &out.FallbackGroup, &out.APIKey); err != nil {
+		if err := rows.Scan(&out.ID, &out.ProviderInstanceID, &out.Label, &out.PoolGroup, &out.APIKey); err != nil {
 			return nil, err
 		}
 		all = append(all, out)
@@ -127,7 +127,7 @@ func scanUpstreamCredentialMetadata(row rowScanner) (credentials.UpstreamCredent
 	var meta credentials.UpstreamCredentialMetadata
 	var created string
 	var disabled sql.NullString
-	if err := row.Scan(&meta.ID, &meta.ProviderInstanceID, &meta.Kind, &meta.Label, &meta.SecretPrefix, &meta.SecretLast4, &meta.FallbackGroup, &created, &disabled); err != nil {
+	if err := row.Scan(&meta.ID, &meta.ProviderInstanceID, &meta.Kind, &meta.Label, &meta.SecretPrefix, &meta.SecretLast4, &meta.PoolGroup, &created, &disabled); err != nil {
 		return credentials.UpstreamCredentialMetadata{}, err
 	}
 	createdAt, err := parseSQLiteTime(created)

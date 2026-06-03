@@ -28,7 +28,7 @@ func sanitizeSnapshot(out *ManagementSnapshotResponse) {
 		out.UpstreamCredentials[i].Label = safeSnapshotString(out.UpstreamCredentials[i].Label)
 		out.UpstreamCredentials[i].SecretPrefix = safeSecretFragment(out.UpstreamCredentials[i].SecretPrefix, 8, "sk-")
 		out.UpstreamCredentials[i].SecretLast4 = safeSecretFragment(out.UpstreamCredentials[i].SecretLast4, 4)
-		out.UpstreamCredentials[i].FallbackGroup = safeSnapshotString(out.UpstreamCredentials[i].FallbackGroup)
+		out.UpstreamCredentials[i].PoolGroup = safeSnapshotString(out.UpstreamCredentials[i].PoolGroup)
 	}
 	sanitizeCredentialPoolGroups(out.CredentialPoolGroups)
 	for i := range out.OAuthCredentials {

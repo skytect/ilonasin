@@ -110,7 +110,7 @@ func upstreamCredentialFromCredentials(row credentials.UpstreamCredentialMetadat
 		Label:              safeSnapshotString(row.Label),
 		SecretPrefix:       safeSecretFragment(row.SecretPrefix, 8, "sk-"),
 		SecretLast4:        safeSecretFragment(row.SecretLast4, 4),
-		FallbackGroup:      safeSnapshotString(row.FallbackGroup),
+		PoolGroup:          safeSnapshotString(row.PoolGroup),
 		CreatedAt:          row.CreatedAt,
 		DisabledAt:         row.DisabledAt,
 		Disabled:           row.Disabled,

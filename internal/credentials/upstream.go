@@ -30,7 +30,7 @@ var (
 	ErrOAuthRefreshFailed    = errors.New("oauth refresh failed")
 )
 
-const DefaultFallbackGroup = "default"
+const DefaultPoolGroup = "default"
 
 const (
 	CredentialKindAPIKey = "api_key"
@@ -148,7 +148,7 @@ type NewUpstreamCredential struct {
 	Label              string
 	SecretPrefix       string
 	SecretLast4        string
-	FallbackGroup      string
+	PoolGroup          string
 	CreatedAt          time.Time
 }
 
@@ -159,7 +159,7 @@ type UpstreamCredentialMetadata struct {
 	Label              string
 	SecretPrefix       string
 	SecretLast4        string
-	FallbackGroup      string
+	PoolGroup          string
 	CreatedAt          time.Time
 	DisabledAt         *time.Time
 	Disabled           bool
@@ -224,14 +224,14 @@ type ResolvedAPIKeyCredential struct {
 	ID                 int64
 	ProviderInstanceID string
 	Label              string
-	FallbackGroup      string
+	PoolGroup          string
 	APIKey             string
 }
 
 type ResolvedOAuthBearerCredential struct {
 	ID                      int64
 	ProviderInstanceID      string
-	FallbackGroup           string
+	PoolGroup               string
 	BearerToken             string
 	ChatGPTAccountID        string
 	ChatGPTAccountIsFedRAMP bool
@@ -299,7 +299,7 @@ func (s *UpstreamService) AddAPIKey(ctx context.Context, providerInstanceID, lab
 		Label:              label,
 		SecretPrefix:       Prefix(apiKey),
 		SecretLast4:        Last4(apiKey),
-		FallbackGroup:      DefaultFallbackGroup,
+		PoolGroup:          DefaultPoolGroup,
 		CreatedAt:          s.now(),
 	}, apiKey)
 	if err == nil {

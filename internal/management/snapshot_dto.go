@@ -47,7 +47,7 @@ type UpstreamCredential struct {
 	Label              string     `json:"label"`
 	SecretPrefix       string     `json:"secret_prefix"`
 	SecretLast4        string     `json:"secret_last4"`
-	FallbackGroup      string     `json:"fallback_group"`
+	PoolGroup          string     `json:"pool_group"`
 	CreatedAt          time.Time  `json:"created_at"`
 	DisabledAt         *time.Time `json:"disabled_at,omitempty"`
 	Disabled           bool       `json:"disabled"`

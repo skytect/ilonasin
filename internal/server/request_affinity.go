@@ -22,7 +22,8 @@ func requestHeaderAffinity(r *http.Request) string {
 		return ""
 	}
 	// Body affinity is preferred. Headers are last-resort stable-session
-	// fallbacks, not generic request metadata.
+	// fallbacks, not generic request metadata. Keep request IDs, Codex window
+	// IDs, installation IDs, account/device IDs, and token-like values out.
 	for _, header := range []string{
 		"session-id",
 		"thread-id",

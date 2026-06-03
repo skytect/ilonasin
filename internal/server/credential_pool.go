@@ -313,8 +313,9 @@ func (s *Server) reserveCredentialAttempt(addr routing.ModelAddress, tokenID int
 	if strings.TrimSpace(affinityKey) != "" {
 		return s.pressure.reserveLeastStable(addr, slots)
 	}
-	// With no safe client affinity, spread eligible credentials by in-flight
-	// pressure and a token-scoped cursor for equal-pressure candidates.
+	// Generic/minimal clients may provide no safe affinity at all. Preserve
+	// out-of-box pooling through the verified local token, provider/model route,
+	// in-flight pressure, and a token-scoped cursor for equal-pressure ties.
 	return s.pressure.reserveLeast(addr, tokenID, slots)
 }
 

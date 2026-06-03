@@ -139,6 +139,8 @@ func DecodeResponses(r io.Reader) (ResponsesRequest, error) {
 }
 
 func responseAffinityPromptCacheKey(raw json.RawMessage) string {
+	// Codex CLI sends prompt_cache_key in the audited Responses path. Generic
+	// Responses-compatible clients may omit it, so empty affinity is valid.
 	if len(bytes.TrimSpace(raw)) == 0 || isJSONNull(raw) {
 		return ""
 	}
@@ -791,8 +793,8 @@ func (r ResponsesRequest) AffinityKey() string {
 
 func responsesMetadataAffinityKey(metadata map[string]string) string {
 	// Only selected session/cache-locality fields may influence credential
-	// affinity. Raw input, installation IDs, request IDs, and account-like
-	// values must stay out of routing.
+	// affinity. Raw input, prompts, tool payloads, installation IDs, request
+	// IDs, account/device IDs, and token-like values must stay out of routing.
 	for _, key := range []string{"prompt_cache_key", "session_id", "thread_id", "conversation_id"} {
 		value, ok := metadata[key]
 		if !ok {

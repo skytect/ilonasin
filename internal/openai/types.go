@@ -146,8 +146,10 @@ func DecodeChatCompletion(r io.Reader) (ChatCompletionRequest, error) {
 }
 
 func chatAffinityKey(req ChatCompletionRequest) string {
-	// Chat clients often omit all stable affinity fields. Use only safe
-	// optional fields, never prompt/message bodies or request IDs.
+	// Generic Chat harnesses may send only model and messages. Use a safe
+	// client-supplied session/cache field when present, but never derive
+	// affinity from prompts, messages, raw bodies, tool payloads, request IDs,
+	// installation IDs, account/device IDs, or token-like values.
 	if req.SessionID != nil {
 		if value := strings.TrimSpace(*req.SessionID); privacy.SafeStrictAffinityValue(value) {
 			return value
@@ -165,8 +167,8 @@ func chatAffinityKey(req ChatCompletionRequest) string {
 }
 
 func chatMetadataAffinityKey(metadata map[string]string) string {
-	// Keep this list tied to the architecture signal map. Do not add
-	// installation, account, device, authorization, or request-id fields here.
+	// Keep this allowlist tied to the architecture signal map. It is for
+	// explicit session/cache locality only, not generic metadata provenance.
 	for _, key := range []string{"session_id", "thread_id", "conversation_id", "prompt_cache_key"} {
 		value, ok := metadata[key]
 		if !ok {
@@ -181,6 +183,8 @@ func chatMetadataAffinityKey(metadata map[string]string) string {
 }
 
 func chatPromptCacheKey(raw json.RawMessage) string {
+	// prompt_cache_key is a real cache-locality signal when a client sends it.
+	// It is optional for generic clients and must not be synthesized locally.
 	if len(bytes.TrimSpace(raw)) == 0 || isJSONNull(raw) {
 		return ""
 	}

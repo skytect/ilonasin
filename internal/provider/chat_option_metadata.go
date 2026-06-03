@@ -33,7 +33,7 @@ func ExtractChatOptionMetadata(providerType string, req openai.ChatCompletionReq
 
 func applyTopLevelChatServiceTierMetadata(out *ChatOptionMetadata, providerType string, req openai.ChatCompletionRequest) {
 	if req.ServiceTier != nil {
-		out.RequestedServiceTier = safeChatServiceTier(*req.ServiceTier)
+		out.RequestedServiceTier = openai.SafeOptionServiceTier(*req.ServiceTier)
 		if providerType != "codex" || out.RequestedServiceTier != "default" {
 			out.EffectiveServiceTier = out.RequestedServiceTier
 		}
@@ -43,7 +43,7 @@ func applyTopLevelChatServiceTierMetadata(out *ChatOptionMetadata, providerType 
 func applyCodexChatOptionMetadata(out *ChatOptionMetadata, req openai.ChatCompletionRequest) {
 	opts, _ := req.ReasoningOptions["codex"].(map[string]any)
 	if tier, ok := opts["service_tier"].(string); ok {
-		out.RequestedServiceTier = safeChatServiceTier(tier)
+		out.RequestedServiceTier = openai.SafeOptionServiceTier(tier)
 		switch out.RequestedServiceTier {
 		case "default":
 			out.EffectiveServiceTier = ""
@@ -55,17 +55,17 @@ func applyCodexChatOptionMetadata(out *ChatOptionMetadata, req openai.ChatComple
 	}
 	reasoning, _ := opts["reasoning"].(map[string]any)
 	if effort, ok := reasoning["effort"].(string); ok {
-		out.ReasoningEffort = safeChatReasoningEffort(effort)
+		out.ReasoningEffort = openai.SafeOptionReasoningEffort(effort)
 	}
 	if summary, ok := reasoning["summary"].(string); ok {
-		out.ReasoningSummary = safeChatReasoningSummary(summary)
+		out.ReasoningSummary = openai.SafeOptionReasoningSummary(summary)
 	}
 }
 
 func applyDeepSeekChatOptionMetadata(out *ChatOptionMetadata, req openai.ChatCompletionRequest) {
 	opts, _ := req.ReasoningOptions["deepseek"].(map[string]any)
 	if effort, ok := opts["reasoning_effort"].(string); ok {
-		out.ReasoningEffort = safeChatReasoningEffort(effort)
+		out.ReasoningEffort = openai.SafeOptionReasoningEffort(effort)
 	}
 	thinking, _ := opts["thinking"].(map[string]any)
 	if typ, ok := thinking["type"].(string); ok {
@@ -77,7 +77,7 @@ func applyOpenRouterChatOptionMetadata(out *ChatOptionMetadata, req openai.ChatC
 	opts, _ := req.ReasoningOptions["openrouter"].(map[string]any)
 	reasoning, _ := opts["reasoning"].(map[string]any)
 	if effort, ok := reasoning["effort"].(string); ok {
-		out.ReasoningEffort = safeChatReasoningEffort(effort)
+		out.ReasoningEffort = openai.SafeOptionReasoningEffort(effort)
 	}
 	if maxTokens, ok := intFromChatMetadataNumber(reasoning["max_tokens"]); ok {
 		out.ReasoningMaxTokens = maxTokens
@@ -107,33 +107,6 @@ func intFromChatMetadataNumber(v any) (int, bool) {
 		}
 	}
 	return 0, false
-}
-
-func safeChatServiceTier(value string) string {
-	switch value {
-	case "auto", "default", "flex", "priority", "scale", "fast":
-		return value
-	default:
-		return ""
-	}
-}
-
-func safeChatReasoningEffort(value string) string {
-	switch value {
-	case "none", "minimal", "low", "medium", "high", "xhigh", "max":
-		return value
-	default:
-		return ""
-	}
-}
-
-func safeChatReasoningSummary(value string) string {
-	switch value {
-	case "auto", "concise", "detailed", "none":
-		return value
-	default:
-		return ""
-	}
 }
 
 func safeChatThinkingType(value string) string {

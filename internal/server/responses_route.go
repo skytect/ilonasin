@@ -51,7 +51,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request, token c
 		return
 	}
 	adapter := preflight.Adapter
-	chatReq, err := responsesReq.ToChatCompletionRequest(instance.Type)
+	chatReq, err := responsesReq.ToChatCompletionRequest(responsesConversionPolicy(instance))
 	if err != nil {
 		s.writeOpenAIUnsupportedRequest(w, r, "responses_route", err.Error(), func(status int, errorClass string) {
 			s.recordResponsesEarly(r, start, token, addr, instance, responsesReq, status, errorClass)

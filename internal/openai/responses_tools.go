@@ -26,7 +26,7 @@ func parseResponsesTools(raw json.RawMessage) ([]json.RawMessage, error) {
 	return tools, nil
 }
 
-func responsesToolsToChatTools(tools []json.RawMessage, providerType string) ([]map[string]any, []json.RawMessage, error) {
+func responsesToolsToChatTools(tools []json.RawMessage, preserveCodexTools bool) ([]map[string]any, []json.RawMessage, error) {
 	if len(tools) == 0 {
 		return nil, nil, nil
 	}
@@ -45,7 +45,7 @@ func responsesToolsToChatTools(tools []json.RawMessage, providerType string) ([]
 		if !ok || typ == "" {
 			return nil, nil, fmt.Errorf("tools[%d].type is required", i)
 		}
-		if providerType == "codex" {
+		if preserveCodexTools {
 			if err := validateCodexResponsesTool(tool, i); err != nil {
 				return nil, nil, err
 			}

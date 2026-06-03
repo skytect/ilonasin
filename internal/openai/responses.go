@@ -693,10 +693,17 @@ func validateResponsesInclude(raw json.RawMessage, hasReasoning bool) error {
 	return nil
 }
 
-func (r ResponsesRequest) ToChatCompletionRequest(providerType string) (ChatCompletionRequest, error) {
+type ResponsesConversionPolicy struct {
+	PreserveCodexInput     bool
+	PreserveCodexTools     bool
+	AllowCodexOptions      bool
+	AllowParallelToolCalls bool
+}
+
+func (r ResponsesRequest) ToChatCompletionRequest(policy ResponsesConversionPolicy) (ChatCompletionRequest, error) {
 	var messages []Message
 	var err error
-	if providerType == "codex" {
+	if policy.PreserveCodexInput {
 		messages, err = nil, nil
 	} else {
 		messages, err = responsesInputToChatMessages(r.Instructions, r.Input)
@@ -706,7 +713,7 @@ func (r ResponsesRequest) ToChatCompletionRequest(providerType string) (ChatComp
 	}
 	codexInstructions := r.Instructions
 	codexInput := []json.RawMessage(nil)
-	if providerType == "codex" {
+	if policy.PreserveCodexInput {
 		codexInput, codexInstructions, err = codexResponsesInputAndInstructions(r.RawInput, r.Input, r.Instructions)
 		if err != nil {
 			return ChatCompletionRequest{}, err
@@ -721,10 +728,10 @@ func (r ResponsesRequest) ToChatCompletionRequest(providerType string) (ChatComp
 		CodexInstructions:   codexInstructions,
 		CodexResponsesInput: nil,
 	}
-	if providerType == "codex" {
+	if policy.PreserveCodexInput {
 		req.CodexResponsesInput = codexInput
 	}
-	tools, codexTools, err := responsesToolsToChatTools(r.Tools, providerType)
+	tools, codexTools, err := responsesToolsToChatTools(r.Tools, policy.PreserveCodexTools)
 	if err != nil {
 		return ChatCompletionRequest{}, err
 	}
@@ -734,15 +741,15 @@ func (r ResponsesRequest) ToChatCompletionRequest(providerType string) (ChatComp
 		req.PresentFields["tools"] = true
 		req.PresentFields["tool_choice"] = true
 	}
-	if providerType == "codex" && len(codexTools) > 0 {
+	if policy.PreserveCodexTools && len(codexTools) > 0 {
 		req.CodexResponsesTools = codexTools
 	}
-	if r.ParallelToolCalls != nil && providerType == "openrouter" {
+	if r.ParallelToolCalls != nil && policy.AllowParallelToolCalls {
 		req.ParallelToolCalls = r.ParallelToolCalls
 		req.PresentFields["parallel_tool_calls"] = true
 	}
 	if r.Reasoning != nil || r.Text != nil || r.ServiceTier != nil {
-		if providerType != "codex" {
+		if !policy.AllowCodexOptions {
 			return ChatCompletionRequest{}, errors.New("responses reasoning, text, and service_tier are only supported for codex providers")
 		}
 		codex := map[string]any{}

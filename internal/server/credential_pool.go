@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"hash"
 	"hash/fnv"
 	"strconv"
 	"strings"
@@ -85,6 +86,11 @@ func credentialAffinityStart(addr routing.ModelAddress, tokenID int64, affinityK
 	}
 	affinityKey = strings.TrimSpace(affinityKey)
 	h := fnv.New64a()
+	writeCredentialAffinityHash(h, addr, tokenID, affinityKey)
+	return int(h.Sum64() % uint64(size))
+}
+
+func writeCredentialAffinityHash(h hash.Hash64, addr routing.ModelAddress, tokenID int64, affinityKey string) {
 	_, _ = h.Write([]byte("ilonasin-credential-affinity-v1\x00"))
 	_, _ = h.Write([]byte(strconv.FormatInt(tokenID, 10)))
 	_, _ = h.Write([]byte{0})
@@ -95,7 +101,6 @@ func credentialAffinityStart(addr routing.ModelAddress, tokenID int64, affinityK
 		_, _ = h.Write([]byte{0})
 		_, _ = h.Write([]byte(affinityKey))
 	}
-	return int(h.Sum64() % uint64(size))
 }
 
 type credentialPressureKey struct {

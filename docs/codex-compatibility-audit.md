@@ -103,7 +103,7 @@ The current source-backed map is:
 | Codex CLI 0.135 Responses | `prompt_cache_key` is set from the Codex thread ID. `client_metadata` includes `x-codex-installation-id`. Headers include `session-id`, `thread-id`, `x-client-request-id`, and, in core request paths, `x-codex-window-id`. | Prefer body `prompt_cache_key`, because it is stable for the Codex thread and matches the cache/session goal. Use session or thread headers only as fallback. Do not treat request-id-shaped fields as generally stable for other clients. |
 | Codex app-server Responses | App-server turn APIs can forward turn-scoped `responsesapi_client_metadata` into Responses `client_metadata`. | Use only selected safe `client_metadata` keys such as `prompt_cache_key`, `session_id`, `thread_id`, and `conversation_id` when the top-level cache key is absent. Ignore installation, account, device, token, and request-id-shaped values. |
 | Claude Code Anthropic | Prior local captures against Claude Code 2.1.159 showed Anthropic `metadata.user_id` as a JSON string containing `session_id`, plus `X-Claude-Code-Session-Id`. | Prefer the nested `metadata.user_id.session_id` when present and safe. Use the session header only as fallback. |
-| Generic OpenAI Chat | `model` and `messages` may be the only fields. `user`, `session_id`, and `metadata` are optional. | Use safe `session_id`, then safe `user`, then selected safe metadata keys. If none exist, route through no-affinity least-in-flight plus round-robin. |
+| Generic OpenAI Chat | `model` and `messages` may be the only fields. OpenAI SDK source also exposes top-level `prompt_cache_key`, with `user`, `session_id`, and `metadata` optional. | Use safe `session_id`, then safe top-level `prompt_cache_key`, then safe `user`, then selected safe metadata keys. If none exist, route through no-affinity least-in-flight plus round-robin. |
 | Generic Responses-compatible clients | `prompt_cache_key` and `client_metadata` are optional. Many clients may send neither. | Use safe `prompt_cache_key`, then selected safe `client_metadata` keys. If none exist, route through no-affinity least-in-flight plus round-robin. |
 
 Codex source evidence from `/tmp/codex-src-0.135.0/codex-rs`:
@@ -118,6 +118,12 @@ Codex source evidence from `/tmp/codex-src-0.135.0/codex-rs`:
   `session-id` and `thread-id`.
 - `core/src/client.rs` and related tests cover `x-codex-window-id` as a
   request header for window lineage.
+
+OpenAI SDK source evidence from `/tmp/openai-node`:
+
+- `src/resources/chat/completions/completions.ts` exposes Chat Completions
+  `prompt_cache_key` and describes `user` as deprecated in favor of
+  `prompt_cache_key` for caching.
 
 The important distinction for pooling is stability. `prompt_cache_key`,
 `session-id`, and `thread-id` are session or thread affinity candidates when

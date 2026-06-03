@@ -53,6 +53,7 @@ func IsCredentialKey(key string) bool {
 		"access_token",
 		"refresh_token",
 		"id_token",
+		"prompt_cache_key",
 		"api_key",
 		"x_api_key",
 		"secret",

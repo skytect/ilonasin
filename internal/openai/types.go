@@ -34,6 +34,7 @@ type ChatCompletionRequest struct {
 	ParallelToolCalls   *bool                  `json:"parallel_tool_calls,omitempty"`
 	Prediction          map[string]any         `json:"prediction,omitempty"`
 	User                *string                `json:"user,omitempty"`
+	PromptCacheKey      string                 `json:"-"`
 	ServiceTier         *string                `json:"service_tier,omitempty"`
 	SessionID           *string                `json:"session_id,omitempty"`
 	Metadata            map[string]string      `json:"metadata,omitempty"`
@@ -139,6 +140,7 @@ func DecodeChatCompletion(r io.Reader) (ChatCompletionRequest, error) {
 	for key := range raw {
 		req.PresentFields[key] = true
 	}
+	req.PromptCacheKey = chatPromptCacheKey(raw["prompt_cache_key"])
 	req.AffinityKey = chatAffinityKey(req)
 	return req, nil
 }
@@ -148,6 +150,9 @@ func chatAffinityKey(req ChatCompletionRequest) string {
 		if value := strings.TrimSpace(*req.SessionID); privacy.SafeStrictAffinityValue(value) {
 			return value
 		}
+	}
+	if value := strings.TrimSpace(req.PromptCacheKey); privacy.SafeStrictAffinityValue(value) {
+		return value
 	}
 	if req.User != nil {
 		if value := strings.TrimSpace(*req.User); privacy.SafeStrictAffinityValue(value) {
@@ -169,6 +174,21 @@ func chatMetadataAffinityKey(metadata map[string]string) string {
 		}
 	}
 	return ""
+}
+
+func chatPromptCacheKey(raw json.RawMessage) string {
+	if len(bytes.TrimSpace(raw)) == 0 || isJSONNull(raw) {
+		return ""
+	}
+	value, ok := rawJSONStringValue(raw)
+	if !ok {
+		return ""
+	}
+	value = strings.TrimSpace(value)
+	if !privacy.SafeStrictAffinityValue(value) {
+		return ""
+	}
+	return value
 }
 
 func (r ChatCompletionRequest) HasField(key string) bool {

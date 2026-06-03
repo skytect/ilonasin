@@ -127,6 +127,7 @@ func validateTopLevelKeys(raw map[string]json.RawMessage) error {
 		"parallel_tool_calls":   true,
 		"prediction":            true,
 		"user":                  true,
+		"prompt_cache_key":      true,
 		"service_tier":          true,
 		"session_id":            true,
 		"metadata":              true,

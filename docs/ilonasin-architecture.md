@@ -203,6 +203,12 @@ namespaced.
 Responses and Anthropic-compatible routes are local compatibility surfaces, not
 claims of universal upstream feature parity. They should convert into the local
 strict request model or reject unsupported features before provider dispatch.
+Representable function-tool paths are supported through that strict local model.
+Validated Codex-native Responses tool declarations may be preserved for Codex
+provider routing where implemented. Chat-adapter provider paths must not silently
+flatten or forward hosted, deferred, namespaced, MCP, shell, tool-search, or
+other unrepresentable tool families. Unsupported transcript and output families
+outside implemented relay paths must fail locally rather than be lossy-converted.
 
 ### Model Addressing
 
@@ -609,8 +615,6 @@ Areas that still need research or stronger live evidence:
 
 - What is the exact policy for subscription account fallback under provider
   terms?
-- How much local Responses and Anthropic-compatible tool-family parity is
-  necessary beyond the currently supported conversion paths?
 
 ## MVP Target
 

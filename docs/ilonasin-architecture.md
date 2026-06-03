@@ -125,13 +125,10 @@ SQLite is plaintext. It does not need database-level encryption in the initial
 architecture. The security posture relies on local file permissions, redaction,
 and clear user warnings.
 
-The daemon owns SQLite mutation. `ilonasin manage` is a client of a local
-daemon-owned management API and should not write SQLite directly in the final
-architecture.
-
-During migration, direct TUI SQLite access is legacy implementation detail to be
-removed progressively. New management operations should be added on the
-daemon-owned management API, not as new direct TUI storage calls.
+The daemon owns SQLite reads and writes. `ilonasin manage` is a client of a
+local daemon-owned management API and must not read or write SQLite directly.
+New management operations should be added on the daemon-owned management API,
+not as direct TUI storage calls.
 
 SQLite stores:
 
@@ -401,7 +398,8 @@ Telemetry fields may include:
 
 Telemetry retention default: keep forever until pruned.
 
-The TUI should provide pruning controls later.
+Manual pruning is available through the daemon-owned management API and TUI.
+Scheduled pruning remains a policy question.
 
 Debugging features that capture bodies must remain behind the explicit
 `capture_io` switch and must write only to the local IO log.

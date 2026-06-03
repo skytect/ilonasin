@@ -118,6 +118,14 @@ type credentialPressureScope struct {
 	tokenID            int64
 }
 
+func credentialPressureScopeFor(addr routing.ModelAddress, tokenID int64) credentialPressureScope {
+	return credentialPressureScope{
+		providerInstanceID: addr.ProviderInstanceID,
+		providerModelID:    addr.ProviderModelID,
+		tokenID:            tokenID,
+	}
+}
+
 type credentialPressureTracker struct {
 	mu       sync.Mutex
 	inFlight map[credentialPressureKey]int
@@ -226,11 +234,7 @@ func (t *credentialPressureTracker) reserveLeastCandidate(addr routing.ModelAddr
 	if t.next == nil {
 		t.next = map[credentialPressureScope]int64{}
 	}
-	scope := credentialPressureScope{
-		providerInstanceID: addr.ProviderInstanceID,
-		providerModelID:    addr.ProviderModelID,
-		tokenID:            tokenID,
-	}
+	scope := credentialPressureScopeFor(addr, tokenID)
 	nextID := t.next[scope]
 	chosen := candidates[0]
 	if nextID != 0 {

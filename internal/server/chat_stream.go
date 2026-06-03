@@ -37,6 +37,16 @@ type streamExecution struct {
 	attemptCount      int
 }
 
+type streamErrorExposurePolicy struct {
+	exposeProviderErrorClasses bool
+}
+
+func streamErrorExposurePolicyFor(instance provider.Instance) streamErrorExposurePolicy {
+	return streamErrorExposurePolicy{
+		exposeProviderErrorClasses: instance.Type == "codex",
+	}
+}
+
 func retryableStreamAttempt(summary provider.ChatStreamSummary, err error, sinkStarted bool) bool {
 	if err == nil || sinkStarted || summary.Started {
 		return false
@@ -228,7 +238,7 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 	exec := s.executeStreamingChat(r, sc, sink)
 	final := exec.final
 	summary := final.summary
-	summary = writeStreamingChatPreResponseError(w, summary, final.err, sink.started, sc.instance.Type)
+	summary = writeStreamingChatPreResponseError(w, summary, final.err, sink.started, streamErrorExposurePolicyFor(sc.instance))
 	s.recordStreamingChat(r, sc, exec, summary, sink.started)
 }
 
@@ -296,7 +306,7 @@ func (s *Server) recordStreamingChat(r *http.Request, sc streamContext, exec str
 	return requestID
 }
 
-func writeStreamingChatPreResponseError(w http.ResponseWriter, summary provider.ChatStreamSummary, err error, sinkStarted bool, providerType string) provider.ChatStreamSummary {
+func writeStreamingChatPreResponseError(w http.ResponseWriter, summary provider.ChatStreamSummary, err error, sinkStarted bool, policy streamErrorExposurePolicy) provider.ChatStreamSummary {
 	if (err == nil && summary.StatusCode < 400) || sinkStarted {
 		return summary
 	}
@@ -309,7 +319,7 @@ func writeStreamingChatPreResponseError(w http.ResponseWriter, summary provider.
 	if summary.ErrorClass == "upstream_auth_failed" ||
 		summary.ErrorClass == "rate_limit_exceeded" ||
 		summary.ErrorClass == "insufficient_quota" ||
-		providerType == "codex" && summary.ErrorClass != "" {
+		policy.exposeProviderErrorClasses && summary.ErrorClass != "" {
 		errorCode = summary.ErrorClass
 	}
 	writeError(w, localStatus, "upstream stream failed", "api_error", errorCode)

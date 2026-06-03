@@ -259,11 +259,8 @@ func subscriptionAccountRow(row management.SubscriptionUsageRow, width int, now 
 		state = "error"
 	}
 	lines := []string{
-		wrappedMetricLine(width, statusBadge(state), metricChip("credential", fmt.Sprintf("%d", row.CredentialID))),
+		subscriptionAccountHeaderLine(row, width, now, state),
 		wrappedSubscriptionIdentity(row.AccountDisplayLabel, width),
-		wrappedDisplayField("provider", safeFullWrappedDisplay(row.ProviderInstanceID), width),
-		wrappedDisplayField("plan", safeFullWrappedDisplay(row.PlanLabel), width),
-		subscriptionAccountMetaLine(row, width, now),
 	}
 	if row.ErrorClass != "" {
 		lines = append(lines, wrappedDisplayField("error", safeFullWrappedDisplay(row.ErrorClass), width))
@@ -271,6 +268,28 @@ func subscriptionAccountRow(row management.SubscriptionUsageRow, width int, now 
 		lines = append(lines, subscriptionAccountWindowLines(row, subscriptionCardWidth(width), now)...)
 	}
 	return subscriptionAccountBlock(width, lines...)
+}
+
+func subscriptionAccountHeaderLine(row management.SubscriptionUsageRow, width int, now time.Time, state string) string {
+	parts := []string{
+		statusBadge(state),
+		metricChip("credential", fmt.Sprintf("%d", row.CredentialID)),
+		wrappedMetricChip("provider", row.ProviderInstanceID),
+	}
+	if row.PlanLabel != "" {
+		parts = append(parts, wrappedMetricChip("plan", row.PlanLabel))
+	}
+	if row.Source != "" {
+		parts = append(parts, metricChip("source", row.Source))
+	}
+	if row.ReachedType != "" {
+		parts = append(parts, metricChip("reached", row.ReachedType))
+	}
+	if row.PlanType != "" {
+		parts = append(parts, metricChip("type", row.PlanType))
+	}
+	parts = append(parts, timeChip("observed", now, row.ObservedAt))
+	return wrappedMetricLine(width, parts...)
 }
 
 func wrappedSubscriptionIdentity(label string, width int) string {
@@ -463,21 +482,6 @@ func subscriptionPoolWindowLines(row management.SubscriptionUsageAggregate, widt
 		))
 	}
 	return lines
-}
-
-func subscriptionAccountMetaLine(row management.SubscriptionUsageRow, width int, now time.Time) string {
-	parts := []string{}
-	if row.Source != "" {
-		parts = append(parts, metricChip("source", row.Source))
-	}
-	if row.ReachedType != "" {
-		parts = append(parts, metricChip("reached", row.ReachedType))
-	}
-	if row.PlanType != "" {
-		parts = append(parts, metricChip("type", row.PlanType))
-	}
-	parts = append(parts, timeChip("observed", now, row.ObservedAt))
-	return wrappedMetricLine(width, parts...)
 }
 
 func gaugeBarWidth(width int) int {

@@ -39,7 +39,7 @@ func (m Model) logPanes() []dashboardPane {
 
 func (m Model) apiSummaryBody(width int) string {
 	var b strings.Builder
-	b.WriteString(renderSectionBanner(width, "Local API surfaces", "surfaces 3"))
+	b.WriteString(renderSectionBanner(width, "Local API surfaces", "routes 7", "families 3"))
 	b.WriteByte('\n')
 	enabledTokens, disabledTokens := localTokenStateCounts(m.tokenRows)
 	b.WriteString(wrappedMetricLine(width,
@@ -52,25 +52,50 @@ func (m Model) apiSummaryBody(width int) string {
 		metricChip("off", fmt.Sprintf("%d", disabledTokens)),
 	))
 	b.WriteByte('\n')
-	b.WriteString(apiSurfaceLine(width, "OpenAI Chat", "/v1/chat/completions", "stream"))
+	b.WriteString(apiSurfaceLine(width, "OpenAI Chat/Models", []apiRoute{
+		{method: "GET", path: "/models"},
+		{method: "GET", path: "/v1/models"},
+		{method: "POST", path: "/v1/chat/completions"},
+	}, "stream"))
 	b.WriteByte('\n')
-	b.WriteString(apiSurfaceLine(width, "OpenAI Responses", "/v1/responses", "sse", "tools"))
+	b.WriteString(apiSurfaceLine(width, "OpenAI Responses", []apiRoute{
+		{method: "POST", path: "/responses"},
+		{method: "POST", path: "/v1/responses"},
+	}, "sse", "tools"))
 	b.WriteByte('\n')
-	b.WriteString(apiSurfaceLine(width, "Anthropic Messages", "/v1/messages", "count-tokens"))
+	b.WriteString(apiSurfaceLine(width, "Anthropic Messages", []apiRoute{
+		{method: "POST", path: "/v1/messages"},
+		{method: "POST", path: "/v1/messages/count_tokens"},
+	}, "count-tokens"))
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func apiSurfaceLine(width int, label, path string, capabilities ...string) string {
+type apiRoute struct {
+	method string
+	path   string
+}
+
+func apiSurfaceLine(width int, label string, routes []apiRoute, capabilities ...string) string {
 	routeWidth := width - 28
 	if routeWidth < 12 {
 		routeWidth = width
 	}
-	route := wrappedDisplayField("route", safeChromeDisplay(path), routeWidth)
+	routeFields := make([]string, 0, len(routes))
+	for _, route := range routes {
+		method := safeMetricLabel(route.method)
+		path := safeChromeDisplay(route.path)
+		if method == "" || path == "" {
+			continue
+		}
+		routeFields = append(routeFields, wrappedMetricLine(routeWidth,
+			apiChromeChip(method, path),
+		))
+	}
 	parts := []string{
 		statusBadge("enabled"),
 		cardTitleStyle.Render(safeChromeDisplay(label)),
-		route,
 	}
+	parts = append(parts, routeFields...)
 	caps := make([]string, 0, len(capabilities))
 	for _, capability := range capabilities {
 		capability = safeChromeDisplay(capability)

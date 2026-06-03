@@ -591,6 +591,9 @@ durable state boundaries those migrations must preserve:
 - `client_tokens`: local ilonasin API tokens for local API clients.
 - `provider_credentials`: API-key, OAuth, command, or other credentials bound to
   configured provider instance IDs.
+- `credential_secrets`: local secret material for upstream provider
+  credentials, referenced by credential metadata and never exposed through
+  management snapshots or the TUI.
 - `oauth_tokens`: access/refresh token material, expiry data, refresh failure
   classes, and refresh failure descriptions from token endpoint error
   responses.
@@ -603,6 +606,11 @@ durable state boundaries those migrations must preserve:
 - `stream_metrics`: TTFT, TPS, completion status, and stream timing.
 - `health_events`: provider/credential/model health history.
 - `fallback_events`: retry and fallback decisions.
+- `quota_events`: metadata-only quota observations, retry-after values, and
+  reset timing linked to request metadata where available.
+- `subscription_usage_snapshots`: metadata-only subscription quota snapshots for
+  OAuth-capable accounts, including usage percentages, window sizes, reset
+  times, stale/error state, and safe account display labels.
 - `migrations`: schema migration state.
 
 Do not create tables for raw prompts, completions, request bodies, response

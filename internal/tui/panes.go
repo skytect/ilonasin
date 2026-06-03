@@ -138,11 +138,6 @@ func (m Model) renderPane(placement panePlacement, focused bool) string {
 	if innerHeight < 1 {
 		innerHeight = 1
 	}
-	title := placement.pane.title
-	if focused {
-		title = ">" + title
-	}
-	title = clipPlainLine(title, innerWidth)
 	contentLines := paneWrappedContentLines(m.paneContentForWidth(placement.pane, innerWidth), innerWidth)
 	visibleContentHeight := innerHeight - 1
 	showScrollMarker := innerHeight >= 2 && len(contentLines) > visibleContentHeight
@@ -160,6 +155,7 @@ func (m Model) renderPane(placement panePlacement, focused bool) string {
 	if offset < 0 {
 		offset = 0
 	}
+	title := paneTitleLine(placement.pane.title, focused, showScrollMarker, offset, maxOffset, len(contentLines), innerWidth)
 	body := make([]string, 0, innerHeight)
 	body = append(body, paneTitleStyle.Render(title))
 	for i := 0; i < visibleContentHeight; i++ {
@@ -186,6 +182,37 @@ func paneScrollMarkerLine(offset, maxOffset, width int) string {
 		return ansi.Truncate(marker, width, "")
 	}
 	return strings.Repeat(" ", width-markerWidth) + mutedStyle.Render(marker)
+}
+
+func paneTitleLine(title string, focused, scrollable bool, offset, maxOffset, totalLines, width int) string {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		title = "pane"
+	}
+	if focused {
+		title = ">" + title
+	}
+	if !scrollable || maxOffset <= 0 {
+		return clipPlainLine(title, width)
+	}
+	position := offset + 1
+	maxPosition := maxOffset + 1
+	if position < 1 {
+		position = 1
+	}
+	if position > maxPosition {
+		position = maxPosition
+	}
+	if totalLines < 1 {
+		totalLines = 1
+	}
+	marker := fmt.Sprintf(" %d/%d", position, totalLines)
+	markerWidth := ansi.StringWidth(marker)
+	if markerWidth >= width {
+		return clipPlainLine(marker, width)
+	}
+	titleWidth := width - markerWidth
+	return clipPlainLine(title, titleWidth) + mutedStyle.Render(marker)
 }
 
 func (m Model) validPaneFocus(tab tuiTab) int {

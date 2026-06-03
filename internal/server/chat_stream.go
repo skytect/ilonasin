@@ -59,6 +59,11 @@ func quotaRetryableStreamAttempt(summary provider.ChatStreamSummary, sinkStarted
 	if sinkStarted || summary.Started {
 		return false
 	}
+	status, errorClass := streamQuotaStatusAndError(summary)
+	return isQuotaObservation(status, errorClass)
+}
+
+func streamQuotaStatusAndError(summary provider.ChatStreamSummary) (int, string) {
 	status := summary.StatusCode
 	if status == 0 {
 		status = http.StatusBadGateway
@@ -67,7 +72,7 @@ func quotaRetryableStreamAttempt(summary provider.ChatStreamSummary, sinkStarted
 	if errorClass == "" && status >= 400 {
 		errorClass = "upstream_http_error"
 	}
-	return isQuotaObservation(status, errorClass)
+	return status, errorClass
 }
 
 func healthFromStreamAttempt(addr routing.ModelAddress, attempt streamAttempt) metadata.HealthEvent {
@@ -178,14 +183,7 @@ func (s *Server) executeStreamingChat(r *http.Request, sc streamContext, sink *s
 			if shouldRecordStreamHealth(summary) {
 				s.recordHealth(r.Context(), healthFromStreamAttempt(sc.address, exec.final))
 			}
-			status := summary.StatusCode
-			if status == 0 {
-				status = http.StatusBadGateway
-			}
-			errorClass := summary.ErrorClass
-			if errorClass == "" && status >= 400 {
-				errorClass = "upstream_http_error"
-			}
+			status, errorClass := streamQuotaStatusAndError(summary)
 			if isQuotaObservation(status, errorClass) {
 				exec.quotaObservations = append(exec.quotaObservations, chatQuotaObservation(s.now(), sc.address, credential, "stream", status, errorClass, summary.RetryAfter))
 			}

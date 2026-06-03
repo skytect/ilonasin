@@ -81,10 +81,6 @@ func (m *Model) disableFirstFallbackPolicy() error {
 	return nil
 }
 
-func (m Model) visibleFallbackPolicies(rows []management.FallbackPolicy) []management.FallbackPolicy {
-	return management.VisibleFallbackPolicies(rows, m.visibleProviderRows())
-}
-
 func fallbackPolicyEnabled(rows []management.FallbackPolicy, providerInstanceID, credentialKind, groupLabel string) bool {
 	for _, row := range rows {
 		if row.ProviderInstanceID == providerInstanceID && row.CredentialKind == credentialKind && row.GroupLabel == groupLabel {

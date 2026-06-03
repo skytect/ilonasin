@@ -38,23 +38,3 @@ func (m *Model) disableFirstUpstreamCredential() error {
 	}
 	return nil
 }
-
-func (m Model) visibleUpstreamCredentials(rows []management.UpstreamCredential) []management.UpstreamCredential {
-	allowed := map[string]bool{}
-	for _, instance := range m.visibleProviderRows() {
-		if instance.APIKey {
-			allowed[instance.ID] = true
-		}
-	}
-	out := make([]management.UpstreamCredential, 0, len(rows))
-	for _, row := range rows {
-		if allowed[row.ProviderInstanceID] {
-			out = append(out, row)
-		}
-	}
-	return out
-}
-
-func (m Model) visibleProviderRows() []management.ProviderInstance {
-	return m.providers
-}

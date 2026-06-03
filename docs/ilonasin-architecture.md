@@ -315,8 +315,9 @@ instance and model. It is especially relevant for provider instances where
 multiple credentials represent the same provider/model route.
 
 Pooling must remain auditable through metadata-only request, fallback, health,
-and quota rows. Fallback-policy rows are operator/display metadata; serving
-eligibility is the default same-provider credential pool.
+and quota rows. Credential pool-group listing and metadata are operator display
+metadata; serving eligibility is the default same-provider, same-model eligible
+credential pool.
 
 Allowed examples:
 

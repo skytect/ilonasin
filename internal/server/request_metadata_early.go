@@ -7,6 +7,7 @@ import (
 	"ilonasin/internal/credentials"
 	"ilonasin/internal/metadata"
 	"ilonasin/internal/openai"
+	"ilonasin/internal/provider"
 )
 
 func earlyChatRequestMetadata(start time.Time, token credentials.VerifiedLocalToken, req openai.ChatCompletionRequest, endpoint string, status int, errorClass string) metadata.Request {
@@ -23,7 +24,7 @@ func earlyChatRequestMetadata(start time.Time, token credentials.VerifiedLocalTo
 		ErrorClass:      errorClass,
 		TotalLatencyMS:  time.Since(start).Milliseconds(),
 	}
-	applySafeOptionMetadata(&out, "", req)
+	applySafeOptionMetadata(&out, provider.ChatOptionMetadataPolicy{}, req)
 	return out
 }
 

@@ -6,8 +6,8 @@ import (
 	"ilonasin/internal/provider"
 )
 
-func applySafeOptionMetadata(out *metadata.Request, providerType string, req openai.ChatCompletionRequest) {
-	options := provider.ExtractChatOptionMetadata(providerType, req)
+func applySafeOptionMetadata(out *metadata.Request, policy provider.ChatOptionMetadataPolicy, req openai.ChatCompletionRequest) {
+	options := provider.ExtractChatOptionMetadata(policy, req)
 	out.RequestedServiceTier = options.RequestedServiceTier
 	out.EffectiveServiceTier = options.EffectiveServiceTier
 	out.ReasoningEffort = options.ReasoningEffort

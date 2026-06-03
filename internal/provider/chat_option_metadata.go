@@ -17,24 +17,44 @@ type ChatOptionMetadata struct {
 	ThinkingType         string
 }
 
-func ExtractChatOptionMetadata(providerType string, req openai.ChatCompletionRequest) ChatOptionMetadata {
-	var out ChatOptionMetadata
-	applyTopLevelChatServiceTierMetadata(&out, providerType, req)
+type ChatOptionMetadataPolicy struct {
+	codex                    bool
+	deepseek                 bool
+	openrouter               bool
+	suppressCodexDefaultTier bool
+}
+
+func ChatOptionMetadataPolicyForProviderType(providerType string) ChatOptionMetadataPolicy {
 	switch providerType {
 	case "codex":
-		applyCodexChatOptionMetadata(&out, req)
+		return ChatOptionMetadataPolicy{codex: true, suppressCodexDefaultTier: true}
 	case "deepseek":
-		applyDeepSeekChatOptionMetadata(&out, req)
+		return ChatOptionMetadataPolicy{deepseek: true}
 	case "openrouter":
+		return ChatOptionMetadataPolicy{openrouter: true}
+	default:
+		return ChatOptionMetadataPolicy{}
+	}
+}
+
+func ExtractChatOptionMetadata(policy ChatOptionMetadataPolicy, req openai.ChatCompletionRequest) ChatOptionMetadata {
+	var out ChatOptionMetadata
+	applyTopLevelChatServiceTierMetadata(&out, policy, req)
+	switch {
+	case policy.codex:
+		applyCodexChatOptionMetadata(&out, req)
+	case policy.deepseek:
+		applyDeepSeekChatOptionMetadata(&out, req)
+	case policy.openrouter:
 		applyOpenRouterChatOptionMetadata(&out, req)
 	}
 	return out
 }
 
-func applyTopLevelChatServiceTierMetadata(out *ChatOptionMetadata, providerType string, req openai.ChatCompletionRequest) {
+func applyTopLevelChatServiceTierMetadata(out *ChatOptionMetadata, policy ChatOptionMetadataPolicy, req openai.ChatCompletionRequest) {
 	if req.ServiceTier != nil {
 		out.RequestedServiceTier = openai.SafeOptionServiceTier(*req.ServiceTier)
-		if providerType != "codex" || out.RequestedServiceTier != "default" {
+		if !policy.suppressCodexDefaultTier || out.RequestedServiceTier != "default" {
 			out.EffectiveServiceTier = out.RequestedServiceTier
 		}
 	}

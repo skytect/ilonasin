@@ -53,13 +53,13 @@ func (m Model) writeModelCache(b *strings.Builder) {
 	}
 	now := m.nowTime()
 	for _, summary := range summaries {
-		b.WriteString(modelCacheSummaryRow(summary, now))
+		b.WriteString(modelCacheSummaryRow(summary, now, width))
 		b.WriteByte('\n')
 	}
 }
 
-func modelCacheSummaryRow(summary modelCacheSummary, now time.Time) string {
-	return metricLine(
+func modelCacheSummaryRow(summary modelCacheSummary, now time.Time, width int) string {
+	return wrappedMetricLine(width,
 		statusBadge("fresh"),
 		cardTitleStyle.Render(safeDisplay(summary.ProviderInstanceID)),
 		metricChip("models", fmt.Sprintf("%d", summary.Count)),

@@ -42,7 +42,7 @@ func (m Model) apiSummaryBody(width int) string {
 	b.WriteString(renderSectionBanner(width, "Local API surfaces", "surfaces 3"))
 	b.WriteByte('\n')
 	enabledTokens, disabledTokens := localTokenStateCounts(m.tokenRows)
-	b.WriteString(metricLine(
+	b.WriteString(wrappedMetricLine(width,
 		statusBadge("enabled"),
 		metricChip("bind", m.runtime.Bind),
 		apiChromeChip("models", "/v1/models"),
@@ -61,23 +61,28 @@ func (m Model) apiSummaryBody(width int) string {
 }
 
 func apiSurfaceLine(width int, label, path string, capabilities ...string) string {
+	routeWidth := width - 28
+	if routeWidth < 12 {
+		routeWidth = width
+	}
+	route := wrappedDisplayField("route", safeChromeDisplay(path), routeWidth)
 	parts := []string{
 		statusBadge("enabled"),
 		cardTitleStyle.Render(safeChromeDisplay(label)),
+		route,
 	}
-	if width >= 70 {
-		parts = append(parts, apiChromeChip("route", path))
-	}
+	caps := make([]string, 0, len(capabilities))
 	for _, capability := range capabilities {
 		capability = safeChromeDisplay(capability)
 		if capability == "" {
 			continue
 		}
-		parts = append(parts, apiChromeChip("cap", capability))
+		caps = append(caps, capability)
 	}
-	return metricLine(
-		parts...,
-	)
+	if len(caps) > 0 {
+		parts = append(parts, apiChromeChip("cap", strings.Join(caps, ",")))
+	}
+	return wrappedMetricLine(width, parts...)
 }
 
 func apiChromeChip(label, value string) string {

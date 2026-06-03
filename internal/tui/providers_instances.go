@@ -21,13 +21,52 @@ func (m Model) writeProviderInstances(b *strings.Builder) {
 		b.WriteByte('\n')
 		return
 	}
+	b.WriteString(providerRuntimeSummaryLine(m.providers, width))
+	b.WriteByte('\n')
 	for _, instance := range m.providers {
-		b.WriteString(providerInstanceRow(instance))
+		b.WriteString(providerInstanceRow(instance, width))
 		b.WriteByte('\n')
 	}
 }
 
-func providerInstanceRow(instance management.ProviderInstance) string {
+func providerRuntimeSummaryLine(rows []management.ProviderInstance, width int) string {
+	chat := 0
+	models := 0
+	keys := 0
+	oauth := 0
+	for _, row := range rows {
+		if row.Chat {
+			chat++
+		}
+		if row.ModelDiscovery {
+			models++
+		}
+		if row.APIKey {
+			keys++
+		}
+		if row.OAuth {
+			oauth++
+		}
+	}
+	total := len(rows)
+	parts := []string{
+		statusBadge("enabled"),
+		meterRow("chat", percentBar(providerCapabilityPercent(chat, total), compactMetricBarWidth(width)), fmt.Sprintf("%d/%d", chat, total), 0),
+		meterRow("models", percentBar(providerCapabilityPercent(models, total), compactMetricBarWidth(width)), fmt.Sprintf("%d/%d", models, total), 0),
+		meterRow("keys", percentBar(providerCapabilityPercent(keys, total), compactMetricBarWidth(width)), fmt.Sprintf("%d/%d", keys, total), 0),
+		meterRow("oauth", percentBar(providerCapabilityPercent(oauth, total), compactMetricBarWidth(width)), fmt.Sprintf("%d/%d", oauth, total), 0),
+	}
+	return wrappedMetricLine(width, parts...)
+}
+
+func providerCapabilityPercent(count, total int) float64 {
+	if total <= 0 {
+		return 0
+	}
+	return float64(count) / float64(total) * 100
+}
+
+func providerInstanceRow(instance management.ProviderInstance, width int) string {
 	capabilities := []string{}
 	if instance.Chat {
 		capabilities = append(capabilities, "chat")
@@ -51,7 +90,7 @@ func providerInstanceRow(instance management.ProviderInstance) string {
 	if base == "" {
 		base = "default"
 	}
-	return metricLine(
+	return wrappedMetricLine(width,
 		statusBadge("enabled"),
 		cardTitleStyle.Render(safeDisplay(instance.ID)),
 		machineChip("type", instance.Type),

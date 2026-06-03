@@ -10,7 +10,6 @@ import (
 )
 
 var unsafeDisplayPattern = regexp.MustCompile(`(?i)(bearer|sk-|iln_|oauth|token|secret|authorization|raw|payload|prompt|completion|body|account|acct_|request[_ -]?id|requestid|req_|balance|credit|sse[_ -]?chunk|tool[_ -]?(argument|result)|eyj[a-z0-9_-]*\.[a-z0-9_-]*\.)`)
-var unsafeAccountDisplayPattern = regexp.MustCompile(`(?i)(bearer|sk-|iln_|token|secret|authorization|raw|payload|prompt|completion|body|account[_ .:-]?id($|[^a-z0-9])|acct[-_]|request[_ -]?id|requestid|req[_-]|balance|credit|sse[_ -]?chunk|tool[_ -]?(argument|result)|eyj[a-z0-9_-]*\.[a-z0-9_-]*\.)`)
 var safeErrorMessagePattern = regexp.MustCompile(`^[a-z0-9_ .:-]+$`)
 
 func safeDisplay(value string) string {
@@ -36,7 +35,7 @@ func safeChromeDisplay(value string) string {
 }
 
 func safeAccountDisplay(value string) string {
-	return safeDisplayWithPattern(value, unsafeAccountDisplayPattern)
+	return compactDisplay(privacy.AccountDisplay(value), 64)
 }
 
 func safeWrappedChromeDisplay(value string) string {
@@ -50,7 +49,7 @@ func safeWrappedChromeDisplay(value string) string {
 }
 
 func safeWrappedAccountDisplay(value string) string {
-	return safeWrappedDisplayWithPattern(value, unsafeAccountDisplayPattern)
+	return compactDisplay(privacy.AccountDisplay(value), 64)
 }
 
 func safeFullWrappedDisplay(value string) string {
@@ -58,7 +57,7 @@ func safeFullWrappedDisplay(value string) string {
 }
 
 func safeFullWrappedAccountDisplay(value string) string {
-	return safeFullWrappedDisplayWithPattern(value, unsafeAccountDisplayPattern)
+	return privacy.AccountDisplay(value)
 }
 
 func safeWrappedDisplayWithPattern(value string, unsafe *regexp.Regexp) string {
@@ -112,6 +111,17 @@ func safeDisplayWithPattern(value string, unsafe *regexp.Regexp) string {
 		return "[redacted]"
 	}
 	const maxDisplayRunes = 64
+	runes := []rune(value)
+	if len(runes) > maxDisplayRunes {
+		return string(runes[:maxDisplayRunes]) + "..."
+	}
+	return value
+}
+
+func compactDisplay(value string, maxDisplayRunes int) string {
+	if value == "" || value == "[redacted]" {
+		return value
+	}
 	runes := []rune(value)
 	if len(runes) > maxDisplayRunes {
 		return string(runes[:maxDisplayRunes]) + "..."

@@ -11,7 +11,6 @@ import (
 )
 
 var unsafeSnapshotStringPattern = regexp.MustCompile(`(?i)(bearer|sk-|iln_|oauth|token|secret|authorization|raw|payload|prompt|completion|body|account|acct[-_]|request[_ -]?id|requestid|req[-_]|balance|credit|sse[_ -]?chunk|tool[_ -]?(argument|result)|eyj[a-z0-9_-]*\.[a-z0-9_-]*\.)`)
-var unsafeAccountDisplayPattern = regexp.MustCompile(`(?i)(bearer|sk-|iln_|token|secret|authorization|raw|payload|prompt|completion|body|account[_ .:-]?id($|[^a-z0-9])|acct[-_]|request[_ -]?id|requestid|req[-_]|balance|credit|sse[_ -]?chunk|tool[_ -]?(argument|result)|eyj[a-z0-9_-]*\.[a-z0-9_-]*\.)`)
 
 func sanitizeSnapshot(out *ManagementSnapshotResponse) {
 	out.Runtime.Bind = safeSnapshotString(out.Runtime.Bind)
@@ -129,17 +128,9 @@ func safeSnapshotString(value string) string {
 }
 
 func safeAccountDisplayString(value string) string {
-	value = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
-			return -1
-		}
-		return r
-	}, strings.TrimSpace(value))
+	value = privacy.AccountDisplay(value)
 	if value == "" {
 		return ""
-	}
-	if unsafeAccountDisplayPattern.MatchString(value) {
-		return "[redacted]"
 	}
 	const maxRunes = 128
 	runes := []rune(value)

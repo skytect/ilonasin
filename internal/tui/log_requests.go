@@ -27,6 +27,8 @@ func (m Model) writeRecentRequests(b *strings.Builder) {
 		b.WriteByte('\n')
 	}
 	if len(m.requestRows) > 0 {
+		b.WriteString(requestOverviewBlock(m.requestRows, m.runtime.CaptureIO, width))
+		b.WriteByte('\n')
 		b.WriteString(requestTableHeader(width))
 		b.WriteByte('\n')
 		if separator := requestTableSeparator(width); separator != "" {
@@ -40,6 +42,118 @@ func (m Model) writeRecentRequests(b *strings.Builder) {
 		}
 		b.WriteString(requestSummaryRow(row, now, width))
 		b.WriteByte('\n')
+	}
+}
+
+type requestOverview struct {
+	OK                int
+	Warning           int
+	Error             int
+	Chat              int
+	Responses         int
+	Messages          int
+	CountTokens       int
+	Unknown           int
+	PromptTokens      int
+	CompletionTokens  int
+	ReasoningTokens   int
+	CacheHitTokens    int
+	CacheMissTokens   int
+	CacheWriteTokens  int
+	TotalTokens       int
+	AverageLatencyMS  int64
+	AverageTTFTMS     int64
+	StreamCount       int
+	TotalRequestCount int
+}
+
+func requestOverviewBlock(rows []management.RequestSummary, captureIO bool, width int) string {
+	overview := requestOverviewFromRows(rows)
+	if overview.TotalRequestCount == 0 {
+		return ""
+	}
+	return strings.Join([]string{
+		wrappedMetricLine(width,
+			statusBadge(logOverviewState(overview)),
+			metricChip("recent", compactInt(overview.TotalRequestCount)),
+			metricChip("ok", compactInt(overview.OK)),
+			metricChip("warn", compactInt(overview.Warning)),
+			metricChip("err", compactInt(overview.Error)),
+			metricChip("io", ioCaptureMode(captureIO)),
+		),
+		wrappedMetricLine(width,
+			mutedStyle.Render("routes"),
+			metricChip("chat", compactInt(overview.Chat)),
+			metricChip("resp", compactInt(overview.Responses)),
+			metricChip("msg", compactInt(overview.Messages)),
+			metricChip("count", compactInt(overview.CountTokens)),
+			metricChip("unknown", compactInt(overview.Unknown)),
+			metricChip("sse", compactInt(overview.StreamCount)),
+		),
+		compactTokenMixLine(overview.PromptTokens, overview.CompletionTokens, overview.ReasoningTokens, overview.CacheHitTokens, overview.CacheMissTokens, overview.CacheWriteTokens, width),
+		wrappedMetricLine(width,
+			mutedStyle.Render("latency"),
+			durationBar("avg", overview.AverageLatencyMS, 10_000, compactMetricBarWidth(width)),
+			durationBar("ttft", overview.AverageTTFTMS, 5_000, compactMetricBarWidth(width)),
+			metricChip("tokens", compactInt(overview.TotalTokens)),
+		),
+	}, "\n")
+}
+
+func requestOverviewFromRows(rows []management.RequestSummary) requestOverview {
+	var overview requestOverview
+	latencyTotal := int64(0)
+	ttftTotal := int64(0)
+	for _, row := range rows {
+		overview.TotalRequestCount++
+		switch statusState(row.HTTPStatus, row.ErrorClass) {
+		case "error":
+			overview.Error++
+		case "warning":
+			overview.Warning++
+		default:
+			overview.OK++
+		}
+		switch shortEndpointDisplay(row.Endpoint) {
+		case "chat":
+			overview.Chat++
+		case "resp":
+			overview.Responses++
+		case "msg":
+			overview.Messages++
+		case "count":
+			overview.CountTokens++
+		default:
+			overview.Unknown++
+		}
+		if row.Stream {
+			overview.StreamCount++
+		}
+		overview.PromptTokens += row.PromptTokens
+		overview.CompletionTokens += row.CompletionTokens
+		overview.ReasoningTokens += row.ReasoningTokens
+		overview.CacheHitTokens += row.CacheHitTokens
+		overview.CacheMissTokens += row.CacheMissTokens
+		overview.CacheWriteTokens += row.CacheWriteTokens
+		overview.TotalTokens += row.TotalTokens
+		latencyTotal += row.TotalLatencyMS
+		ttftTotal += row.TimeToFirstTokenMS
+	}
+	if overview.TotalRequestCount > 0 {
+		overview.AverageLatencyMS = latencyTotal / int64(overview.TotalRequestCount)
+		overview.AverageTTFTMS = ttftTotal / int64(overview.TotalRequestCount)
+	}
+	return overview
+}
+
+func logOverviewState(overview requestOverview) string {
+	switch {
+	case overview.Error > 0:
+		return "error"
+	case overview.Warning > 0:
+		return "warning"
+	default:
+		return "fresh"
 	}
 }
 

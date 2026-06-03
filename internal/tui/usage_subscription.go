@@ -17,7 +17,7 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 	now := m.nowTime()
 	b.WriteString(subscriptionUsageSummary(width, m.subscriptionRows, m.subscriptionPools))
 	b.WriteByte('\n')
-	if summary := subscriptionPoolSummaryLine(width, m.subscriptionPools); summary != "" {
+	if summary := subscriptionPoolSummaryLine(width, m.subscriptionPools, now); summary != "" {
 		b.WriteString(summary)
 		b.WriteByte('\n')
 	}
@@ -364,7 +364,7 @@ func subscriptionUsageSummary(width int, rows []management.SubscriptionUsageRow,
 		fmt.Sprintf("errors %d", errored),
 		fmt.Sprintf("pools %d", len(pools)),
 	}
-	if label, used, remaining, capacity := firstSubscriptionPoolWindowTotal(pools); capacity > 0 {
+	if label, used, remaining, capacity, _ := firstSubscriptionPoolWindowTotal(pools); capacity > 0 {
 		chips = append(chips,
 			label,
 			"sum used "+compactPercentPoints(used),
@@ -382,26 +382,44 @@ func subscriptionUsageSummary(width int, rows []management.SubscriptionUsageRow,
 	return wrappedMetricLine(width, parts...)
 }
 
-func subscriptionPoolSummaryLine(width int, pools []management.SubscriptionUsageAggregate) string {
+func subscriptionPoolSummaryLine(width int, pools []management.SubscriptionUsageAggregate, now time.Time) string {
 	accounts := 0
 	stale := 0
 	for _, pool := range pools {
 		accounts += pool.AccountCount
 		stale += pool.StaleCount
 	}
-	label, used, remaining, capacity := firstSubscriptionPoolWindowTotal(pools)
+	label, used, remaining, capacity, resetAt := firstSubscriptionPoolWindowTotal(pools)
 	if accounts == 0 && capacity == 0 {
 		return ""
 	}
-	return wrappedMetricLine(width,
-		statusBadge("pooled"),
-		wrappedMetricChip("window", label),
+	usedPercent := 0.0
+	remainingPercent := 0.0
+	if capacity > 0 {
+		usedPercent = used / capacity * 100
+		remainingPercent = remaining / capacity * 100
+	}
+	resetLabel := ""
+	if resetAt != nil {
+		resetLabel = compactResetTimeOnly(resetLocalText("reset", resetAt, now))
+	}
+	trailing := []string{
 		metricChip("acct", fmt.Sprintf("%d", accounts)),
 		metricChip("stale", fmt.Sprintf("%d", stale)),
-		displayMetricChip("sum used", compactPercentPoints(used)),
-		displayMetricChip("sum left", compactPercentPoints(remaining)),
-		displayMetricChip("capacity", compactPercentPoints(capacity)),
-	)
+		displayMetricChip("cap", compactPercentPoints(capacity)),
+	}
+	if resetLabel != "" {
+		trailing = append(trailing, mutedStyle.Render("reset "+resetLabel))
+	}
+	parts := []string{
+		statusBadge("pooled"),
+		wrappedMetricChip("window", label),
+		meterRow("used", balancedUsageBar(usedPercent, remainingPercent, poolGaugeBarWidth(width)), compactPercentPoints(used), 0,
+			displayMetricChip("left", compactPercentPoints(remaining)),
+		),
+	}
+	parts = append(parts, trailing...)
+	return wrappedMetricLine(width, parts...)
 }
 
 func displayMetricChip(label, value string) string {
@@ -416,11 +434,12 @@ func displayMetricChip(label, value string) string {
 	return chipStyle.Render(label + " " + value)
 }
 
-func firstSubscriptionPoolWindowTotal(pools []management.SubscriptionUsageAggregate) (string, float64, float64, float64) {
+func firstSubscriptionPoolWindowTotal(pools []management.SubscriptionUsageAggregate) (string, float64, float64, float64, *time.Time) {
 	key := ""
 	used := 0.0
 	remaining := 0.0
 	capacity := 0.0
+	var resetAt *time.Time
 	for _, pool := range pools {
 		for _, window := range pool.Windows {
 			if window.TotalCapacityPercentPoints <= 0 {
@@ -436,12 +455,16 @@ func firstSubscriptionPoolWindowTotal(pools []management.SubscriptionUsageAggreg
 			used += window.TotalUsedPercentPoints
 			remaining += window.TotalRemainingPercentPoints
 			capacity += window.TotalCapacityPercentPoints
+			if window.EarliestResetAt != nil && (resetAt == nil || window.EarliestResetAt.Before(*resetAt)) {
+				value := *window.EarliestResetAt
+				resetAt = &value
+			}
 		}
 	}
 	if key == "" {
-		return "", 0, 0, 0
+		return "", 0, 0, 0, nil
 	}
-	return key, used, remaining, capacity
+	return key, used, remaining, capacity, resetAt
 }
 
 func subscriptionPoolWindowKey(window management.SubscriptionUsagePoolWindow) string {

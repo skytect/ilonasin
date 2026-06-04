@@ -25,9 +25,10 @@ func (m Model) writeFallbacks(b *strings.Builder) {
 		b.WriteByte('\n')
 	}
 	if len(m.fallbackRows) > 0 {
-		b.WriteString(fallbackTableHeader(width))
+		fallbackColumns := fallbackTableColumns(width)
+		b.WriteString(plainTableHeader(fallbackTableLabels(), fallbackColumns))
 		b.WriteByte('\n')
-		if separator := fallbackTableSeparator(width); separator != "" {
+		if separator := plainTableSeparator(width, fallbackColumns); separator != "" {
 			b.WriteString(separator)
 			b.WriteByte('\n')
 		}
@@ -70,16 +71,6 @@ func fallbackRouteDisplay(row management.FallbackSummary) string {
 	return provider + "/" + model
 }
 
-func fallbackTableHeader(width int) string {
-	columns := fallbackTableColumns(width)
-	labels := []string{"st", "time", "from", "to", "route"}
-	return plainTableHeader(labels, columns)
-}
-
-func fallbackTableSeparator(width int) string {
-	return plainTableSeparator(width, fallbackTableColumns(width))
-}
-
 func fallbackTableRow(row management.FallbackSummary, now time.Time, width int) string {
 	columns := fallbackTableColumns(width)
 	detail := safeWrappedRequestDisplay(row.ProviderInstanceID)
@@ -94,6 +85,10 @@ func fallbackTableRow(row management.FallbackSummary, now time.Time, width int) 
 		detail,
 	}
 	return wrappedPlainTableRow(cells, columns)
+}
+
+func fallbackTableLabels() []string {
+	return []string{"st", "time", "from", "to", "route"}
 }
 
 func fallbackTableColumns(width int) []int {

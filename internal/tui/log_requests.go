@@ -27,9 +27,10 @@ func (m Model) writeRecentRequests(b *strings.Builder) {
 	if len(m.requestRows) > 0 {
 		b.WriteString(requestOverviewBlock(m.requestRows, m.runtime.CaptureIO, width))
 		b.WriteByte('\n')
-		b.WriteString(requestTableHeader(width))
+		requestColumns := requestTableColumns(width)
+		b.WriteString(plainTableHeader(requestTableLabels(requestColumns), requestColumns))
 		b.WriteByte('\n')
-		if separator := requestTableSeparator(width); separator != "" {
+		if separator := plainTableSeparator(width, requestColumns); separator != "" {
 			b.WriteString(separator)
 			b.WriteByte('\n')
 		}
@@ -257,16 +258,6 @@ func requestDetailLine(width int, label string, parts ...string) string {
 		lines = append(lines, indent+line)
 	}
 	return strings.Join(lines, "\n")
-}
-
-func requestTableHeader(width int) string {
-	columns := requestTableColumns(width)
-	labels := requestTableLabels(columns)
-	return plainTableHeader(labels, columns)
-}
-
-func requestTableSeparator(width int) string {
-	return plainTableSeparator(width, requestTableColumns(width))
 }
 
 func requestTableRow(row management.RequestSummary, nowTime time.Time, state string, width int) string {

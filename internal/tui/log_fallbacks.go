@@ -44,14 +44,30 @@ func (m Model) writeFallbacks(b *strings.Builder) {
 func fallbackSummaryRow(row management.FallbackSummary, now time.Time, width int) string {
 	lines := []string{
 		fallbackTableRow(row, now, width),
-		requestDetailLine(width, "meta",
-			cardTitleStyle.Render(safeFullWrappedDisplay(row.ProviderInstanceID)+"/"+safeFullWrappedDisplay(row.ModelID)),
-			wrappedMetricChip("reason", row.Reason),
-			mutedStyle.Render(labeledFullCredentialDisplay("from", row.FromCredentialID, row.FromCredentialLabel)),
-			mutedStyle.Render(labeledFullCredentialDisplay("to", row.ToCredentialID, row.ToCredentialLabel)),
-		),
+		logDetailRows(fallbackDetailFields(row), width),
 	}
 	return wrapTargetedLinesPreserveBlank(width, lines...)
+}
+
+func fallbackDetailFields(row management.FallbackSummary) []logDetailField {
+	return []logDetailField{
+		{label: "route", value: fallbackRouteDisplay(row)},
+		{label: "reason", value: row.Reason},
+		{label: "from", value: fullCredentialDisplay(row.FromCredentialID, row.FromCredentialLabel)},
+		{label: "to", value: fullCredentialDisplay(row.ToCredentialID, row.ToCredentialLabel)},
+	}
+}
+
+func fallbackRouteDisplay(row management.FallbackSummary) string {
+	provider := safeWrappedRequestDisplay(row.ProviderInstanceID)
+	model := safeWrappedRequestDisplay(row.ModelID)
+	if model == "" {
+		return provider
+	}
+	if provider == "" {
+		return model
+	}
+	return provider + "/" + model
 }
 
 func fallbackTableHeader(width int) string {
@@ -129,12 +145,4 @@ func fallbackTableColumns(width int) []int {
 		}
 	}
 	return columns
-}
-
-func labeledFullCredentialDisplay(label string, id int64, value string) string {
-	label = safeMetricLabel(label)
-	if label == "" {
-		label = "credential"
-	}
-	return label + " " + fullCredentialDisplay(id, value)
 }

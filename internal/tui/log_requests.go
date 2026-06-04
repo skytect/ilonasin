@@ -164,13 +164,12 @@ func requestSummaryRow(row management.RequestSummary, nowTime time.Time, width i
 	return wrapTargetedLinesPreserveBlank(width, lines...)
 }
 
-type requestDetailField struct {
+type logDetailField struct {
 	label string
 	value string
 }
 
-func requestDetailRows(row management.RequestSummary, width int) string {
-	fields := requestDetailFields(row)
+func logDetailRows(fields []logDetailField, width int) string {
 	if len(fields) == 0 {
 		return ""
 	}
@@ -207,8 +206,12 @@ func requestDetailRows(row management.RequestSummary, width int) string {
 	return strings.Join(lines, "\n")
 }
 
-func requestDetailFields(row management.RequestSummary) []requestDetailField {
-	fields := []requestDetailField{
+func requestDetailRows(row management.RequestSummary, width int) string {
+	return logDetailRows(logDetailFields(row), width)
+}
+
+func logDetailFields(row management.RequestSummary) []logDetailField {
+	fields := []logDetailField{
 		{label: "route", value: requestModelRoute(row)},
 		{label: "cred", value: fullCredentialDisplay(row.CredentialID, row.CredentialLabel)},
 		{label: "tokens", value: requestTokenDetail(row)},
@@ -217,30 +220,30 @@ func requestDetailFields(row management.RequestSummary) []requestDetailField {
 		{label: "inputs", value: requestInputDetail(row)},
 	}
 	if row.ErrorClass != "" {
-		fields = append(fields, requestDetailField{label: "error", value: row.ErrorClass})
+		fields = append(fields, logDetailField{label: "error", value: row.ErrorClass})
 	}
 	if row.FallbackReason != "" {
-		fields = append(fields, requestDetailField{label: "fallback", value: row.FallbackReason})
+		fields = append(fields, logDetailField{label: "fallback", value: row.FallbackReason})
 	}
 	if endpoint := safeEndpointDisplay(row.Endpoint); endpoint != "" {
-		fields = append(fields, requestDetailField{label: "endpoint", value: endpoint})
+		fields = append(fields, logDetailField{label: "endpoint", value: endpoint})
 	}
 	if row.RequestedServiceTier != "" {
-		fields = append(fields, requestDetailField{label: "tier", value: row.RequestedServiceTier})
+		fields = append(fields, logDetailField{label: "tier", value: row.RequestedServiceTier})
 	}
 	if row.EffectiveServiceTier != "" && row.EffectiveServiceTier != row.RequestedServiceTier {
-		fields = append(fields, requestDetailField{label: "effective", value: row.EffectiveServiceTier})
+		fields = append(fields, logDetailField{label: "effective", value: row.EffectiveServiceTier})
 	}
 	if row.ReasoningEffort != "" {
-		fields = append(fields, requestDetailField{label: "reasoning", value: row.ReasoningEffort})
+		fields = append(fields, logDetailField{label: "reasoning", value: row.ReasoningEffort})
 	}
 	if row.ThinkingType != "" {
-		fields = append(fields, requestDetailField{label: "thinking", value: row.ThinkingType})
+		fields = append(fields, logDetailField{label: "thinking", value: row.ThinkingType})
 	}
 	return fields
 }
 
-func requestDetailLabelWidth(fields []requestDetailField) int {
+func requestDetailLabelWidth(fields []logDetailField) int {
 	width := 0
 	for _, field := range fields {
 		label := safeMetricLabel(field.label)

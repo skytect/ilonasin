@@ -231,35 +231,6 @@ func requestInputDetail(row management.RequestSummary) string {
 	return fmt.Sprintf("messages %d  tools %d  images %d", row.MessageCount, row.ToolCount, row.ImageCount)
 }
 
-func requestDetailLine(width int, label string, parts ...string) string {
-	label = safeMetricLabel(label)
-	if label == "" {
-		label = "detail"
-	}
-	labelWidth := 5
-	if len(label) > labelWidth {
-		labelWidth = len(label)
-	}
-	prefixPlain := padPlainCell(label, labelWidth)
-	prefix := mutedStyle.Render(prefixPlain)
-	bodyWidth := maxInt(1, width-labelWidth-3)
-	body := wrappedMetricLine(bodyWidth, parts...)
-	if body == "" {
-		return prefix
-	}
-	bodyLines := splitBodyLines(body)
-	indent := strings.Repeat(" ", labelWidth) + mutedStyle.Render(" | ")
-	lines := make([]string, 0, len(bodyLines))
-	for i, line := range bodyLines {
-		if i == 0 {
-			lines = append(lines, prefix+mutedStyle.Render(" | ")+line)
-			continue
-		}
-		lines = append(lines, indent+line)
-	}
-	return strings.Join(lines, "\n")
-}
-
 func requestTableRow(row management.RequestSummary, nowTime time.Time, state string, width int) string {
 	columns := requestTableColumns(width)
 	stream := "sync"

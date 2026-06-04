@@ -198,7 +198,7 @@ func localTokenUsageMetricLine(row management.LocalTokenUsageSummary, now time.T
 	if !row.LatestRequestAt.IsZero() {
 		parts = append(parts, timeChip("latest", now, row.LatestRequestAt))
 	}
-	return requestDetailLine(width, "usage", parts...)
+	return detailMetricLine(width, "usage", parts...)
 }
 
 func localTokenUnknownUsageRow(row management.LocalTokenUsageSummary, now time.Time, width int) string {

@@ -19,8 +19,8 @@ The first product target is not a hosted SaaS. It is a local service that:
 - uses static TOML config for provider instances and daemon bootstrap,
 - supports API-key and OAuth-style provider credentials,
 - offers a polished Bubble Tea/Lipgloss TUI for management,
-- avoids storing prompts, completions, request bodies, response bodies, tool
-  arguments, or raw stream chunks in normal operation.
+- only stores prompts, completions, request bodies, response bodies, tool
+  arguments, or raw stream chunks when IO logging is enabled.
 
 ## Locked Decisions
 
@@ -122,7 +122,7 @@ are not required for built-in provider types when defaults are known.
 SQLite is the mutable source of truth.
 
 SQLite is plaintext. It does not need database-level encryption in the initial
-architecture. The security posture relies on local file permissions, redaction,
+architecture. The security posture relies on local file permissions,
 and clear user warnings.
 
 The daemon owns SQLite reads and writes. `ilonasin manage` is a client of a
@@ -387,9 +387,9 @@ state.
 
 ### Observability and Logging
 
-Ilonasin must not persist request or response bodies in normal operation.
+Ilonasin must not persist request or response bodies unless IO logging is enabled.
 
-Do not store:
+Do not store without IO logging:
 
 - prompts,
 - completions,

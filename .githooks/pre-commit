@@ -1,0 +1,16 @@
+#!/usr/bin/env sh
+set -eu
+
+if command -v gitleaks >/dev/null 2>&1; then
+  exec gitleaks git --staged --no-banner --redact=100
+fi
+
+if command -v nix >/dev/null 2>&1; then
+  exec nix run nixpkgs#gitleaks -- git --staged --no-banner --redact=100
+fi
+
+cat >&2 <<'MSG'
+pre-commit: gitleaks is required for secret scanning.
+Install gitleaks, or install Nix so the hook can run nixpkgs#gitleaks.
+MSG
+exit 1

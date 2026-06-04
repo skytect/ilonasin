@@ -160,25 +160,129 @@ func logOverviewState(overview requestOverview) string {
 func requestSummaryRow(row management.RequestSummary, nowTime time.Time, width int) string {
 	state := statusState(row.HTTPStatus, row.ErrorClass)
 	head := requestTableRow(row, nowTime, state, width)
-	metaParts := []string{
-		cardTitleStyle.Render(requestModelRoute(row)),
-		mutedStyle.Render(fullCredentialDisplay(row.CredentialID, row.CredentialLabel)),
+	lines := []string{head, requestDetailRows(row, width)}
+	return wrapTargetedLinesPreserveBlank(width, lines...)
+}
+
+type requestDetailField struct {
+	label string
+	value string
+}
+
+func requestDetailRows(row management.RequestSummary, width int) string {
+	fields := requestDetailFields(row)
+	if len(fields) == 0 {
+		return ""
 	}
-	metaParts = append(metaParts, requestSummaryExtraParts(row, width)...)
-	meta := requestDetailLine(width, "meta", metaParts...)
-	metrics := requestDetailLine(width, "metrics",
-		compactTokenMixLine(row.PromptTokens, row.CompletionTokens, row.ReasoningTokens, row.CacheHitTokens, row.CacheMissTokens, row.CacheWriteTokens, width),
-		metricChip("total", compactInt(row.TotalTokens)),
-		compactRateBars(width, rateMetric{"hit", row.CacheHitRate * 100}),
-		metricChip("try", fmt.Sprintf("%d", row.AttemptCount)),
-		metricChip("auth", fmt.Sprintf("%d", row.AuthRetryCount)),
-		metricChip("fb", fmt.Sprintf("%d", row.FallbackCount)),
+	labelWidth := requestDetailLabelWidth(fields)
+	valueWidth := width - labelWidth - 3
+	if valueWidth < 8 {
+		valueWidth = maxInt(1, width)
+		labelWidth = 0
+	}
+	lines := make([]string, 0, len(fields))
+	for _, field := range fields {
+		label := safeMetricLabel(field.label)
+		value := strings.Join(strings.Fields(safeWrappedChromeDisplay(field.value)), " ")
+		if value == "" {
+			value = "none"
+		}
+		valueLines := wrapPlainTableCell(value, valueWidth)
+		if labelWidth == 0 {
+			for _, valueLine := range valueLines {
+				lines = append(lines, mutedStyle.Render(label)+" "+valueLine)
+			}
+			continue
+		}
+		for index, valueLine := range valueLines {
+			labelCell := ""
+			if index == 0 {
+				labelCell = padPlainCell(label, labelWidth)
+			} else {
+				labelCell = strings.Repeat(" ", labelWidth)
+			}
+			lines = append(lines, mutedStyle.Render(labelCell)+mutedStyle.Render(" | ")+valueLine)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func requestDetailFields(row management.RequestSummary) []requestDetailField {
+	fields := []requestDetailField{
+		{label: "route", value: requestModelRoute(row)},
+		{label: "cred", value: fullCredentialDisplay(row.CredentialID, row.CredentialLabel)},
+		{label: "tokens", value: requestTokenDetail(row)},
+		{label: "timing", value: requestTimingDetail(row)},
+		{label: "tries", value: requestAttemptDetail(row)},
+		{label: "inputs", value: requestInputDetail(row)},
+	}
+	if row.ErrorClass != "" {
+		fields = append(fields, requestDetailField{label: "error", value: row.ErrorClass})
+	}
+	if row.FallbackReason != "" {
+		fields = append(fields, requestDetailField{label: "fallback", value: row.FallbackReason})
+	}
+	if endpoint := safeEndpointDisplay(row.Endpoint); endpoint != "" {
+		fields = append(fields, requestDetailField{label: "endpoint", value: endpoint})
+	}
+	if row.RequestedServiceTier != "" {
+		fields = append(fields, requestDetailField{label: "tier", value: row.RequestedServiceTier})
+	}
+	if row.EffectiveServiceTier != "" && row.EffectiveServiceTier != row.RequestedServiceTier {
+		fields = append(fields, requestDetailField{label: "effective", value: row.EffectiveServiceTier})
+	}
+	if row.ReasoningEffort != "" {
+		fields = append(fields, requestDetailField{label: "reasoning", value: row.ReasoningEffort})
+	}
+	if row.ThinkingType != "" {
+		fields = append(fields, requestDetailField{label: "thinking", value: row.ThinkingType})
+	}
+	return fields
+}
+
+func requestDetailLabelWidth(fields []requestDetailField) int {
+	width := 0
+	for _, field := range fields {
+		label := safeMetricLabel(field.label)
+		if len(label) > width {
+			width = len(label)
+		}
+	}
+	if width < 5 {
+		return 5
+	}
+	return width
+}
+
+func requestTokenDetail(row management.RequestSummary) string {
+	parts := []string{
+		"in " + compactInt(row.PromptTokens),
+		"out " + compactInt(row.CompletionTokens),
+		"reason " + compactInt(row.ReasoningTokens),
+		"cache-hit " + compactInt(row.CacheHitTokens),
+		"cache-miss " + compactInt(row.CacheMissTokens),
+		"cache-write " + compactInt(row.CacheWriteTokens),
+		"total " + compactInt(row.TotalTokens),
+		"hit " + compactPercentText(row.CacheHitRate*100),
+	}
+	return strings.Join(parts, "  ")
+}
+
+func requestTimingDetail(row management.RequestSummary) string {
+	return strings.Join([]string{
 		msText("lat", row.TotalLatencyMS),
+		msText("up", row.UpstreamLatencyMS),
 		msText("ttft", row.TimeToFirstTokenMS),
 		tpsText("tps", row.OutputTokensPerSecondTotal),
-	)
-	lines := []string{head, meta, metrics}
-	return wrapTargetedLinesPreserveBlank(width, lines...)
+	}, "  ")
+}
+
+func requestAttemptDetail(row management.RequestSummary) string {
+	return fmt.Sprintf("attempts %d  auth %d  fallbacks %d", row.AttemptCount, row.AuthRetryCount, row.FallbackCount)
+}
+
+func requestInputDetail(row management.RequestSummary) string {
+	return fmt.Sprintf("messages %d  tools %d  images %d", row.MessageCount, row.ToolCount, row.ImageCount)
 }
 
 func requestDetailLine(width int, label string, parts ...string) string {
@@ -459,38 +563,6 @@ func padPlainCell(value string, width int) string {
 		return value + strings.Repeat(" ", width-valueWidth)
 	}
 	return value
-}
-
-func requestSummaryExtraParts(row management.RequestSummary, width int) []string {
-	parts := []string{}
-	if row.FallbackReason != "" {
-		parts = append(parts, wrappedMetricChip("fallback-reason", row.FallbackReason))
-	}
-	if endpoint := safeEndpointDisplay(row.Endpoint); endpoint != "" {
-		parts = append(parts, metricChip("endpoint", endpoint))
-	}
-	if row.ErrorClass != "" {
-		parts = append(parts, badBadgeStyle.Render(safeFullWrappedDisplay(row.ErrorClass)))
-	}
-	parts = append(parts,
-		metricChip("messages", fmt.Sprintf("%d", row.MessageCount)),
-		metricChip("tools", fmt.Sprintf("%d", row.ToolCount)),
-		metricChip("images", fmt.Sprintf("%d", row.ImageCount)),
-		msText("up", row.UpstreamLatencyMS),
-	)
-	if row.RequestedServiceTier != "" {
-		parts = append(parts, wrappedMetricChip("tier", row.RequestedServiceTier))
-	}
-	if row.EffectiveServiceTier != "" && row.EffectiveServiceTier != row.RequestedServiceTier {
-		parts = append(parts, wrappedMetricChip("effective", row.EffectiveServiceTier))
-	}
-	if row.ReasoningEffort != "" {
-		parts = append(parts, wrappedMetricChip("reasoning", row.ReasoningEffort))
-	}
-	if row.ThinkingType != "" {
-		parts = append(parts, wrappedMetricChip("thinking", row.ThinkingType))
-	}
-	return parts
 }
 
 func requestModelRoute(row management.RequestSummary) string {

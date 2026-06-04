@@ -159,8 +159,7 @@ func logOverviewState(overview requestOverview) string {
 func requestSummaryRow(row management.RequestSummary, nowTime time.Time, width int) string {
 	state := statusState(row.HTTPStatus, row.ErrorClass)
 	head := requestTableRow(row, nowTime, state, width)
-	lines := []string{head, requestDetailRows(row, width)}
-	return wrapTargetedLinesPreserveBlank(width, lines...)
+	return logSummaryRow(width, head, requestDetailRows(row, width))
 }
 
 func requestDetailRows(row management.RequestSummary, width int) string {

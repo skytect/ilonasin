@@ -46,6 +46,10 @@ func logDetailRows(fields []logDetailField, width int) string {
 	return strings.Join(lines, "\n")
 }
 
+func logSummaryRow(width int, head, details string) string {
+	return wrapTargetedLinesPreserveBlank(width, head, details)
+}
+
 func logDetailLabelWidth(fields []logDetailField) int {
 	width := 0
 	for _, field := range fields {

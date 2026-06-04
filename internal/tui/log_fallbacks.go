@@ -43,11 +43,7 @@ func (m Model) writeFallbacks(b *strings.Builder) {
 }
 
 func fallbackSummaryRow(row management.FallbackSummary, now time.Time, width int) string {
-	lines := []string{
-		fallbackTableRow(row, now, width),
-		logDetailRows(fallbackDetailFields(row), width),
-	}
-	return wrapTargetedLinesPreserveBlank(width, lines...)
+	return logSummaryRow(width, fallbackTableRow(row, now, width), logDetailRows(fallbackDetailFields(row), width))
 }
 
 func fallbackDetailFields(row management.FallbackSummary) []logDetailField {

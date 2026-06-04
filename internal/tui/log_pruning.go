@@ -10,29 +10,23 @@ func (m Model) writePruning(b *strings.Builder) {
 		return
 	}
 	width := m.viewWidth()
-	b.WriteString(renderPaneSubhead(width, "Metadata + IO policy", "capture", "retention", "prune"))
+	b.WriteString(renderPaneSubhead(width, "IO policy + pruning", "metadata", "capture", "manual prune"))
 	b.WriteByte('\n')
 	b.WriteString(wrappedMetricLine(width,
-		statusBadge("enabled"),
 		cardTitleStyle.Render("metadata"),
 		metricChip("requests", fmt.Sprintf("%d", len(m.requestRows))),
 		metricChip("fallbacks", fmt.Sprintf("%d", len(m.fallbackRows))),
 		metricChip("health", fmt.Sprintf("%d", len(m.healthRows))),
 		metricChip("quota", fmt.Sprintf("%d", len(m.quotaRows))),
+		wrappedMetricChip("telemetry", "kept-pending-prune"),
 	))
 	b.WriteByte('\n')
 	b.WriteString(wrappedMetricLine(width,
 		statusBadge(ioCaptureState(m.runtime.CaptureIO)),
-		cardTitleStyle.Render("capture"),
-		wrappedMetricChip("mode", ioCaptureMode(m.runtime.CaptureIO)),
+		metricChip("io", ioCaptureMode(m.runtime.CaptureIO)),
 		wrappedMetricChip("policy", ioCapturePolicy(m.runtime.CaptureIO)),
 		wrappedMetricChip("content", ioCaptureContent(m.runtime.CaptureIO)),
-	))
-	b.WriteByte('\n')
-	b.WriteString(wrappedMetricLine(width,
-		statusBadge("enabled"),
-		cardTitleStyle.Render("retention"),
-		wrappedMetricChip("default", ioCaptureRetention(m.runtime.CaptureIO)),
+		wrappedMetricChip("retain", ioCaptureRetention(m.runtime.CaptureIO)),
 		wrappedMetricChip("prune", "manual"),
 		wrappedMetricChip("cutoff", "30d"),
 	))

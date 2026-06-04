@@ -26,12 +26,7 @@ func (m Model) writeFallbacks(b *strings.Builder) {
 	}
 	if len(m.fallbackRows) > 0 {
 		fallbackColumns := fallbackTableColumns(width)
-		b.WriteString(plainTableHeader(fallbackTableLabels(), fallbackColumns))
-		b.WriteByte('\n')
-		if separator := plainTableSeparator(width, fallbackColumns); separator != "" {
-			b.WriteString(separator)
-			b.WriteByte('\n')
-		}
+		writePlainTableChrome(b, width, fallbackTableLabels(), fallbackColumns)
 	}
 	for index, row := range m.fallbackRows {
 		if index > 0 {

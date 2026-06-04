@@ -28,12 +28,7 @@ func (m Model) writeRecentRequests(b *strings.Builder) {
 		b.WriteString(requestOverviewBlock(m.requestRows, m.runtime.CaptureIO, width))
 		b.WriteByte('\n')
 		requestColumns := requestTableColumns(width)
-		b.WriteString(plainTableHeader(requestTableLabels(requestColumns), requestColumns))
-		b.WriteByte('\n')
-		if separator := plainTableSeparator(width, requestColumns); separator != "" {
-			b.WriteString(separator)
-			b.WriteByte('\n')
-		}
+		writePlainTableChrome(b, width, requestTableLabels(requestColumns), requestColumns)
 	}
 	for index, row := range m.requestRows {
 		if index > 0 {

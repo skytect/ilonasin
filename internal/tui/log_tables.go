@@ -32,6 +32,15 @@ func plainTableSeparator(width int, columns []int) string {
 	return mutedStyle.Render(strings.Join(parts, " "))
 }
 
+func writePlainTableChrome(b *strings.Builder, width int, labels []string, columns []int) {
+	b.WriteString(plainTableHeader(labels, columns))
+	b.WriteByte('\n')
+	if separator := plainTableSeparator(width, columns); separator != "" {
+		b.WriteString(separator)
+		b.WriteByte('\n')
+	}
+}
+
 func fitTableColumns(width int, columns, minimums, growOrder []int) []int {
 	out := append([]int(nil), columns...)
 	if len(minimums) != len(out) {

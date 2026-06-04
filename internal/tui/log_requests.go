@@ -40,11 +40,6 @@ type requestOverview struct {
 	OK                int
 	Warning           int
 	Error             int
-	Chat              int
-	Responses         int
-	Messages          int
-	CountTokens       int
-	Unknown           int
 	PromptTokens      int
 	CompletionTokens  int
 	ReasoningTokens   int
@@ -56,6 +51,19 @@ type requestOverview struct {
 	AverageTTFTMS     int64
 	StreamCount       int
 	TotalRequestCount int
+	Endpoints         []requestEndpointOverview
+}
+
+type requestEndpointOverview struct {
+	Endpoint         string
+	Count            int
+	OK               int
+	Warning          int
+	Error            int
+	StreamCount      int
+	TotalTokens      int
+	LatencyTotalMS   int64
+	TimeToFirstToken int64
 }
 
 func requestOverviewBlock(rows []management.RequestSummary, captureIO bool, width int) string {
@@ -63,41 +71,39 @@ func requestOverviewBlock(rows []management.RequestSummary, captureIO bool, widt
 	if overview.TotalRequestCount == 0 {
 		return ""
 	}
-	return strings.Join([]string{
+	lines := []string{
 		wrappedMetricLine(width,
 			statusBadge(logOverviewState(overview)),
 			metricChip("recent", compactInt(overview.TotalRequestCount)),
 			metricChip("ok", compactInt(overview.OK)),
 			metricChip("warn", compactInt(overview.Warning)),
 			metricChip("err", compactInt(overview.Error)),
-			metricChip("io", ioCaptureMode(captureIO)),
-		),
-		wrappedMetricLine(width,
-			mutedStyle.Render("routes"),
-			metricChip("chat", compactInt(overview.Chat)),
-			metricChip("resp", compactInt(overview.Responses)),
-			metricChip("msg", compactInt(overview.Messages)),
-			metricChip("count", compactInt(overview.CountTokens)),
-			metricChip("unknown", compactInt(overview.Unknown)),
 			metricChip("sse", compactInt(overview.StreamCount)),
+			metricChip("tokens", compactInt(overview.TotalTokens)),
 		),
 		compactTokenMixLine(overview.PromptTokens, overview.CompletionTokens, overview.ReasoningTokens, overview.CacheHitTokens, overview.CacheMissTokens, overview.CacheWriteTokens, width),
 		wrappedMetricLine(width,
 			mutedStyle.Render("latency"),
 			durationBar("avg", overview.AverageLatencyMS, 10_000, compactMetricBarWidth(width)),
 			durationBar("ttft", overview.AverageTTFTMS, 5_000, compactMetricBarWidth(width)),
-			metricChip("tokens", compactInt(overview.TotalTokens)),
 		),
-	}, "\n")
+		requestIOPolicyLine(width, captureIO),
+	}
+	if rollup := requestEndpointRollupTable(overview.Endpoints, width); rollup != "" {
+		lines = append(lines, rollup)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func requestOverviewFromRows(rows []management.RequestSummary) requestOverview {
 	var overview requestOverview
 	latencyTotal := int64(0)
 	ttftTotal := int64(0)
+	endpoints := map[string]*requestEndpointOverview{}
 	for _, row := range rows {
 		overview.TotalRequestCount++
-		switch statusState(row.HTTPStatus, row.ErrorClass) {
+		state := statusState(row.HTTPStatus, row.ErrorClass)
+		switch state {
 		case "error":
 			overview.Error++
 		case "warning":
@@ -105,20 +111,22 @@ func requestOverviewFromRows(rows []management.RequestSummary) requestOverview {
 		default:
 			overview.OK++
 		}
-		switch shortEndpointDisplay(row.Endpoint) {
-		case "chat":
-			overview.Chat++
-		case "resp":
-			overview.Responses++
-		case "msg":
-			overview.Messages++
-		case "count":
-			overview.CountTokens++
-		default:
-			overview.Unknown++
-		}
+		endpoint := requestEndpointOverviewFor(endpoints, shortEndpointDisplay(row.Endpoint))
+		endpoint.Count++
+		endpoint.TotalTokens += row.TotalTokens
+		endpoint.LatencyTotalMS += row.TotalLatencyMS
+		endpoint.TimeToFirstToken += row.TimeToFirstTokenMS
 		if row.Stream {
 			overview.StreamCount++
+			endpoint.StreamCount++
+		}
+		switch state {
+		case "error":
+			endpoint.Error++
+		case "warning":
+			endpoint.Warning++
+		default:
+			endpoint.OK++
 		}
 		overview.PromptTokens += row.PromptTokens
 		overview.CompletionTokens += row.CompletionTokens
@@ -134,7 +142,84 @@ func requestOverviewFromRows(rows []management.RequestSummary) requestOverview {
 		overview.AverageLatencyMS = latencyTotal / int64(overview.TotalRequestCount)
 		overview.AverageTTFTMS = ttftTotal / int64(overview.TotalRequestCount)
 	}
+	overview.Endpoints = sortedRequestEndpointOverviews(endpoints)
 	return overview
+}
+
+func requestEndpointOverviewFor(rows map[string]*requestEndpointOverview, endpoint string) *requestEndpointOverview {
+	if endpoint == "" {
+		endpoint = "unknown"
+	}
+	row := rows[endpoint]
+	if row == nil {
+		row = &requestEndpointOverview{Endpoint: endpoint}
+		rows[endpoint] = row
+	}
+	return row
+}
+
+func sortedRequestEndpointOverviews(rows map[string]*requestEndpointOverview) []requestEndpointOverview {
+	order := []string{"chat", "resp", "msg", "count", "unknown"}
+	out := make([]requestEndpointOverview, 0, len(rows))
+	for _, endpoint := range order {
+		if row := rows[endpoint]; row != nil {
+			out = append(out, *row)
+		}
+	}
+	return out
+}
+
+func requestEndpointRollupTable(rows []requestEndpointOverview, width int) string {
+	if len(rows) == 0 {
+		return ""
+	}
+	columns := requestEndpointRollupColumns(width)
+	labels := []string{"endpoint", "req", "ok", "warn", "err", "sse", "tok", "lat", "ttft"}
+	lines := []string{
+		mutedStyle.Render("endpoints"),
+		plainTableHeader(labels, columns),
+		plainTableSeparator(width, columns),
+	}
+	for _, row := range rows {
+		lines = append(lines, requestEndpointRollupRow(row, columns))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func requestEndpointRollupColumns(width int) []int {
+	if width < 88 {
+		return fitTableColumns(width, []int{8, 4, 3, 4, 3, 3, 5, 5, 5}, []int{5, 3, 2, 3, 2, 2, 4, 4, 4}, []int{0, 6})
+	}
+	return fitTableColumns(width, []int{12, 5, 4, 5, 4, 4, 8, 7, 7}, []int{6, 3, 2, 3, 2, 2, 5, 4, 4}, []int{0, 6, 7, 8})
+}
+
+func requestEndpointRollupRow(row requestEndpointOverview, columns []int) string {
+	avgLatency := int64(0)
+	avgTTFT := int64(0)
+	if row.Count > 0 {
+		avgLatency = row.LatencyTotalMS / int64(row.Count)
+		avgTTFT = row.TimeToFirstToken / int64(row.Count)
+	}
+	cells := []string{
+		row.Endpoint,
+		compactInt(row.Count),
+		compactInt(row.OK),
+		compactInt(row.Warning),
+		compactInt(row.Error),
+		compactInt(row.StreamCount),
+		compactInt(row.TotalTokens),
+		fmt.Sprintf("%dms", avgLatency),
+		fmt.Sprintf("%dms", avgTTFT),
+	}
+	return wrappedPlainTableRow(cells, columns)
+}
+
+func requestIOPolicyLine(width int, captureIO bool) string {
+	return detailMetricLine(width, "policy",
+		metricChip("io", ioCaptureMode(captureIO)),
+		metricChip("metadata", "on"),
+		metricChip("content", "redacted"),
+	)
 }
 
 func logOverviewState(overview requestOverview) string {
@@ -162,8 +247,7 @@ func requestDetailFields(row management.RequestSummary) []logDetailField {
 	fields := []logDetailField{
 		{label: "route", value: requestModelRoute(row)},
 		{label: "cred", value: fullCredentialDisplay(row.CredentialID, row.CredentialLabel)},
-		{label: "tokens", value: requestTokenDetail(row)},
-		{label: "timing", value: requestTimingDetail(row)},
+		{label: "io", value: requestIODetail(row)},
 		{label: "tries", value: requestAttemptDetail(row)},
 		{label: "inputs", value: requestInputDetail(row)},
 	}
@@ -172,9 +256,6 @@ func requestDetailFields(row management.RequestSummary) []logDetailField {
 	}
 	if row.FallbackReason != "" {
 		fields = append(fields, logDetailField{label: "fallback", value: row.FallbackReason})
-	}
-	if endpoint := safeEndpointDisplay(row.Endpoint); endpoint != "" {
-		fields = append(fields, logDetailField{label: "endpoint", value: endpoint})
 	}
 	if row.RequestedServiceTier != "" {
 		fields = append(fields, logDetailField{label: "tier", value: row.RequestedServiceTier})
@@ -189,6 +270,13 @@ func requestDetailFields(row management.RequestSummary) []logDetailField {
 		fields = append(fields, logDetailField{label: "thinking", value: row.ThinkingType})
 	}
 	return fields
+}
+
+func requestIODetail(row management.RequestSummary) string {
+	return strings.Join([]string{
+		requestTokenDetail(row),
+		requestTimingDetail(row),
+	}, "  ")
 }
 
 func requestTokenDetail(row management.RequestSummary) string {

@@ -39,8 +39,8 @@ func (m Model) createLocalToken() (tea.Model, tea.Cmd) {
 	m.revealTokenID = created.Metadata.ID
 	m.revealTokenPrefix = created.Metadata.TokenPrefix
 	m.revealTokenLast4 = created.Metadata.TokenLast4
-	_ = m.reload()
-	return m, nil
+	next, cmd := m.startSnapshotRefresh(false)
+	return next, cmd
 }
 
 func (m Model) disableSelectedLocalToken() (tea.Model, tea.Cmd) {
@@ -54,6 +54,6 @@ func (m Model) disableSelectedLocalToken() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.logInfo(context.Background(), "tui_local_token_disabled", slog.Int64("local_id", m.tokenRows[m.selected].ID))
-	_ = m.reload()
-	return m, nil
+	next, cmd := m.startSnapshotRefresh(false)
+	return next, cmd
 }

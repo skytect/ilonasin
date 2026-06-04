@@ -65,11 +65,11 @@ func (m Model) refreshSelectedOAuthCredentialAction() (tea.Model, tea.Cmd) {
 	if err := m.refreshSelectedOAuthCredential(); err != nil {
 		m.logError(context.Background(), "tui_oauth_refresh_failed", err)
 		m.err = "OAuth refresh failed"
-		_ = m.reload()
-		return m, nil
+		next, cmd := m.startSnapshotRefresh(false)
+		return next, cmd
 	}
-	_ = m.reload()
-	return m, nil
+	next, cmd := m.startSnapshotRefresh(false)
+	return next, cmd
 }
 
 func (m Model) cycleOAuthSelectionAction() (tea.Model, tea.Cmd) {

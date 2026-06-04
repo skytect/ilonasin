@@ -35,8 +35,8 @@ func (m Model) pruneTelemetryAction() (tea.Model, tea.Cmd) {
 		m.err = "telemetry prune failed"
 		return m, nil
 	}
-	_ = m.reload()
-	return m, nil
+	next, cmd := m.startSnapshotRefresh(false)
+	return next, cmd
 }
 
 func (m Model) refreshSubscriptionUsageAction() (tea.Model, tea.Cmd) {

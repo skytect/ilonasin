@@ -16,8 +16,8 @@ func (m Model) disableUpstreamCredentialAction() (tea.Model, tea.Cmd) {
 		m.err = err.Error()
 		return m, nil
 	}
-	_ = m.reload()
-	return m, nil
+	next, cmd := m.startSnapshotRefresh(false)
+	return next, cmd
 }
 
 func (m *Model) disableFirstUpstreamCredential() error {

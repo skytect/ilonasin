@@ -8,6 +8,44 @@ import (
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case snapshotAutoRefreshTickMsg:
+		cmds := []tea.Cmd{snapshotAutoRefreshTickCmd(snapshotAutoRefreshInterval)}
+		if !m.snapshotRefreshInFlight {
+			m.snapshotRefreshInFlight = true
+			cmds = append(cmds, m.refreshSnapshotCmd(true))
+		}
+		return m, tea.Batch(cmds...)
+	case snapshotRefreshedMsg:
+		m.snapshotRefreshInFlight = false
+		pendingForeground := m.snapshotForegroundPending
+		m.snapshotForegroundPending = false
+		if msg.err != nil {
+			if msg.background {
+				m.logError(context.Background(), "tui_snapshot_refresh_failed", msg.err)
+				if pendingForeground {
+					next, cmd := m.startSnapshotRefresh(false)
+					return next, cmd
+				}
+				return m, nil
+			}
+			m.err = "snapshot refresh failed"
+			m.logError(context.Background(), "tui_snapshot_refresh_failed", msg.err)
+			if pendingForeground {
+				next, cmd := m.startSnapshotRefresh(false)
+				return next, cmd
+			}
+			return m, nil
+		}
+		if msg.background && pendingForeground {
+			next, cmd := m.startSnapshotRefresh(false)
+			return next, cmd
+		}
+		m.applySnapshot(msg.snapshot, snapshotApplyOptions{applySubscriptionUsage: !msg.background})
+		if pendingForeground {
+			next, cmd := m.startSnapshotRefresh(false)
+			return next, cmd
+		}
+		return m, nil
 	case subscriptionUsageAutoRefreshTickMsg:
 		cmds := []tea.Cmd{subscriptionUsageAutoRefreshTickCmd(subscriptionUsageAutoRefreshInterval)}
 		if !m.subscriptionRefreshInFlight && m.subscriptionUsageIsStale(m.nowTime()) {
@@ -25,8 +63,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.applySubscriptionUsage(msg.response)
-		_ = m.reload()
-		return m, nil
+		next, cmd := m.startSnapshotRefresh(false)
+		return next, cmd
 	case oauthLoginStartedMsg:
 		if msg.err != nil {
 			m.logError(context.Background(), "tui_oauth_login_start_failed", msg.err)
@@ -49,8 +87,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.logInfo(context.Background(), "tui_oauth_login_completed")
-		_ = m.reload()
-		return m, nil
+		next, cmd := m.startSnapshotRefresh(false)
+		return next, cmd
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height

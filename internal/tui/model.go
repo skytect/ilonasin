@@ -39,6 +39,8 @@ type Model struct {
 	subscriptionPools           []management.SubscriptionUsageAggregate
 	keepaliveStatus             management.KeepaliveStatus
 	subscriptionObservedAt      time.Time
+	snapshotRefreshInFlight     bool
+	snapshotForegroundPending   bool
 	subscriptionRefreshInFlight bool
 	pruneResult                 *management.PruneResult
 	pruningAvailable            bool
@@ -90,5 +92,8 @@ func NewModel(tokens management.LocalTokenClient, upstreams management.UpstreamC
 }
 
 func (m Model) Init() tea.Cmd {
-	return subscriptionUsageAutoRefreshTickCmd(0)
+	return tea.Batch(
+		subscriptionUsageAutoRefreshTickCmd(0),
+		snapshotAutoRefreshTickCmd(snapshotAutoRefreshInterval),
+	)
 }

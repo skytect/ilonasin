@@ -7,9 +7,13 @@ import (
 	"ilonasin/internal/management"
 )
 
+func errMissingSnapshotClient() error {
+	return fmt.Errorf("management snapshot client is required")
+}
+
 func (m *Model) reload() error {
 	if m.snapshot == nil {
-		err := fmt.Errorf("management snapshot client is required")
+		err := errMissingSnapshotClient()
 		m.err = err.Error()
 		return err
 	}
@@ -18,11 +22,17 @@ func (m *Model) reload() error {
 		m.err = err.Error()
 		return err
 	}
-	m.applySnapshot(snapshot)
+	m.applySnapshot(snapshot, snapshotApplyOptions{applySubscriptionUsage: true})
 	return nil
 }
 
-func (m *Model) applySnapshot(snapshot management.ManagementSnapshotResponse) {
+type snapshotApplyOptions struct {
+	applySubscriptionUsage bool
+}
+
+func (m *Model) applySnapshot(snapshot management.ManagementSnapshotResponse, options snapshotApplyOptions) {
+	selectedTokenID := selectedLocalTokenID(m.tokenRows, m.selected)
+	selectedOAuthID := selectedOAuthCredentialID(m.oauthRows, m.oauthSelected)
 	m.runtime = snapshot.Runtime
 	m.tokenRows = snapshot.LocalTokens
 	m.localTokenUsage = append([]management.LocalTokenUsageSummary(nil), snapshot.LocalTokenUsage...)
@@ -39,14 +49,18 @@ func (m *Model) applySnapshot(snapshot management.ManagementSnapshotResponse) {
 	m.healthRows = append([]management.HealthSummary(nil), snapshot.Health...)
 	m.fallbackRows = append([]management.FallbackSummary(nil), snapshot.Fallbacks...)
 	m.quotaRows = append([]management.QuotaSummary(nil), snapshot.Quotas...)
-	m.applySubscriptionUsage(snapshot.SubscriptionUsage)
+	if options.applySubscriptionUsage {
+		m.applySubscriptionUsage(snapshot.SubscriptionUsage)
+	}
 	m.pruningAvailable = snapshot.PruningAvailable
+	m.selected = restoreLocalTokenSelection(m.tokenRows, selectedTokenID, m.selected)
 	if m.selected >= len(m.tokenRows) {
 		m.selected = len(m.tokenRows) - 1
 	}
 	if m.selected < 0 {
 		m.selected = 0
 	}
+	m.oauthSelected = restoreOAuthCredentialSelection(m.oauthRows, selectedOAuthID, m.oauthSelected)
 	if m.oauthSelected >= len(m.oauthRows) {
 		m.oauthSelected = len(m.oauthRows) - 1
 	}
@@ -54,6 +68,44 @@ func (m *Model) applySnapshot(snapshot management.ManagementSnapshotResponse) {
 		m.oauthSelected = 0
 	}
 	m.clampScrolls()
+}
+
+func selectedLocalTokenID(rows []management.LocalToken, index int) int64 {
+	if index < 0 || index >= len(rows) {
+		return 0
+	}
+	return rows[index].ID
+}
+
+func restoreLocalTokenSelection(rows []management.LocalToken, selectedID int64, fallback int) int {
+	if selectedID == 0 {
+		return fallback
+	}
+	for index, row := range rows {
+		if row.ID == selectedID {
+			return index
+		}
+	}
+	return fallback
+}
+
+func selectedOAuthCredentialID(rows []management.OAuthCredential, index int) int64 {
+	if index < 0 || index >= len(rows) {
+		return 0
+	}
+	return rows[index].ID
+}
+
+func restoreOAuthCredentialSelection(rows []management.OAuthCredential, selectedID int64, fallback int) int {
+	if selectedID == 0 {
+		return fallback
+	}
+	for index, row := range rows {
+		if row.ID == selectedID {
+			return index
+		}
+	}
+	return fallback
 }
 
 func (m *Model) applySubscriptionUsage(resp management.SubscriptionUsageResponse) {

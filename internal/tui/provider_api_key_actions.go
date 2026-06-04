@@ -43,8 +43,8 @@ func (m Model) updateAPIKeyInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			slog.String("provider_instance", providerID),
 			slog.Int64("credential_id", created.Credential.ID),
 		)
-		_ = m.reload()
-		return m, nil
+		next, cmd := m.startSnapshotRefresh(false)
+		return next, cmd
 	case tea.KeyBackspace:
 		if len(m.apiKeyInput) > 0 {
 			m.apiKeyInput = m.apiKeyInput[:len(m.apiKeyInput)-1]

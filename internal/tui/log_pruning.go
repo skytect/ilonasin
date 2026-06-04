@@ -10,26 +10,9 @@ func (m Model) writePruning(b *strings.Builder) {
 		return
 	}
 	width := m.viewWidth()
-	b.WriteString(renderPaneSubhead(width, "IO policy + pruning", "metadata", "capture", "manual prune"))
+	b.WriteString(renderPaneSubhead(width, "IO policy + pruning", "metadata", "manual prune"))
 	b.WriteByte('\n')
-	b.WriteString(wrappedMetricLine(width,
-		cardTitleStyle.Render("metadata"),
-		metricChip("requests", fmt.Sprintf("%d", len(m.requestRows))),
-		metricChip("fallbacks", fmt.Sprintf("%d", len(m.fallbackRows))),
-		metricChip("health", fmt.Sprintf("%d", len(m.healthRows))),
-		metricChip("quota", fmt.Sprintf("%d", len(m.quotaRows))),
-		wrappedMetricChip("telemetry", "kept-pending-prune"),
-	))
-	b.WriteByte('\n')
-	b.WriteString(wrappedMetricLine(width,
-		statusBadge(ioCaptureState(m.runtime.CaptureIO)),
-		metricChip("io", ioCaptureMode(m.runtime.CaptureIO)),
-		wrappedMetricChip("policy", ioCapturePolicy(m.runtime.CaptureIO)),
-		wrappedMetricChip("content", ioCaptureContent(m.runtime.CaptureIO)),
-		wrappedMetricChip("retain", ioCaptureRetention(m.runtime.CaptureIO)),
-		wrappedMetricChip("prune", "manual"),
-		wrappedMetricChip("cutoff", "30d"),
-	))
+	b.WriteString(wrappedMetricLine(width, m.pruningPolicyParts()...))
 	b.WriteByte('\n')
 	if m.pruneResult != nil {
 		b.WriteString(wrappedMetricLine(width,
@@ -42,6 +25,19 @@ func (m Model) writePruning(b *strings.Builder) {
 			metricChip("quotas", fmt.Sprintf("%d", m.pruneResult.Quotas)),
 		))
 		b.WriteByte('\n')
+	}
+}
+
+func (m Model) pruningPolicyParts() []string {
+	return []string{
+		statusBadge(ioCaptureState(m.runtime.CaptureIO)),
+		metricChip("req", fmt.Sprintf("%d", len(m.requestRows))),
+		metricChip("fallback", fmt.Sprintf("%d", len(m.fallbackRows))),
+		metricChip("health", fmt.Sprintf("%d", len(m.healthRows))),
+		metricChip("quota", fmt.Sprintf("%d", len(m.quotaRows))),
+		metricChip("io", ioCaptureMode(m.runtime.CaptureIO)),
+		wrappedMetricChip("store", ioCaptureRetention(m.runtime.CaptureIO)),
+		wrappedMetricChip("prune", "manual 30d"),
 	}
 }
 
@@ -64,18 +60,4 @@ func ioCaptureRetention(enabled bool) string {
 		return "debug-log"
 	}
 	return "metadata"
-}
-
-func ioCapturePolicy(enabled bool) string {
-	if enabled {
-		return "debug-io"
-	}
-	return "metadata-only"
-}
-
-func ioCaptureContent(enabled bool) string {
-	if enabled {
-		return "bodies-possible"
-	}
-	return "redacted"
 }

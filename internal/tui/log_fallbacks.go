@@ -92,37 +92,5 @@ func fallbackTableLabels() []string {
 }
 
 func fallbackTableColumns(width int) []int {
-	columns := []int{6, 10, 8, 8, 24}
-	available := width - (len(columns) - 1)
-	if available <= 0 {
-		return columns
-	}
-	total := 0
-	for _, column := range columns {
-		total += column
-	}
-	for available < total && total > len(columns) {
-		for i := range columns {
-			if total <= available {
-				break
-			}
-			if columns[i] > 1 {
-				columns[i]--
-				total--
-			}
-		}
-	}
-	if available > total {
-		grow := available - total
-		for grow > 0 {
-			for _, i := range []int{4, 1, 2, 3} {
-				if grow == 0 {
-					break
-				}
-				columns[i]++
-				grow--
-			}
-		}
-	}
-	return columns
+	return fitTableColumns(width, []int{6, 10, 8, 8, 24}, []int{1, 1, 1, 1, 1}, []int{4, 1, 2, 3})
 }

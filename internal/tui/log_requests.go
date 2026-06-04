@@ -347,56 +347,6 @@ func requestTableLabels(columns []int) []string {
 	return labels
 }
 
-func fitTableColumns(width int, columns, minimums, growOrder []int) []int {
-	out := append([]int(nil), columns...)
-	if len(minimums) != len(out) {
-		minimums = make([]int, len(out))
-		for i := range minimums {
-			minimums[i] = 1
-		}
-	}
-	available := width - (len(out) - 1)
-	if available <= 0 {
-		return out
-	}
-	total := 0
-	for _, column := range out {
-		total += column
-	}
-	for available < total {
-		changed := false
-		for i := range out {
-			if total <= available {
-				break
-			}
-			if out[i] > minimums[i] {
-				out[i]--
-				total--
-				changed = true
-			}
-		}
-		if !changed {
-			break
-		}
-	}
-	if available > total {
-		grow := available - total
-		for grow > 0 {
-			for _, i := range growOrder {
-				if grow == 0 {
-					break
-				}
-				if i < 0 || i >= len(out) {
-					continue
-				}
-				out[i]++
-				grow--
-			}
-		}
-	}
-	return out
-}
-
 func compactRequestTableDetail(row management.RequestSummary) string {
 	model := row.ResolvedModelID
 	if model == "" {

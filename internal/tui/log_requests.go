@@ -30,13 +30,10 @@ func (m Model) writeRecentRequests(b *strings.Builder) {
 		requestColumns := requestTableColumns(width)
 		writePlainTableChrome(b, width, requestTableLabels(requestColumns), requestColumns)
 	}
-	for index, row := range m.requestRows {
-		if index > 0 {
-			b.WriteByte('\n')
-		}
-		b.WriteString(requestSummaryRow(row, now, width))
-		b.WriteByte('\n')
-	}
+	writeLogRows(b, len(m.requestRows), func(index int) string {
+		row := m.requestRows[index]
+		return requestSummaryRow(row, now, width)
+	})
 }
 
 type requestOverview struct {

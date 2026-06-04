@@ -50,6 +50,16 @@ func logSummaryRow(width int, head, details string) string {
 	return wrapTargetedLinesPreserveBlank(width, head, details)
 }
 
+func writeLogRows(b *strings.Builder, count int, render func(index int) string) {
+	for index := 0; index < count; index++ {
+		if index > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(render(index))
+		b.WriteByte('\n')
+	}
+}
+
 func logDetailLabelWidth(fields []logDetailField) int {
 	width := 0
 	for _, field := range fields {

@@ -28,13 +28,10 @@ func (m Model) writeFallbacks(b *strings.Builder) {
 		fallbackColumns := fallbackTableColumns(width)
 		writePlainTableChrome(b, width, fallbackTableLabels(), fallbackColumns)
 	}
-	for index, row := range m.fallbackRows {
-		if index > 0 {
-			b.WriteByte('\n')
-		}
-		b.WriteString(fallbackSummaryRow(row, now, width))
-		b.WriteByte('\n')
-	}
+	writeLogRows(b, len(m.fallbackRows), func(index int) string {
+		row := m.fallbackRows[index]
+		return fallbackSummaryRow(row, now, width)
+	})
 }
 
 func fallbackSummaryRow(row management.FallbackSummary, now time.Time, width int) string {

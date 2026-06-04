@@ -73,16 +73,12 @@ func fallbackRouteDisplay(row management.FallbackSummary) string {
 
 func fallbackTableRow(row management.FallbackSummary, now time.Time, width int) string {
 	columns := fallbackTableColumns(width)
-	detail := safeWrappedRequestDisplay(row.ProviderInstanceID)
-	if row.ModelID != "" {
-		detail += "/" + safeWrappedRequestDisplay(row.ModelID)
-	}
 	cells := []string{
 		"warn",
 		formatRelativeTimeNoClock(now, row.OccurredAt),
 		compactCredentialID(row.FromCredentialID),
 		compactCredentialID(row.ToCredentialID),
-		detail,
+		fallbackRouteDisplay(row),
 	}
 	return wrappedPlainTableRow(cells, columns)
 }

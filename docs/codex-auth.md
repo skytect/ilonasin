@@ -203,7 +203,10 @@ Safe design ideas to copy:
 - Keep control-plane auth for your router's API/TUI separate from upstream provider credentials.
 - Store token metadata with account/provider identity, expiry, scopes, refresh state, and last refresh time.
 - Normalize outbound OpenAI-compatible requests to `Authorization: Bearer <redacted>`, plus provider-specific headers such as organization/project or account headers only when that provider requires them.
-- Surface rate-limit telemetry as first-class state: active limit, reset time, window, used percent, credits, and request IDs.
+- Surface normalized rate-limit telemetry as first-class state: active limit,
+  reset time, window, used percent, and safe quota observations. Do not query or
+  persist provider billing, credits, balances, plan limits, or full provider
+  request IDs by default.
 - Implement 401 recovery separately from 429 handling.
 - Support health-based provider failover only when the upstream terms and user configuration allow it.
 

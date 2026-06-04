@@ -27,7 +27,7 @@ Accessed: 2026-05-30. Primary evidence: official DeepSeek docs, official OpenRou
 | Auth | Bearer API key. | Bearer API key; optional app attribution headers. Also has key-management and BYOK endpoints. | Keep user provider keys separate from router-owned admin credentials. Never forward one provider key to another provider. |
 | Primary OpenAI-compatible path | `POST /chat/completions`. | `POST /chat/completions`. | Chat can share a common request path after provider base URL selection. |
 | Other inference APIs | FIM `POST /completions` on beta; Anthropic compatibility documented. | Responses, Anthropic Messages, embeddings, rerank, audio, video, presets. | Expose non-chat capabilities as provider-specific feature flags, not as universal OpenAI-compatible promises. |
-| Model names | Native IDs such as `deepseek-v4-flash`, `deepseek-v4-pro`. Legacy aliases are documented separately. | Slugs such as `openai/gpt-5.1-chat`, `deepseek/deepseek-v4-flash:free`, and routes such as `openrouter/auto`. | Use internal namespaces such as `deepseek:deepseek-v4-flash` and `openrouter:openai/gpt-5.1-chat`. Store requested and resolved model. |
+| Model names | Native IDs such as `deepseek-v4-flash`, `deepseek-v4-pro`. Legacy aliases are documented separately. | Slugs such as `openai/gpt-5.1-chat`, `deepseek/deepseek-v4-flash:free`, and routes such as `openrouter/auto`. | Use ilonasin model addresses such as `deepseek/deepseek-v4-flash` and `openrouter/openai/gpt-5.1-chat`. Store requested and resolved model. |
 | Model discovery | `GET /models`. | `GET /models`, `/models/user`, `/models/{author}/{slug}/endpoints`, `/providers`. | Build a model registry with provider-specific metadata and capability flags. |
 | Standard chat fields | `model`, `messages`, `max_tokens`, `stream`, `stream_options`, `temperature`, `top_p`, `stop`, `tools`, `tool_choice`, `response_format`, logprobs. | Similar OpenAI chat fields plus broad provider pass-through. | Maintain a per-provider/model allowlist. Unknown fields should be rejected, warned, or forwarded only through explicit provider escape hatches. |
 | Provider extensions | `thinking`, `reasoning_effort`, `user_id`, beta prefix completion, strict tool mode. | `provider`, `models`, `route`, `plugins`, `reasoning`, `cache_control`, app attribution headers, BYOK, guardrails. | Keep extension fields namespaced, for example `provider_options.deepseek` and `provider_options.openrouter`. |
@@ -37,7 +37,7 @@ Accessed: 2026-05-30. Primary evidence: official DeepSeek docs, official OpenRou
 | Assistant prefill | Chat prefix completion beta requires `/beta` and `prefix: true`. | Final assistant-message prefill is supported. | Prefill needs explicit translation or rejection; it is not a plain pass-through feature. |
 | Streaming | SSE ending in `[DONE]`; can include `delta.reasoning_content`; usage chunk documented with `stream_options.include_usage`. | SSE ending in `[DONE]`; can include comments, final usage chunk, provider-specific fields, and mid-stream error objects. | Parser must ignore comments/empty lines, support top-level stream errors, handle final usage chunks, and not assume every delta has content. |
 | Errors | Docs list `400`, `401`, `402`, `422`, `429`, `500`, `503`; fake key returned OpenAI-like `error` object. | Docs list `400`, `401`, `402`, `403`, `408`, `429`, `502`, `503`; error object may include metadata. | Normalize status, code, message, retry-after, provider, model, and redacted raw shape. |
-| Usage/billing | Standard token fields, cache hit/miss tokens, reasoning tokens; `/user/balance`. | Usage can include token/cost/provider/cache details; `/credits`, `/key`, `/activity`, `/generation`. | Store common usage fields plus `provider_usage` JSON. Redact account, credit, and generation identifiers by default. |
+| Usage/billing | Standard token fields, cache hit/miss tokens, reasoning tokens; `/user/balance`. | Usage can include token/cost/provider/cache details; `/credits`, `/key`, `/activity`, `/generation`. | Store normalized token, cache, cost, latency, retry, quota, and reset metadata only. Do not store raw provider usage payloads in normal metadata. Full account IDs and billing/account identifiers must remain redacted; IO logging is for explicit body debugging only. |
 | Rate limits | Account/model concurrency limits; `429` on exceeded concurrency. | Limits vary by account, key, model, provider, and free-tier route; `Retry-After` may appear. | Implement provider rate buckets. Do not auto-switch accounts to bypass provider terms. |
 | Privacy/user isolation | `user_id` supports safety/cache/scheduling isolation and must not contain private info. | Provider routing supports data-collection and ZDR constraints; BYOK and region controls exist. | Model privacy controls as explicit routing policy, not hidden metadata. |
 
@@ -52,7 +52,9 @@ Credential registry:
 
 Model namespace:
 
-- Use a stable internal prefix: `deepseek:<model>` and `openrouter:<slug>`.
+- Use ilonasin slash model addresses:
+  `<provider_instance_id>/<provider_model_id>`, such as
+  `deepseek/deepseek-v4-pro` and `openrouter/deepseek/deepseek-v4-pro`.
 - Track aliases separately from canonical model IDs.
 - Record `requested_model`, `provider`, `resolved_model`, and `resolved_upstream` when available.
 
@@ -94,8 +96,8 @@ Structured-output normalization:
 Usage and rate-limit normalization:
 
 - Common fields: prompt tokens, completion tokens, total tokens, reasoning tokens, cached tokens, finish reason, elapsed time, status.
-- Provider extras: cost, provider, route, cache write tokens, BYOK usage, balance/credits, concurrency bucket.
-- Redact account balances, account IDs, key hashes, request IDs, and generation content in normal logs.
+- Provider extras: cost, provider, route, cache write tokens, BYOK usage, retry-after, reset timing, usage percentages, safe limit labels, concurrency bucket.
+- Redact account IDs, key hashes, full request IDs, and generation content in normal logs.
 - Respect `Retry-After` when present.
 - Avoid account rotation policies that are designed to evade rate limits or payment limits.
 

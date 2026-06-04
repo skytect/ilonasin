@@ -34,7 +34,7 @@ func (m Model) writeFallbacks(b *strings.Builder) {
 	}
 	for index, row := range m.fallbackRows {
 		if index > 0 {
-			b.WriteString("\n\n")
+			b.WriteByte('\n')
 		}
 		b.WriteString(fallbackSummaryRow(row, now, width))
 		b.WriteByte('\n')
@@ -44,11 +44,9 @@ func (m Model) writeFallbacks(b *strings.Builder) {
 func fallbackSummaryRow(row management.FallbackSummary, now time.Time, width int) string {
 	lines := []string{
 		fallbackTableRow(row, now, width),
-		requestDetailLine(width, "route",
+		requestDetailLine(width, "meta",
 			cardTitleStyle.Render(safeFullWrappedDisplay(row.ProviderInstanceID)+"/"+safeFullWrappedDisplay(row.ModelID)),
 			wrappedMetricChip("reason", row.Reason),
-		),
-		requestDetailLine(width, "creds",
 			mutedStyle.Render(labeledFullCredentialDisplay("from", row.FromCredentialID, row.FromCredentialLabel)),
 			mutedStyle.Render(labeledFullCredentialDisplay("to", row.ToCredentialID, row.ToCredentialLabel)),
 		),

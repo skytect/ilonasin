@@ -38,7 +38,7 @@ func (m Model) writeRecentRequests(b *strings.Builder) {
 	}
 	for index, row := range m.requestRows {
 		if index > 0 {
-			b.WriteString("\n\n")
+			b.WriteByte('\n')
 		}
 		b.WriteString(requestSummaryRow(row, now, width))
 		b.WriteByte('\n')
@@ -160,11 +160,13 @@ func logOverviewState(overview requestOverview) string {
 func requestSummaryRow(row management.RequestSummary, nowTime time.Time, width int) string {
 	state := statusState(row.HTTPStatus, row.ErrorClass)
 	head := requestTableRow(row, nowTime, state, width)
-	route := requestDetailLine(width, "route",
+	metaParts := []string{
 		cardTitleStyle.Render(requestModelRoute(row)),
 		mutedStyle.Render(fullCredentialDisplay(row.CredentialID, row.CredentialLabel)),
-	)
-	usage := requestDetailLine(width, "usage",
+	}
+	metaParts = append(metaParts, requestSummaryExtraParts(row, width)...)
+	meta := requestDetailLine(width, "meta", metaParts...)
+	metrics := requestDetailLine(width, "metrics",
 		compactTokenMixLine(row.PromptTokens, row.CompletionTokens, row.ReasoningTokens, row.CacheHitTokens, row.CacheMissTokens, row.CacheWriteTokens, width),
 		metricChip("total", compactInt(row.TotalTokens)),
 		compactRateBars(width, rateMetric{"hit", row.CacheHitRate * 100}),
@@ -175,11 +177,7 @@ func requestSummaryRow(row management.RequestSummary, nowTime time.Time, width i
 		msText("ttft", row.TimeToFirstTokenMS),
 		tpsText("tps", row.OutputTokensPerSecondTotal),
 	)
-	extras := requestSummaryExtras(row, width)
-	lines := []string{head, route, usage}
-	if extras != "" {
-		lines = append(lines, extras)
-	}
+	lines := []string{head, meta, metrics}
 	return wrapTargetedLinesPreserveBlank(width, lines...)
 }
 
@@ -463,7 +461,7 @@ func padPlainCell(value string, width int) string {
 	return value
 }
 
-func requestSummaryExtras(row management.RequestSummary, width int) string {
+func requestSummaryExtraParts(row management.RequestSummary, width int) []string {
 	parts := []string{}
 	if row.FallbackReason != "" {
 		parts = append(parts, wrappedMetricChip("fallback-reason", row.FallbackReason))
@@ -474,16 +472,12 @@ func requestSummaryExtras(row management.RequestSummary, width int) string {
 	if row.ErrorClass != "" {
 		parts = append(parts, badBadgeStyle.Render(safeFullWrappedDisplay(row.ErrorClass)))
 	}
-	if !narrowMetrics(width) {
-		parts = append(parts,
-			metricChip("messages", fmt.Sprintf("%d", row.MessageCount)),
-			metricChip("tools", fmt.Sprintf("%d", row.ToolCount)),
-			metricChip("images", fmt.Sprintf("%d", row.ImageCount)),
-		)
-	}
-	if width >= 96 {
-		parts = append(parts, msText("up", row.UpstreamLatencyMS))
-	}
+	parts = append(parts,
+		metricChip("messages", fmt.Sprintf("%d", row.MessageCount)),
+		metricChip("tools", fmt.Sprintf("%d", row.ToolCount)),
+		metricChip("images", fmt.Sprintf("%d", row.ImageCount)),
+		msText("up", row.UpstreamLatencyMS),
+	)
 	if row.RequestedServiceTier != "" {
 		parts = append(parts, wrappedMetricChip("tier", row.RequestedServiceTier))
 	}
@@ -496,7 +490,7 @@ func requestSummaryExtras(row management.RequestSummary, width int) string {
 	if row.ThinkingType != "" {
 		parts = append(parts, wrappedMetricChip("thinking", row.ThinkingType))
 	}
-	return wrappedMetricBlock(width, parts...)
+	return parts
 }
 
 func requestModelRoute(row management.RequestSummary) string {

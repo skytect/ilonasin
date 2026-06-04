@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -11,54 +12,82 @@ import (
 
 func (m Model) writeUsageMetrics(b *strings.Builder) {
 	width := m.viewWidth()
-	b.WriteString(renderPaneSubhead(width, "Token usage", fmt.Sprintf("providers %d", len(m.usageRows))))
+	providerRows := combinedUsageProviderRows(m.usageRows, m.latencyRows)
+	b.WriteString(renderPaneSubhead(width, "Provider usage", fmt.Sprintf("providers %d", len(providerRows))))
 	b.WriteByte('\n')
 	if summary := usageMetricsOverview(width, m.usageRows, m.latencyRows, m.streamRows); summary != "" {
 		b.WriteString(summary)
 		b.WriteByte('\n')
 	}
-	if len(m.usageRows) == 0 {
-		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("42"), "token ledger",
+	if len(providerRows) == 0 {
+		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("42"), "usage ledger",
 			metricLine(metricChip("providers", "0"), metricChip("requests", "0")),
-			metricLine(metricChip("tokens", "0"), metricChip("visibility", "metadata-only")),
+			metricLine(metricChip("tokens", "0"), metricChip("latency", "0ms"), metricChip("visibility", "metadata-only")),
 		))
 		b.WriteByte('\n')
 	}
-	for index, row := range m.usageRows {
+	for index, row := range providerRows {
 		if index > 0 {
 			b.WriteString("\n\n")
 		}
-		b.WriteString(usageSummaryRow(row, width))
+		b.WriteString(usageProviderRow(row, width))
 		b.WriteByte('\n')
 	}
 	b.WriteString("\n")
-	b.WriteString(renderPaneSubhead(width, "Performance",
-		fmt.Sprintf("providers %d", len(m.latencyRows)),
-		fmt.Sprintf("streams %d", totalStreamCount(m.streamRows)),
-		fmt.Sprintf("chunks %s", compactInt(totalStreamChunks(m.streamRows))),
-	))
+	b.WriteString(renderPaneSubhead(width, "Streams", fmt.Sprintf("streams %d", totalStreamCount(m.streamRows)), fmt.Sprintf("chunks %s", compactInt(totalStreamChunks(m.streamRows)))))
 	b.WriteByte('\n')
-	if len(m.latencyRows) == 0 && len(m.streamRows) == 0 {
-		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("110"), "performance ledger",
-			metricLine(metricChip("providers", "0"), metricChip("requests", "0")),
-			metricLine(msText("lat", 0), msText("ttft", 0), tpsText("tps", 0), metricChip("streams", "0")),
+	if len(m.streamRows) == 0 {
+		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("110"), "stream ledger",
+			metricLine(metricChip("streams", "0"), metricChip("chunks", "0")),
+			metricLine(metricChip("status", "quiet"), metricChip("visibility", "metadata-only")),
 		))
 		b.WriteByte('\n')
 	}
-	for index, row := range m.latencyRows {
-		if index > 0 {
-			b.WriteString("\n\n")
-		}
-		b.WriteString(latencySummaryRow(row, width))
-		b.WriteByte('\n')
-	}
 	for index, row := range m.streamRows {
-		if index > 0 || len(m.latencyRows) > 0 {
+		if index > 0 {
 			b.WriteString("\n\n")
 		}
 		b.WriteString(streamSummaryRow(row, width))
 		b.WriteByte('\n')
 	}
+}
+
+type usageProviderRowData struct {
+	providerID string
+	usage      *management.UsageSummary
+	latency    *management.LatencySummary
+}
+
+func combinedUsageProviderRows(usageRows []management.UsageSummary, latencyRows []management.LatencySummary) []usageProviderRowData {
+	byProvider := map[string]*usageProviderRowData{}
+	for i := range usageRows {
+		row := &usageRows[i]
+		combined := usageProviderRowFor(byProvider, row.ProviderInstanceID)
+		combined.usage = row
+	}
+	for i := range latencyRows {
+		row := &latencyRows[i]
+		combined := usageProviderRowFor(byProvider, row.ProviderInstanceID)
+		combined.latency = row
+	}
+	out := make([]usageProviderRowData, 0, len(byProvider))
+	for _, row := range byProvider {
+		out = append(out, *row)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].providerID < out[j].providerID
+	})
+	return out
+}
+
+func usageProviderRowFor(rows map[string]*usageProviderRowData, providerID string) *usageProviderRowData {
+	key := "\x00" + providerID
+	row := rows[key]
+	if row == nil {
+		row = &usageProviderRowData{providerID: providerID}
+		rows[key] = row
+	}
+	return row
 }
 
 type usageMetricsOverviewData struct {
@@ -172,24 +201,55 @@ func tokenRatePercent(numerator, denominator int) float64 {
 	return float64(numerator) / float64(denominator) * 100
 }
 
-func usageSummaryRow(row management.UsageSummary, width int) string {
-	lines := []string{
-		wrapTargetedLines(width, wrappedMetricLine(width,
-			statusBadge("fresh"),
-			cardTitleStyle.Render(safeFullWrappedDisplay(row.ProviderInstanceID)),
-			metricChip("requests", fmt.Sprintf("%d", row.RequestCount)),
-			metricChip("total", compactInt(row.TotalTokens)),
-			metricChip("cost", compactInt64(row.CostMicrounits)+"u"),
-		)),
-		compactTokenMixLine(row.PromptTokens, row.CompletionTokens, row.ReasoningTokens, row.CacheHitTokens, row.CacheMissTokens, row.CacheWriteTokens, width),
+func usageProviderRow(row usageProviderRowData, width int) string {
+	state := "fresh"
+	if row.latency != nil {
+		state = latencyState(row.latency.AverageLatencyMS)
 	}
-	lines = append(lines, usageRateLines(width,
-		rateMetric{"hit", row.CacheHitRate * 100},
-		rateMetric{"miss", row.CacheMissRate * 100},
-		rateMetric{"write", row.CacheWriteRate * 100},
-		rateMetric{"reason", row.ReasoningTokenRate * 100},
-	)...)
+	head := []string{
+		statusBadge(state),
+		cardTitleStyle.Render(usageProviderDisplay(row.providerID)),
+	}
+	if row.usage != nil {
+		head = append(head,
+			metricChip("requests", fmt.Sprintf("%d", row.usage.RequestCount)),
+			metricChip("total", compactInt(row.usage.TotalTokens)),
+			metricChip("cost", compactInt64(row.usage.CostMicrounits)+"u"),
+		)
+	}
+	if row.latency != nil {
+		if row.usage == nil {
+			head = append(head, metricChip("requests", fmt.Sprintf("%d", row.latency.RequestCount)))
+		}
+		head = append(head,
+			msText("lat", row.latency.AverageLatencyMS),
+			msText("ttft", row.latency.AverageTimeToFirstTokenMS),
+		)
+	}
+	lines := []string{wrapTargetedLines(width, wrappedMetricLine(width, head...))}
+	if row.usage != nil {
+		lines = append(lines,
+			compactTokenMixLine(row.usage.PromptTokens, row.usage.CompletionTokens, row.usage.ReasoningTokens, row.usage.CacheHitTokens, row.usage.CacheMissTokens, row.usage.CacheWriteTokens, width),
+		)
+		lines = append(lines, usageRateLines(width,
+			rateMetric{"hit", row.usage.CacheHitRate * 100},
+			rateMetric{"miss", row.usage.CacheMissRate * 100},
+			rateMetric{"write", row.usage.CacheWriteRate * 100},
+			rateMetric{"reason", row.usage.ReasoningTokenRate * 100},
+		)...)
+	}
+	if row.latency != nil {
+		lines = append(lines, latencyShapeLines(width, *row.latency)...)
+	}
 	return strings.Join(lines, "\n")
+}
+
+func usageProviderDisplay(providerID string) string {
+	display := safeFullWrappedDisplay(providerID)
+	if display == "" {
+		return "unknown"
+	}
+	return display
 }
 
 func usageRateLines(width int, rates ...rateMetric) []string {
@@ -200,21 +260,6 @@ func usageRateLines(width int, rates ...rateMetric) []string {
 		compactRateBars(width, rates[:2]...),
 		compactRateBars(width, rates[2:]...),
 	}
-}
-
-func latencySummaryRow(row management.LatencySummary, width int) string {
-	state := latencyState(row.AverageLatencyMS)
-	return strings.Join([]string{
-		wrapTargetedLines(width, wrappedMetricLine(width,
-			statusBadge(state),
-			cardTitleStyle.Render(safeFullWrappedDisplay(row.ProviderInstanceID)),
-			metricChip("requests", fmt.Sprintf("%d", row.RequestCount)),
-			msText("lat", row.AverageLatencyMS),
-			msText("up", row.AverageUpstreamLatencyMS),
-			msText("ttft", row.AverageTimeToFirstTokenMS),
-		)),
-		strings.Join(latencyShapeLines(width, row), "\n"),
-	}, "\n")
 }
 
 func latencyShapeLines(width int, row management.LatencySummary) []string {

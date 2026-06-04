@@ -327,7 +327,7 @@ func compactRequestTableDetail(row management.RequestSummary) string {
 	if provider == "" {
 		provider = row.ProviderInstanceID
 	}
-	return requestRouteDisplay(provider, model)
+	return logRouteDisplay(provider, model)
 }
 
 func requestModelRoute(row management.RequestSummary) string {
@@ -347,26 +347,10 @@ func requestModelRoute(row management.RequestSummary) string {
 	if resolvedModel == "" {
 		resolvedModel = row.ModelID
 	}
-	requested := requestRouteDisplay(requestedProvider, requestedModel)
-	resolved := requestRouteDisplay(resolvedProvider, resolvedModel)
+	requested := logRouteDisplay(requestedProvider, requestedModel)
+	resolved := logRouteDisplay(resolvedProvider, resolvedModel)
 	if requested != resolved {
 		return requested + " -> " + resolved
 	}
 	return resolved
-}
-
-func requestRouteDisplay(provider, model string) string {
-	provider = safeWrappedRequestDisplay(provider)
-	model = safeWrappedRequestDisplay(model)
-	if model == "" {
-		return provider
-	}
-	if provider == "" {
-		return model
-	}
-	return provider + "/" + model
-}
-
-func safeWrappedRequestDisplay(value string) string {
-	return safeFullWrappedDisplay(value)
 }

@@ -60,15 +60,7 @@ func fallbackDetailFields(row management.FallbackSummary) []logDetailField {
 }
 
 func fallbackRouteDisplay(row management.FallbackSummary) string {
-	provider := safeWrappedRequestDisplay(row.ProviderInstanceID)
-	model := safeWrappedRequestDisplay(row.ModelID)
-	if model == "" {
-		return provider
-	}
-	if provider == "" {
-		return model
-	}
-	return provider + "/" + model
+	return logRouteDisplay(row.ProviderInstanceID, row.ModelID)
 }
 
 func fallbackTableRow(row management.FallbackSummary, now time.Time, width int) string {

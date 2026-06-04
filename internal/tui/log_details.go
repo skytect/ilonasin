@@ -60,6 +60,18 @@ func logDetailLabelWidth(fields []logDetailField) int {
 	return width
 }
 
+func logRouteDisplay(provider, model string) string {
+	provider = safeFullWrappedDisplay(provider)
+	model = safeFullWrappedDisplay(model)
+	if model == "" {
+		return provider
+	}
+	if provider == "" {
+		return model
+	}
+	return provider + "/" + model
+}
+
 func detailMetricLine(width int, label string, parts ...string) string {
 	label = safeMetricLabel(label)
 	if label == "" {

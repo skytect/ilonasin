@@ -27,7 +27,8 @@
 - Keep local API auth, upstream provider credentials, provider adapters,
   routing, HTTP transport, TUI, config, and SQLite storage as separate
   boundaries.
-- The TUI may mutate SQLite, but it must not mutate `config.toml`.
+- The TUI must use daemon-owned management APIs for mutable operations and must
+  not read or write SQLite directly or mutate `config.toml`.
 - Only store if IO logging is enabled for the request: prompts, completions, request bodies, response bodies, raw
   provider payloads, raw SSE chunks, tool arguments, tool result.
 

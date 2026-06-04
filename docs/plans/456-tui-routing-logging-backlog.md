@@ -24,15 +24,27 @@ logging around the binary IO-logging boundary.
 2. Do not implement runtime behavior in this slice.
 3. Treat the following TUI items as the next implementation priority:
    - deduplicate repeated labels, chips, and status text across all panes;
+   - avoid repeating the same provider/model/window/credential facts in
+     adjacent cards when one grouped heading or row label can carry the
+     context;
    - clean up usage and performance views so detailed token/cache/latency data
      remains visible but is grouped into digestible summaries;
+   - put primary subscription pools and pooled totals first, and keep secondary
+     Spark-style limits behind lower-priority grouping or tabs;
    - aggregate health/quota by endpoint/model/credential where useful, and keep
      per-event detail in logs rather than health panes;
+   - show request, health, quota, and fallback summaries by endpoint before
+     individual events; logs are the only place that should lead with event
+     rows;
    - make logs more digestible, likely full-width or vertical table-style when
      that better fits content than rigid columns;
+   - align multi-line log rows with a clear blank line or table separator so
+     wrapped fields remain readable;
    - shrink IO policy/pruning display so it does not consume large empty panes;
    - replace rigid equal-column layouts with dynamic pane widths or irregular
      tiles where content density benefits;
+   - let panes choose one, two, or asymmetric layouts from available width
+     instead of forcing every screen into three equal columns;
    - audit every keybinding and keep a parsimonious, intuitive, fully featured
      set for each screen;
    - make live daemon/SQLite state feel live in the TUI, avoiding manual refresh
@@ -75,21 +87,26 @@ logging around the binary IO-logging boundary.
 ## Suggested Slice Order
 
 1. TUI full-sweep inventory: identify repeated UI patterns and target removals.
-2. TUI pane layout policy: dynamic/irregular pane sizing where content needs it.
-3. TUI usage summary redesign: clean token/cache/latency visuals.
-4. TUI health aggregation: endpoint/model/credential summaries, events moved to
+2. TUI deduplication pass: collapse repeated headings, provider chips, model
+   names, and window labels into grouped context.
+3. TUI pane layout policy: dynamic/irregular pane sizing where content needs it.
+4. TUI usage summary redesign: clean token/cache/latency visuals and primary
+   pool-first subscription grouping.
+5. TUI health aggregation: endpoint/model/credential summaries, events moved to
    logs.
-5. TUI logs layout redesign: table-first/full-width where appropriate.
-6. TUI IO policy/pruning compaction.
-7. TUI downstream API-key usage visibility.
-8. TUI keybinding audit and command-bar cleanup.
-9. TUI live update strategy through management snapshots/events.
-10. TUI routing/cache-status surface, after backend data exists.
-11. Codex cache-affinity architecture for approved client-sent signals.
-12. Codex cache-affinity implementation.
-13. Logging boundary architecture review.
-14. Logging storage/queryability design.
-15. Logging implementation refactors.
+6. TUI logs layout redesign: table-first/full-width where appropriate, with
+   aligned wrapping and clear row separation.
+7. TUI IO policy/pruning compaction.
+8. TUI downstream API-key usage visibility.
+9. TUI keybinding audit and command-bar cleanup.
+10. TUI live update follow-up: consider management event/long-poll support if
+   periodic snapshots are not enough.
+11. TUI routing/cache-status surface, after backend data exists.
+12. Codex cache-affinity architecture for approved client-sent signals.
+13. Codex cache-affinity implementation.
+14. Logging boundary architecture review.
+15. Logging storage/queryability design.
+16. Logging implementation refactors.
 
 This order is intentionally a backlog, not a promise that each item is one
 slice. Each future slice still needs its own numbered plan, three plan reviews,

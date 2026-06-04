@@ -262,27 +262,11 @@ func requestDetailLine(width int, label string, parts ...string) string {
 func requestTableHeader(width int) string {
 	columns := requestTableColumns(width)
 	labels := requestTableLabels(columns)
-	cells := make([]string, 0, len(columns))
-	for i, column := range columns {
-		cells = append(cells, fitPlainCellFirstLine(labels[i], column))
-	}
-	return mutedStyle.Render(strings.Join(cells, " "))
+	return plainTableHeader(labels, columns)
 }
 
 func requestTableSeparator(width int) string {
-	if width <= 0 {
-		return ""
-	}
-	columns := requestTableColumns(width)
-	parts := make([]string, 0, len(columns))
-	for _, column := range columns {
-		if column < 1 {
-			column = 1
-		}
-		parts = append(parts, strings.Repeat("-", column))
-	}
-	line := strings.Join(parts, " ")
-	return mutedStyle.Render(line)
+	return plainTableSeparator(width, requestTableColumns(width))
 }
 
 func requestTableRow(row management.RequestSummary, nowTime time.Time, state string, width int) string {

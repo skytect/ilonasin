@@ -6,6 +6,32 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+func plainTableHeader(labels []string, columns []int) string {
+	capacity := len(labels)
+	if len(columns) < capacity {
+		capacity = len(columns)
+	}
+	cells := make([]string, 0, capacity)
+	for i := 0; i < len(labels) && i < len(columns); i++ {
+		cells = append(cells, fitPlainCellFirstLine(labels[i], columns[i]))
+	}
+	return mutedStyle.Render(strings.Join(cells, " "))
+}
+
+func plainTableSeparator(width int, columns []int) string {
+	if width <= 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(columns))
+	for _, column := range columns {
+		if column < 1 {
+			column = 1
+		}
+		parts = append(parts, strings.Repeat("-", column))
+	}
+	return mutedStyle.Render(strings.Join(parts, " "))
+}
+
 func fitPlainCellFirstLine(value string, width int) string {
 	value = strings.Join(strings.Fields(safeWrappedChromeDisplay(value)), " ")
 	if width <= 0 {

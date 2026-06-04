@@ -25,6 +25,7 @@ func (m Model) usagePanes() []dashboardPane {
 	return []dashboardPane{
 		{id: usagePaneMetrics, title: "tokens + performance", content: m.usageMetricsBody},
 		{id: usagePaneSubscriptions, title: "quota", content: m.subscriptionUsageBody},
+		{id: usagePaneSparkSubscriptions, title: "spark quota", content: m.sparkSubscriptionUsageBody},
 		{id: usagePaneHealth, title: "health + quota", content: m.healthAndQuotaBody},
 	}
 }
@@ -168,7 +169,14 @@ func (m Model) usageMetricsBody(width int) string {
 func (m Model) subscriptionUsageBody(width int) string {
 	var b strings.Builder
 	m = m.withRenderWidth(width)
-	m.writeSubscriptionUsage(&b)
+	m.writeSubscriptionUsage(&b, subscriptionQuotaPrimary)
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m Model) sparkSubscriptionUsageBody(width int) string {
+	var b strings.Builder
+	m = m.withRenderWidth(width)
+	m.writeSubscriptionUsage(&b, subscriptionQuotaSpark)
 	return strings.TrimRight(b.String(), "\n")
 }
 

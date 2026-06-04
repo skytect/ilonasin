@@ -141,7 +141,7 @@ func poolGaugeBlock(label string, usedPoints, remainingPoints, capacityPoints fl
 			mutedStyle.Render(fmt.Sprintf("capacity %.0fpp", capacityPoints)) + " " +
 			mutedStyle.Render(fmt.Sprintf("acct %d stale %d", accountCount, staleCount))
 		if resetLabel != "" {
-			line += "  " + mutedStyle.Render(compactResetText(resetLabel))
+			line += "  " + mutedStyle.Render(compactResetTimeOnly(resetLabel))
 		}
 		return wrapTargetedLines(lineWidth, line)
 	}

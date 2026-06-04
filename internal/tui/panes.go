@@ -28,6 +28,7 @@ const (
 const (
 	usagePaneMetrics = iota
 	usagePaneSubscriptions
+	usagePaneSparkSubscriptions
 	usagePaneHealth
 )
 

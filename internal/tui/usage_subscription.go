@@ -12,23 +12,52 @@ import (
 	"ilonasin/internal/management"
 )
 
-func (m Model) writeSubscriptionUsage(b *strings.Builder) {
+type subscriptionQuotaView int
+
+const (
+	subscriptionQuotaPrimary subscriptionQuotaView = iota
+	subscriptionQuotaSpark
+)
+
+func (m Model) writeSubscriptionUsage(b *strings.Builder, view subscriptionQuotaView) {
 	width := m.viewWidth()
 	now := m.nowTime()
-	b.WriteString(subscriptionUsageSummary(width, m.subscriptionRows, m.subscriptionPools))
+	rows := filterSubscriptionRows(m.subscriptionRows, view)
+	pools := sortedSubscriptionPools(filterSubscriptionPools(m.subscriptionPools, view))
+	b.WriteString(subscriptionUsageSummary(width, rows, pools, view))
 	b.WriteByte('\n')
-	if summary := subscriptionPoolSummaryLine(width, m.subscriptionPools, now); summary != "" {
+	if summary := subscriptionPoolSummaryLine(width, pools, now); summary != "" {
 		b.WriteString(summary)
 		b.WriteByte('\n')
 	}
-	if len(m.subscriptionRows) == 0 {
+	b.WriteString("\n")
+	b.WriteString(renderPaneSubhead(width, "Subscription pools", fmt.Sprintf("pools %d", len(pools))))
+	b.WriteByte('\n')
+	if len(pools) == 0 {
+		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("110"), "subscription pools",
+			metricLine(metricChip("pools", "0"), metricChip("accounts", "0"), metricChip("visibility", "metadata-only")),
+			metricLine(metricChip("used", "0pp"), metricChip("left", "0pp"), metricChip("capacity", "0pp")),
+		))
+		b.WriteByte('\n')
+	}
+	for rowIndex, row := range pools {
+		if rowIndex > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(subscriptionPoolRow(row, width, now))
+		b.WriteByte('\n')
+	}
+	b.WriteString("\n")
+	b.WriteString(renderPaneSubhead(width, "Subscription accounts", fmt.Sprintf("accounts %d", len(rows))))
+	b.WriteByte('\n')
+	if len(rows) == 0 {
 		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("110"), "subscription accounts",
 			metricLine(metricChip("accounts", "0"), metricChip("fresh", "0"), metricChip("stale", "0")),
 			metricLine(metricChip("limits", "none"), metricChip("visibility", "metadata-only")),
 		))
 		b.WriteByte('\n')
 	}
-	for groupIndex, group := range subscriptionUsageGroups(m.subscriptionRows) {
+	for groupIndex, group := range subscriptionUsageGroups(rows) {
 		if groupIndex > 0 {
 			b.WriteString("\n\n")
 		}
@@ -41,48 +70,75 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder) {
 		b.WriteString(renderSubscriptionAccountGrid(width, cards))
 		b.WriteByte('\n')
 	}
-	b.WriteString("\n")
-	b.WriteString(renderPaneSubhead(width, "Subscription pools", fmt.Sprintf("pools %d", len(m.subscriptionPools))))
-	b.WriteByte('\n')
-	for rowIndex, row := range sortedSubscriptionPools(m.subscriptionPools) {
-		if rowIndex > 0 {
-			b.WriteString("\n\n")
+	if view == subscriptionQuotaPrimary {
+		writeSubscriptionKeepalive(b, width, m.keepaliveStatus)
+	}
+}
+
+func filterSubscriptionRows(rows []management.SubscriptionUsageRow, view subscriptionQuotaView) []management.SubscriptionUsageRow {
+	out := make([]management.SubscriptionUsageRow, 0, len(rows))
+	for _, row := range rows {
+		priority := subscriptionLimitPriority(subscriptionRawLimitSortKey(row.LimitName, row.LimitID))
+		if includeSubscriptionPriority(priority, view) {
+			out = append(out, row)
 		}
-		limit := safeFullWrappedDisplay(row.LimitName)
-		if limit == "" {
-			limit = safeFullWrappedDisplay(row.LimitID)
+	}
+	return out
+}
+
+func filterSubscriptionPools(rows []management.SubscriptionUsageAggregate, view subscriptionQuotaView) []management.SubscriptionUsageAggregate {
+	out := make([]management.SubscriptionUsageAggregate, 0, len(rows))
+	for _, row := range rows {
+		priority := subscriptionLimitPriority(subscriptionPoolSortKey(row))
+		if includeSubscriptionPriority(priority, view) {
+			out = append(out, row)
 		}
-		b.WriteString(wrapTargetedLines(width, wrappedMetricLine(width,
+	}
+	return out
+}
+
+func includeSubscriptionPriority(priority int, view subscriptionQuotaView) bool {
+	switch view {
+	case subscriptionQuotaSpark:
+		return priority == 1
+	default:
+		return priority != 1
+	}
+}
+
+func subscriptionPoolRow(row management.SubscriptionUsageAggregate, width int, now time.Time) string {
+	limit := safeFullWrappedDisplay(row.LimitName)
+	if limit == "" {
+		limit = safeFullWrappedDisplay(row.LimitID)
+	}
+	lines := []string{
+		wrapTargetedLines(width, wrappedMetricLine(width,
 			cardTitleStyle.Render(safeFullWrappedDisplay(row.ProviderInstanceID)),
 			statusBadge("pooled"),
 			metricChip("accounts", fmt.Sprintf("%d", row.AccountCount)),
 			metricChip("stale", fmt.Sprintf("%d", row.StaleCount)),
-		)))
-		b.WriteByte('\n')
-		b.WriteString(wrappedDisplayField("limit", limit, width))
-		b.WriteByte('\n')
-		for windowIndex, line := range subscriptionPoolWindowLines(row, width, now) {
-			if windowIndex > 0 {
-				b.WriteByte('\n')
-			}
-			b.WriteString(line)
-			b.WriteByte('\n')
-		}
+		)),
+		wrappedDisplayField("limit", limit, width),
 	}
+	lines = append(lines, subscriptionPoolWindowLines(row, width, now)...)
+	return strings.Join(lines, "\n")
+}
+
+func writeSubscriptionKeepalive(b *strings.Builder, width int, status management.KeepaliveStatus) {
 	b.WriteString("\n")
 	b.WriteString(renderPaneSubhead(width, "Subscription keepalive"))
 	b.WriteByte('\n')
-	schedule := readableKeepaliveSchedule(m.keepaliveStatus.ScheduleTimes)
+	schedule := readableKeepaliveSchedule(status.ScheduleTimes)
 	if schedule == "" {
 		schedule = "none"
 	}
 	lines := []string{
 		wrappedMetricLine(width,
 			cardTitleStyle.Render("keepalive"),
-			statusBadge(subscriptionKeepaliveState(m.keepaliveStatus)),
-			metricChip("enabled", fmt.Sprintf("%t", m.keepaliveStatus.Enabled)),
-			metricChip("cap", fmt.Sprintf("%t", m.keepaliveStatus.OutputCapVerified)),
-			wrappedMetricChip("status", m.keepaliveStatus.Status),
+			statusBadge(subscriptionKeepaliveState(status)),
+			metricChip("enabled", fmt.Sprintf("%t", status.Enabled)),
+			metricChip("cap", fmt.Sprintf("%t", status.OutputCapVerified)),
+			wrappedMetricChip("status", status.Status),
 		),
 		wrappedDisplayField("schedule", safeFullWrappedDisplay(schedule), width),
 	}
@@ -342,7 +398,7 @@ func subscriptionAccountAccent(state string) lipgloss.Color {
 	}
 }
 
-func subscriptionUsageSummary(width int, rows []management.SubscriptionUsageRow, pools []management.SubscriptionUsageAggregate) string {
+func subscriptionUsageSummary(width int, rows []management.SubscriptionUsageRow, pools []management.SubscriptionUsageAggregate, view subscriptionQuotaView) string {
 	fresh := 0
 	stale := 0
 	errored := 0
@@ -371,7 +427,7 @@ func subscriptionUsageSummary(width int, rows []management.SubscriptionUsageRow,
 			"capacity "+compactPercentPoints(capacity),
 		)
 	}
-	parts := []string{heroStyle.Render("Codex subscription limits")}
+	parts := []string{heroStyle.Render(subscriptionQuotaTitle(view))}
 	for _, chip := range chips {
 		chip = safeChromeDisplay(chip)
 		if chip != "" {
@@ -379,6 +435,15 @@ func subscriptionUsageSummary(width int, rows []management.SubscriptionUsageRow,
 		}
 	}
 	return wrappedMetricLine(width, parts...)
+}
+
+func subscriptionQuotaTitle(view subscriptionQuotaView) string {
+	switch view {
+	case subscriptionQuotaSpark:
+		return "Spark subscription limits"
+	default:
+		return "Primary subscription limits"
+	}
 }
 
 func subscriptionPoolSummaryLine(width int, pools []management.SubscriptionUsageAggregate, now time.Time) string {

@@ -161,6 +161,27 @@ type UsageSummary struct {
 	CostMicrounits     int64
 }
 
+type LocalTokenUsageSummary struct {
+	LocalTokenID       int64
+	RequestCount       int
+	OKCount            int
+	WarningCount       int
+	ErrorCount         int
+	PromptTokens       int
+	CompletionTokens   int
+	TotalTokens        int
+	ReasoningTokens    int
+	CacheHitTokens     int
+	CacheMissTokens    int
+	CacheWriteTokens   int
+	ReasoningTokenRate float64
+	CacheHitRate       float64
+	CacheMissRate      float64
+	CacheWriteRate     float64
+	AverageLatencyMS   int64
+	LatestRequestAt    time.Time
+}
+
 type LatencySummary struct {
 	ProviderInstanceID        string
 	RequestCount              int

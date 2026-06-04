@@ -70,6 +70,11 @@ func sanitizeSnapshot(out *ManagementSnapshotResponse) {
 	for i := range out.Usage {
 		out.Usage[i].ProviderInstanceID = safeMachineString(out.Usage[i].ProviderInstanceID)
 	}
+	for i := range out.LocalTokenUsage {
+		if out.LocalTokenUsage[i].LocalTokenID < 0 {
+			out.LocalTokenUsage[i].LocalTokenID = 0
+		}
+	}
 	for i := range out.Latency {
 		out.Latency[i].ProviderInstanceID = safeMachineString(out.Latency[i].ProviderInstanceID)
 	}

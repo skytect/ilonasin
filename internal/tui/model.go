@@ -21,6 +21,7 @@ type Model struct {
 	now                         func() time.Time
 	runtime                     management.RuntimeStatus
 	tokenRows                   []management.LocalToken
+	localTokenUsage             []management.LocalTokenUsageSummary
 	providers                   []management.ProviderInstance
 	credentials                 []management.UpstreamCredential
 	credentialPoolGroups        []management.CredentialPoolGroup

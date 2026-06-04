@@ -25,6 +25,7 @@ func (m *Model) reload() error {
 func (m *Model) applySnapshot(snapshot management.ManagementSnapshotResponse) {
 	m.runtime = snapshot.Runtime
 	m.tokenRows = snapshot.LocalTokens
+	m.localTokenUsage = append([]management.LocalTokenUsageSummary(nil), snapshot.LocalTokenUsage...)
 	m.providers = append([]management.ProviderInstance(nil), snapshot.Providers...)
 	m.credentials = append([]management.UpstreamCredential(nil), snapshot.UpstreamCredentials...)
 	m.credentialPoolGroups = append([]management.CredentialPoolGroup(nil), snapshot.CredentialPoolGroups...)

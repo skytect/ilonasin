@@ -10,6 +10,7 @@ type ManagementSnapshotResponse struct {
 	Runtime              RuntimeStatus             `json:"runtime"`
 	Providers            []ProviderInstance        `json:"providers"`
 	LocalTokens          []LocalToken              `json:"local_tokens"`
+	LocalTokenUsage      []LocalTokenUsageSummary  `json:"local_token_usage"`
 	UpstreamCredentials  []UpstreamCredential      `json:"upstream_credentials"`
 	CredentialPoolGroups []CredentialPoolGroup     `json:"credential_pool_groups"`
 	OAuthCredentials     []OAuthCredential         `json:"oauth_credentials"`
@@ -171,6 +172,27 @@ type UsageSummary struct {
 	CacheMissRate      float64 `json:"cache_miss_rate"`
 	CacheWriteRate     float64 `json:"cache_write_rate"`
 	CostMicrounits     int64   `json:"cost_microunits"`
+}
+
+type LocalTokenUsageSummary struct {
+	LocalTokenID       int64     `json:"local_token_id"`
+	RequestCount       int       `json:"request_count"`
+	OKCount            int       `json:"ok_count"`
+	WarningCount       int       `json:"warning_count"`
+	ErrorCount         int       `json:"error_count"`
+	PromptTokens       int       `json:"prompt_tokens"`
+	CompletionTokens   int       `json:"completion_tokens"`
+	TotalTokens        int       `json:"total_tokens"`
+	ReasoningTokens    int       `json:"reasoning_tokens"`
+	CacheHitTokens     int       `json:"cache_hit_tokens"`
+	CacheMissTokens    int       `json:"cache_miss_tokens"`
+	CacheWriteTokens   int       `json:"cache_write_tokens"`
+	ReasoningTokenRate float64   `json:"reasoning_token_rate"`
+	CacheHitRate       float64   `json:"cache_hit_rate"`
+	CacheMissRate      float64   `json:"cache_miss_rate"`
+	CacheWriteRate     float64   `json:"cache_write_rate"`
+	AverageLatencyMS   int64     `json:"average_latency_ms"`
+	LatestRequestAt    time.Time `json:"latest_request_at"`
 }
 
 type LatencySummary struct {

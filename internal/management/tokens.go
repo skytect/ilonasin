@@ -79,6 +79,7 @@ type ModelCacheReader interface {
 type ObservabilityReader interface {
 	RecentRequests(ctx context.Context, limit int) ([]metadata.RequestSummary, error)
 	UsageByProvider(ctx context.Context) ([]metadata.UsageSummary, error)
+	UsageByLocalToken(ctx context.Context) ([]metadata.LocalTokenUsageSummary, error)
 	LatencyByProvider(ctx context.Context) ([]metadata.LatencySummary, error)
 	StreamSummary(ctx context.Context) ([]metadata.StreamSummary, error)
 	LatestHealth(ctx context.Context) ([]metadata.HealthSummary, error)

@@ -165,6 +165,33 @@ func usageSummariesFromMetadata(rows []metadata.UsageSummary) []UsageSummary {
 	return out
 }
 
+func localTokenUsageSummariesFromMetadata(rows []metadata.LocalTokenUsageSummary) []LocalTokenUsageSummary {
+	out := make([]LocalTokenUsageSummary, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, LocalTokenUsageSummary{
+			LocalTokenID:       row.LocalTokenID,
+			RequestCount:       row.RequestCount,
+			OKCount:            row.OKCount,
+			WarningCount:       row.WarningCount,
+			ErrorCount:         row.ErrorCount,
+			PromptTokens:       row.PromptTokens,
+			CompletionTokens:   row.CompletionTokens,
+			TotalTokens:        row.TotalTokens,
+			ReasoningTokens:    row.ReasoningTokens,
+			CacheHitTokens:     row.CacheHitTokens,
+			CacheMissTokens:    row.CacheMissTokens,
+			CacheWriteTokens:   row.CacheWriteTokens,
+			ReasoningTokenRate: row.ReasoningTokenRate,
+			CacheHitRate:       row.CacheHitRate,
+			CacheMissRate:      row.CacheMissRate,
+			CacheWriteRate:     row.CacheWriteRate,
+			AverageLatencyMS:   row.AverageLatencyMS,
+			LatestRequestAt:    row.LatestRequestAt,
+		})
+	}
+	return out
+}
+
 func latencySummariesFromMetadata(rows []metadata.LatencySummary) []LatencySummary {
 	out := make([]LatencySummary, 0, len(rows))
 	for _, row := range rows {

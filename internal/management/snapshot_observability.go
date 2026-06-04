@@ -13,6 +13,11 @@ func loadObservabilitySnapshot(ctx context.Context, reader ObservabilityReader, 
 		return err
 	}
 	out.Usage = usageSummariesFromMetadata(usage)
+	localTokenUsage, err := reader.UsageByLocalToken(ctx)
+	if err != nil {
+		return err
+	}
+	out.LocalTokenUsage = localTokenUsageSummariesFromMetadata(localTokenUsage)
 	latency, err := reader.LatencyByProvider(ctx)
 	if err != nil {
 		return err

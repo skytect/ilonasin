@@ -113,6 +113,54 @@ func (s *Store) UsageByProvider(ctx context.Context) ([]metadata.UsageSummary, e
 	return out, rows.Err()
 }
 
+func (s *Store) UsageByLocalToken(ctx context.Context) ([]metadata.LocalTokenUsageSummary, error) {
+	rows, err := s.DB.QueryContext(ctx, `
+		SELECT COALESCE(client_token_id, 0), COUNT(*),
+			COALESCE(SUM(CASE WHEN error_class != '' OR http_status >= 500 OR http_status = 429 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN error_class = '' AND http_status >= 400 AND http_status < 500 AND http_status != 429 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN error_class = '' AND http_status < 400 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(prompt_tokens), 0),
+			COALESCE(SUM(completion_tokens), 0),
+			COALESCE(SUM(total_tokens), 0),
+			COALESCE(SUM(reasoning_tokens), 0),
+			COALESCE(SUM(cache_hit_tokens), 0),
+			COALESCE(SUM(cache_write_tokens), 0),
+			COALESCE(AVG(total_latency_ms), 0),
+			MAX(started_at)
+		FROM request_metadata
+		GROUP BY COALESCE(client_token_id, 0)
+		ORDER BY MAX(started_at) DESC, COALESCE(client_token_id, 0) ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []metadata.LocalTokenUsageSummary
+	for rows.Next() {
+		var row metadata.LocalTokenUsageSummary
+		var latency float64
+		var latest string
+		if err := rows.Scan(&row.LocalTokenID, &row.RequestCount, &row.ErrorCount, &row.WarningCount, &row.OKCount,
+			&row.PromptTokens, &row.CompletionTokens, &row.TotalTokens, &row.ReasoningTokens,
+			&row.CacheHitTokens, &row.CacheWriteTokens, &latency, &latest); err != nil {
+			return nil, err
+		}
+		latestAt, err := parseSQLiteTime(latest)
+		if err != nil {
+			return nil, err
+		}
+		row.LatestRequestAt = latestAt
+		row.AverageLatencyMS = int64(latency + 0.5)
+		row.CacheMissTokens = cacheMissTokens(row.PromptTokens, row.CacheHitTokens)
+		row.ReasoningTokenRate = tokenRate(row.ReasoningTokens, row.CompletionTokens)
+		row.CacheHitRate = tokenRate(row.CacheHitTokens, row.PromptTokens)
+		row.CacheMissRate = tokenRate(row.CacheMissTokens, row.PromptTokens)
+		row.CacheWriteRate = tokenRate(row.CacheWriteTokens, row.PromptTokens)
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) LatencyByProvider(ctx context.Context) ([]metadata.LatencySummary, error) {
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT requested_provider_instance, COUNT(*),

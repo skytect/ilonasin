@@ -142,7 +142,7 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 			errorClass = classifyCodexReadError(streamCtx, err)
 		}
 		status := providerStatusForError(http.StatusBadGateway, errorClass)
-		logProviderHTTP(ctx, a.Logger, statusLevel(status, errorClass), "provider_http",
+		attrs := []slog.Attr{
 			slog.String("endpoint", "responses"),
 			slog.String("method", http.MethodPost),
 			slog.String("provider_instance", req.Instance.ID),
@@ -152,7 +152,9 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 			slog.Int64("duration_ms", durationMS(start)),
 			slog.String("error_class", errorClass),
 			slog.String("error_reason", codexReadErrorReason(err)),
-		)
+		}
+		attrs = append(attrs, codexReadErrorAttrs(err)...)
+		logProviderHTTP(ctx, a.Logger, statusLevel(status, errorClass), "provider_http", attrs...)
 		return ChatResult{StatusCode: status, ContentType: "application/json", ErrorClass: errorClass, Latency: time.Since(start)}, err
 	}
 	var out []byte

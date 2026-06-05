@@ -224,7 +224,7 @@ func writeNonStreamingChatPreResponseError(w http.ResponseWriter, final chatAtte
 		return true
 	}
 	if final.err != nil && final.result.Body == nil {
-		writeError(w, http.StatusBadGateway, "upstream request failed", "api_error", errorClass)
+		writeError(w, status, "upstream request failed", "api_error", errorClass)
 		return true
 	}
 	if status < 200 || status >= 300 {

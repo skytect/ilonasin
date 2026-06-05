@@ -25,10 +25,18 @@ func logProviderHTTP(ctx context.Context, logger *slog.Logger, level slog.Level,
 }
 
 func providerStatusForError(defaultStatus int, errorClass string) int {
-	if errorClass == "client_disconnected" || errorClass == "canceled" {
+	switch errorClass {
+	case "client_disconnected", "canceled":
 		return statusClientClosedRequest
+	case "rate_limit_exceeded":
+		return 429
+	case "insufficient_quota":
+		return 402
+	case "upstream_context_length_exceeded":
+		return 400
+	default:
+		return defaultStatus
 	}
-	return defaultStatus
 }
 
 func statusLevel(status int, errorClass string) slog.Level {

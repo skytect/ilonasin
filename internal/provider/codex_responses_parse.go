@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 
 	"ilonasin/internal/openai"
@@ -19,6 +20,13 @@ type codexResponsesResult struct {
 	OutputItems []openai.ResponsesOutputItem
 	Usage       openai.Usage
 	ErrorClass  string
+}
+
+type codexResponseError struct {
+	Code    string `json:"code"`
+	Type    string `json:"type"`
+	Message string `json:"message"`
+	Param   string `json:"param"`
 }
 
 type codexResponseParseState struct {
@@ -163,6 +171,9 @@ func (state *codexResponseParseState) aggregateBytes() int {
 type codexEventFailure struct {
 	class  string
 	reason string
+	code   string
+	type_  string
+	param  string
 }
 
 func (e codexEventFailure) Error() string {
@@ -186,6 +197,14 @@ func codexReadErrorReason(err error) string {
 		return failure.reason
 	}
 	return err.Error()
+}
+
+func codexReadErrorAttrs(err error) []slog.Attr {
+	var failure codexEventFailure
+	if !errors.As(err, &failure) {
+		return nil
+	}
+	return codexFailureLogAttrs(failure)
 }
 
 func handleCodexEvent(data []byte, state *codexResponseParseState) (retErr error) {
@@ -219,12 +238,10 @@ func handleCodexEvent(data []byte, state *codexResponseParseState) (retErr error
 			} `json:"content"`
 		} `json:"item"`
 		Response *struct {
-			ID      string `json:"id"`
-			EndTurn *bool  `json:"end_turn"`
-			Error   *struct {
-				Code string `json:"code"`
-			} `json:"error"`
-			Usage *struct {
+			ID      string              `json:"id"`
+			EndTurn *bool               `json:"end_turn"`
+			Error   *codexResponseError `json:"error"`
+			Usage   *struct {
 				InputTokens        *int `json:"input_tokens"`
 				OutputTokens       *int `json:"output_tokens"`
 				TotalTokens        *int `json:"total_tokens"`
@@ -337,10 +354,7 @@ func handleCodexEvent(data []byte, state *codexResponseParseState) (retErr error
 			}
 		}
 	case "response.failed":
-		if event.Response != nil && event.Response.Error != nil && event.Response.Error.Code == "rate_limit_exceeded" {
-			return codexEventFailure{class: "rate_limit_exceeded"}
-		}
-		return codexEventFailure{class: "upstream_response_failed"}
+		return codexFailedEventFailure(event.Response)
 	case "response.incomplete":
 		return codexEventFailure{class: "upstream_response_incomplete"}
 	}
@@ -376,7 +390,7 @@ func codexEventContextError(err error, eventType, itemType string) error {
 		return nil
 	}
 	var failure codexEventFailure
-	if !errors.As(err, &failure) || failure.reason != "" {
+	if !errors.As(err, &failure) || failure.reason != "" || codexEventFailureIsUpstreamStatus(eventType) {
 		return err
 	}
 	reason := fmt.Sprintf("invalid codex event %q", eventType)
@@ -384,6 +398,92 @@ func codexEventContextError(err error, eventType, itemType string) error {
 		reason = fmt.Sprintf("%s item %q", reason, itemType)
 	}
 	return codexEventFailure{class: failure.class, reason: reason}
+}
+
+func codexEventFailureIsUpstreamStatus(eventType string) bool {
+	switch eventType {
+	case "response.failed", "response.incomplete":
+		return true
+	default:
+		return false
+	}
+}
+
+func codexFailedEventFailure(response *struct {
+	ID      string              `json:"id"`
+	EndTurn *bool               `json:"end_turn"`
+	Error   *codexResponseError `json:"error"`
+	Usage   *struct {
+		InputTokens        *int `json:"input_tokens"`
+		OutputTokens       *int `json:"output_tokens"`
+		TotalTokens        *int `json:"total_tokens"`
+		InputTokensDetails *struct {
+			CachedTokens int `json:"cached_tokens"`
+		} `json:"input_tokens_details"`
+		OutputTokensDetails *struct {
+			ReasoningTokens int `json:"reasoning_tokens"`
+		} `json:"output_tokens_details"`
+	} `json:"usage"`
+}) codexEventFailure {
+	if response == nil || response.Error == nil {
+		return codexEventFailure{class: "upstream_response_failed", reason: "codex response failed"}
+	}
+	return codexFailureFromError(*response.Error)
+}
+
+func codexFailureFromError(err codexResponseError) codexEventFailure {
+	code := strings.TrimSpace(err.Code)
+	typ := strings.TrimSpace(err.Type)
+	message := strings.TrimSpace(err.Message)
+	param := strings.TrimSpace(err.Param)
+	class := codexErrorClass(code, typ, message)
+	reason := codexErrorReason(code, typ, message)
+	return codexEventFailure{class: class, reason: reason, code: code, type_: typ, param: param}
+}
+
+func codexErrorClass(code, typ, message string) string {
+	text := strings.ToLower(code + " " + typ + " " + message)
+	switch {
+	case strings.Contains(text, "rate_limit") || strings.Contains(text, "rate limit") || strings.Contains(text, "too many requests"):
+		return "rate_limit_exceeded"
+	case strings.Contains(text, "insufficient_quota") || strings.Contains(text, "insufficient balance") || strings.Contains(text, "payment required"):
+		return "insufficient_quota"
+	case strings.Contains(text, "context_length") || strings.Contains(text, "context length") || strings.Contains(text, "context window") || strings.Contains(text, "maximum context"):
+		return "upstream_context_length_exceeded"
+	default:
+		return "upstream_response_failed"
+	}
+}
+
+func codexErrorReason(code, typ, message string) string {
+	parts := make([]string, 0, 3)
+	if code != "" {
+		parts = append(parts, "code="+code)
+	}
+	if typ != "" {
+		parts = append(parts, "type="+typ)
+	}
+	if message != "" {
+		parts = append(parts, "message="+message)
+	}
+	if len(parts) == 0 {
+		return "codex response failed"
+	}
+	return "codex response failed: " + strings.Join(parts, "; ")
+}
+
+func codexFailureLogAttrs(failure codexEventFailure) []slog.Attr {
+	attrs := []slog.Attr{}
+	if failure.code != "" {
+		attrs = append(attrs, slog.String("upstream_error_code", failure.code))
+	}
+	if failure.type_ != "" {
+		attrs = append(attrs, slog.String("upstream_error_type", failure.type_))
+	}
+	if failure.param != "" {
+		attrs = append(attrs, slog.String("upstream_error_param", failure.param))
+	}
+	return attrs
 }
 
 func (state *codexResponseParseState) addCodexFunctionCall(key, callID, name, namespace string, arguments json.RawMessage) error {

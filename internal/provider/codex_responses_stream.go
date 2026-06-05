@@ -149,7 +149,7 @@ func (a HTTPChatAdapter) streamCodexChat(ctx context.Context, req ChatRequest, s
 		if !summary.Started {
 			summary.PreStreamError = true
 		}
-		logProviderHTTP(ctx, a.Logger, statusLevel(summary.StatusCode, summary.ErrorClass), "provider_http",
+		attrs := []slog.Attr{
 			slog.String("endpoint", "responses_stream"),
 			slog.String("method", http.MethodPost),
 			slog.String("provider_instance", req.Instance.ID),
@@ -159,7 +159,12 @@ func (a HTTPChatAdapter) streamCodexChat(ctx context.Context, req ChatRequest, s
 			slog.Int64("duration_ms", durationMS(start)),
 			slog.String("error_class", summary.ErrorClass),
 			slog.String("stream_status", summary.CompletionStatus),
-		)
+		}
+		attrs = append(attrs, codexReadErrorAttrs(err)...)
+		if reason := codexReadErrorReason(err); reason != "" {
+			attrs = append(attrs, slog.String("error_reason", reason))
+		}
+		logProviderHTTP(ctx, a.Logger, statusLevel(summary.StatusCode, summary.ErrorClass), "provider_http", attrs...)
 		return withStreamLatency(start, summary), err
 	}
 	logProviderHTTP(ctx, a.Logger, slog.LevelInfo, "provider_http",
@@ -315,10 +320,8 @@ func (a HTTPChatAdapter) handleCodexStreamEvent(ctx context.Context, data []byte
 			} `json:"content"`
 		} `json:"item"`
 		Response *struct {
-			Error *struct {
-				Code string `json:"code"`
-			} `json:"error"`
-			Usage *codexUsagePayload `json:"usage"`
+			Error *codexResponseError `json:"error"`
+			Usage *codexUsagePayload  `json:"usage"`
 		} `json:"response"`
 	}
 	if err := json.Unmarshal(data, &event); err != nil {
@@ -500,13 +503,10 @@ func (a HTTPChatAdapter) handleCodexStreamEvent(ctx context.Context, data []byte
 		}
 		summary.Done = true
 	case "response.failed":
-		if event.Response != nil && event.Response.Error != nil && event.Response.Error.Code == "rate_limit_exceeded" {
-			summary.ErrorClass = "rate_limit_exceeded"
-		} else {
-			summary.ErrorClass = "upstream_response_failed"
-		}
+		failure := codexStreamFailedEventFailure(event.Response)
+		summary.ErrorClass = failure.class
 		summary.CompletionStatus = "upstream_error"
-		return fmt.Errorf("codex response failed")
+		return failure
 	case "response.incomplete":
 		summary.ErrorClass = "upstream_response_incomplete"
 		summary.CompletionStatus = "upstream_error"
@@ -811,4 +811,14 @@ func marshalCodexUsageChunk(id, model string, created int64, usage openai.Usage)
 		"choices": []any{},
 		"usage":   usageBody,
 	})
+}
+
+func codexStreamFailedEventFailure(response *struct {
+	Error *codexResponseError `json:"error"`
+	Usage *codexUsagePayload  `json:"usage"`
+}) codexEventFailure {
+	if response == nil || response.Error == nil {
+		return codexEventFailure{class: "upstream_response_failed", reason: "codex response failed"}
+	}
+	return codexFailureFromError(*response.Error)
 }

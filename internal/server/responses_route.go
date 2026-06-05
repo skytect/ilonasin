@@ -175,7 +175,7 @@ func writeResponsesPreStreamError(w http.ResponseWriter, final chatAttempt, stat
 		return errors.New("written")
 	}
 	if final.err != nil && final.result.Body == nil {
-		writeError(w, http.StatusBadGateway, "upstream request failed", "api_error", errorClass)
+		writeError(w, status, "upstream request failed", "api_error", errorClass)
 		return errors.New("written")
 	}
 	if status < 200 || status >= 300 {

@@ -56,7 +56,6 @@ func providerAccountsFromCredentials(rows []credentials.ProviderAccountMetadata)
 	out := make([]ProviderAccount, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, ProviderAccount{
-			ID:                 row.ID,
 			ProviderInstanceID: row.ProviderInstanceID,
 			CredentialID:       row.CredentialID,
 			DisplayLabel:       row.DisplayLabel,

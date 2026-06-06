@@ -101,7 +101,6 @@ type OAuthCredential struct {
 }
 
 type ProviderAccount struct {
-	ID                 int64     `json:"id"`
 	ProviderInstanceID string    `json:"provider_instance_id"`
 	CredentialID       int64     `json:"credential_id"`
 	DisplayLabel       string    `json:"display_label"`

@@ -73,6 +73,7 @@ type CodexReasoning struct {
 
 func ModelsResponseFromMetadata(rows []ModelMetadata) ModelsResponse {
 	rows = sortedModelMetadata(rows)
+	bareModelCounts := modelIDCounts(rows)
 	data := make([]ModelListItem, 0, len(rows))
 	codexModels := make([]CodexModelInfo, 0, len(rows))
 	for _, row := range rows {
@@ -85,8 +86,21 @@ func ModelsResponseFromMetadata(rows []ModelMetadata) ModelsResponse {
 		if codex, ok := codexModelInfoFromMetadata(row, id); ok {
 			codexModels = append(codexModels, codex)
 		}
+		if bareModelCounts[row.ModelID] == 1 && row.ModelID != id {
+			if codex, ok := codexModelInfoFromMetadata(row, row.ModelID); ok {
+				codexModels = append(codexModels, codex)
+			}
+		}
 	}
 	return ModelsResponse{Object: "list", Data: data, Models: codexModels}
+}
+
+func modelIDCounts(rows []ModelMetadata) map[string]int {
+	counts := map[string]int{}
+	for _, row := range rows {
+		counts[row.ModelID]++
+	}
+	return counts
 }
 
 func sortedModelMetadata(rows []ModelMetadata) []ModelMetadata {

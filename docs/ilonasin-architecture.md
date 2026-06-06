@@ -115,7 +115,10 @@ Provider `type` names are concise. For example, use `type = "codex"`, not
 `type = "codex_subscription"`.
 
 `base_url`, auth issuer URLs, and similar fields are optional overrides. They
-are not required for built-in provider types when defaults are known.
+are not required for built-in provider types when defaults are known. Provider
+URL overrides must be `https` URLs with a host and must not include userinfo,
+query, or fragment components. Path components are allowed for provider bases
+such as Codex.
 
 ### SQLite State
 

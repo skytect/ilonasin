@@ -177,6 +177,15 @@ func validateHTTPSBaseURL(raw string) error {
 	if u.Scheme != "https" || u.Host == "" {
 		return fmt.Errorf("must be an https URL")
 	}
+	if u.User != nil {
+		return fmt.Errorf("must not include userinfo")
+	}
+	if u.RawQuery != "" {
+		return fmt.Errorf("must not include query")
+	}
+	if u.Fragment != "" {
+		return fmt.Errorf("must not include fragment")
+	}
 	return nil
 }
 

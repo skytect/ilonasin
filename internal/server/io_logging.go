@@ -97,7 +97,7 @@ func (s *Server) ioLogCapturedOutput(r *http.Request, status int, contentType st
 		Body:        s.scrubIOBody(body),
 	}
 	if truncated {
-		record.Meta = map[string]any{"body_truncated": true}
+		record.Meta = &logging.IOMetadata{BodyTruncated: true}
 	}
 	s.ioLog(r, record)
 }
@@ -149,22 +149,12 @@ func (s *Server) captureIOEnabled() bool {
 	return s.ioLogger != nil
 }
 
-type ioRequestMetadata struct {
-	Model             string   `json:"model,omitempty"`
-	Stream            *bool    `json:"stream,omitempty"`
-	MessageCount      int      `json:"message_count,omitempty"`
-	InputCount        int      `json:"input_count,omitempty"`
-	ToolCount         int      `json:"tool_count,omitempty"`
-	InputItemTypes    []string `json:"input_item_types,omitempty"`
-	InputMessageRoles []string `json:"input_message_roles,omitempty"`
-}
-
-func (s *Server) ioRequestMeta(body []byte) *ioRequestMetadata {
+func (s *Server) ioRequestMeta(body []byte) *logging.IOMetadata {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil
 	}
-	meta := &ioRequestMetadata{}
+	meta := &logging.IOMetadata{}
 	if value, ok := raw["model"]; ok {
 		_ = json.Unmarshal(value, &meta.Model)
 		meta.Model = s.scrubIOText(meta.Model)

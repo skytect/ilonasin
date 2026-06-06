@@ -38,16 +38,31 @@ type IOScrubber struct {
 }
 
 type IORecord struct {
-	Time        time.Time `json:"time"`
-	ID          string    `json:"id"`
-	Direction   string    `json:"direction"`
-	Method      string    `json:"method,omitempty"`
-	Route       string    `json:"route,omitempty"`
-	Status      int       `json:"status,omitempty"`
-	ContentType string    `json:"content_type,omitempty"`
-	Bytes       int       `json:"bytes"`
-	Body        string    `json:"body,omitempty"`
-	Meta        any       `json:"meta,omitempty"`
+	Time        time.Time   `json:"time"`
+	ID          string      `json:"id"`
+	Direction   string      `json:"direction"`
+	Method      string      `json:"method,omitempty"`
+	Route       string      `json:"route,omitempty"`
+	Status      int         `json:"status,omitempty"`
+	ContentType string      `json:"content_type,omitempty"`
+	Bytes       int         `json:"bytes"`
+	Body        string      `json:"body,omitempty"`
+	Meta        *IOMetadata `json:"meta,omitempty"`
+}
+
+type IOMetadata struct {
+	Model             string   `json:"model,omitempty"`
+	Stream            *bool    `json:"stream,omitempty"`
+	MessageCount      int      `json:"message_count,omitempty"`
+	InputCount        int      `json:"input_count,omitempty"`
+	ToolCount         int      `json:"tool_count,omitempty"`
+	InputItemTypes    []string `json:"input_item_types,omitempty"`
+	InputMessageRoles []string `json:"input_message_roles,omitempty"`
+	BodyTruncated     bool     `json:"body_truncated,omitempty"`
+	ProviderInstance  string   `json:"provider_instance,omitempty"`
+	ProviderType      string   `json:"provider_type,omitempty"`
+	CredentialID      int64    `json:"credential_id,omitempty"`
+	StreamEvent       int      `json:"stream_event,omitempty"`
 }
 
 type IOOptions struct {

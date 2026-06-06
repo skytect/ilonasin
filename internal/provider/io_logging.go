@@ -24,10 +24,10 @@ func (a HTTPChatAdapter) recordUpstreamBody(instance Instance, credentialID int6
 		ContentType: contentType,
 		Bytes:       len(body),
 		Body:        a.IOLogger.ScrubBody(body),
-		Meta: map[string]any{
-			"provider_instance": instance.ID,
-			"provider_type":     instance.Type,
-			"credential_id":     credentialID,
+		Meta: &logging.IOMetadata{
+			ProviderInstance: instance.ID,
+			ProviderType:     instance.Type,
+			CredentialID:     credentialID,
 		},
 	})
 	return id
@@ -50,11 +50,11 @@ func (a HTTPChatAdapter) recordUpstreamSSE(instance Instance, credentialID int64
 		ContentType: "text/event-stream",
 		Bytes:       len(body),
 		Body:        a.IOLogger.ScrubBody(body),
-		Meta: map[string]any{
-			"provider_instance": instance.ID,
-			"provider_type":     instance.Type,
-			"credential_id":     credentialID,
-			"stream_event":      eventIndex,
+		Meta: &logging.IOMetadata{
+			ProviderInstance: instance.ID,
+			ProviderType:     instance.Type,
+			CredentialID:     credentialID,
+			StreamEvent:      eventIndex,
 		},
 	})
 	return id

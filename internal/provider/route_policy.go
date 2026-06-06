@@ -1,10 +1,11 @@
 package provider
 
 type RoutePolicy struct {
-	Responses    ResponsesRoutePolicy
-	Anthropic    AnthropicRoutePolicy
-	Stream       StreamRoutePolicy
-	ChatMetadata ChatOptionMetadataPolicy
+	Responses     ResponsesRoutePolicy
+	Anthropic     AnthropicRoutePolicy
+	Stream        StreamRoutePolicy
+	ErrorResponse ErrorResponseRoutePolicy
+	ChatMetadata  ChatOptionMetadataPolicy
 }
 
 type ResponsesRoutePolicy struct {
@@ -22,6 +23,10 @@ type StreamRoutePolicy struct {
 	ExposeProviderErrorClasses bool
 }
 
+type ErrorResponseRoutePolicy struct {
+	WriteQuotaPoolUsageLimitEnvelope bool
+}
+
 func RoutePolicyForInstance(instance Instance) RoutePolicy {
 	switch instance.Type {
 	case "codex":
@@ -36,6 +41,9 @@ func RoutePolicyForInstance(instance Instance) RoutePolicy {
 			},
 			Stream: StreamRoutePolicy{
 				ExposeProviderErrorClasses: true,
+			},
+			ErrorResponse: ErrorResponseRoutePolicy{
+				WriteQuotaPoolUsageLimitEnvelope: true,
 			},
 			ChatMetadata: ChatOptionMetadataPolicy{codex: true, suppressCodexDefaultTier: true},
 		}

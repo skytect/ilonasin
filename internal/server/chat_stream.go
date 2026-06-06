@@ -227,7 +227,7 @@ func (s *Server) handleStreamingChat(w http.ResponseWriter, r *http.Request, sc 
 	exec := s.executeStreamingChat(r, sc, sink)
 	final := exec.final
 	summary := final.summary
-	summary = writeStreamingChatPreResponseError(w, summary, final.err, sink.started, streamErrorExposurePolicyFor(sc.instance))
+	summary = writeStreamingChatPreResponseError(w, summary, final.err, sink.started, sc.instance, streamErrorExposurePolicyFor(sc.instance))
 	s.recordStreamingChat(r, sc, exec, summary, sink.started)
 }
 
@@ -295,7 +295,7 @@ func (s *Server) recordStreamingChat(r *http.Request, sc streamContext, exec str
 	return requestID
 }
 
-func writeStreamingChatPreResponseError(w http.ResponseWriter, summary provider.ChatStreamSummary, err error, sinkStarted bool, policy streamErrorExposurePolicy) provider.ChatStreamSummary {
+func writeStreamingChatPreResponseError(w http.ResponseWriter, summary provider.ChatStreamSummary, err error, sinkStarted bool, instance provider.Instance, policy streamErrorExposurePolicy) provider.ChatStreamSummary {
 	if (err == nil && summary.StatusCode < 400) || sinkStarted {
 		return summary
 	}
@@ -304,6 +304,10 @@ func writeStreamingChatPreResponseError(w http.ResponseWriter, summary provider.
 		localStatus = http.StatusBadGateway
 	}
 	summary.StatusCode = localStatus
+	if shouldWriteQuotaPoolUsageLimitEnvelope(instance, localStatus, summary.ErrorClass) {
+		writeCodexQuotaPoolExhaustedError(w, summary.RetryAfter)
+		return summary
+	}
 	errorCode := "upstream_stream_error"
 	if summary.ErrorClass == "upstream_auth_failed" ||
 		summary.ErrorClass == "rate_limit_exceeded" ||

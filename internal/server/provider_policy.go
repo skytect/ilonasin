@@ -37,6 +37,11 @@ func streamErrorExposurePolicyFor(instance provider.Instance) streamErrorExposur
 	}
 }
 
+func shouldWriteQuotaPoolUsageLimitEnvelope(instance provider.Instance, status int, errorClass string) bool {
+	policy := provider.RoutePolicyForInstance(instance).ErrorResponse
+	return policy.WriteQuotaPoolUsageLimitEnvelope && status == http.StatusTooManyRequests && errorClass == "upstream_quota_pool_exhausted"
+}
+
 func (s *Server) canRefreshCodexOAuth(instance provider.Instance) bool {
 	return metadata.SupportsCodexOAuth(instance.Type, instance.OAuth) && s.refresh != nil
 }

@@ -205,19 +205,23 @@ func (s *Server) handleNonStreamingChat(w http.ResponseWriter, r *http.Request, 
 	if errorClass == "client_disconnected" {
 		return
 	}
-	if writeNonStreamingChatPreResponseError(w, final, status, errorClass) {
+	if writeNonStreamingChatPreResponseError(w, final, status, errorClass, nc.instance) {
 		return
 	}
 	writeRaw(w, status, final.result.ContentType, final.result.Body)
 }
 
-func writeNonStreamingChatPreResponseError(w http.ResponseWriter, final chatAttempt, status int, errorClass string) bool {
+func writeNonStreamingChatPreResponseError(w http.ResponseWriter, final chatAttempt, status int, errorClass string, instance provider.Instance) bool {
 	if final.err != nil && final.result.InvalidBody {
 		writeError(w, http.StatusBadGateway, "upstream returned an invalid chat completion response", "api_error", "upstream_invalid_response")
 		return true
 	}
 	if final.err != nil && final.result.BodyTruncated {
 		writeError(w, http.StatusBadGateway, "upstream response body exceeded the configured limit", "api_error", "upstream_body_too_large")
+		return true
+	}
+	if shouldWriteQuotaPoolUsageLimitEnvelope(instance, status, errorClass) {
+		writeCodexQuotaPoolExhaustedError(w, final.result.RetryAfter)
 		return true
 	}
 	if retryableChatAttempt(final.result, final.err) {

@@ -128,7 +128,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request, token c
 		s.recordNonStreamingChat(r, nc, exec, status, errorClass)
 		return
 	}
-	if err := writeResponsesPreStreamError(w, exec.final, status, errorClass); err != nil {
+	if err := writeResponsesPreStreamError(w, exec.final, status, errorClass, instance); err != nil {
 		s.recordNonStreamingChat(r, nc, exec, status, errorClass)
 		return
 	}
@@ -161,13 +161,17 @@ func responsesMessageResult(final chatAttempt) (openai.ChatCompletionMessageResu
 	return message, status, errorClass
 }
 
-func writeResponsesPreStreamError(w http.ResponseWriter, final chatAttempt, status int, errorClass string) error {
+func writeResponsesPreStreamError(w http.ResponseWriter, final chatAttempt, status int, errorClass string, instance provider.Instance) error {
 	if final.err != nil && final.result.InvalidBody {
 		writeError(w, http.StatusBadGateway, "upstream returned an invalid chat completion response", "api_error", "upstream_invalid_response")
 		return errors.New("written")
 	}
 	if final.err != nil && final.result.BodyTruncated {
 		writeError(w, http.StatusBadGateway, "upstream response body exceeded the configured limit", "api_error", "upstream_body_too_large")
+		return errors.New("written")
+	}
+	if shouldWriteQuotaPoolUsageLimitEnvelope(instance, status, errorClass) {
+		writeCodexQuotaPoolExhaustedError(w, final.result.RetryAfter)
 		return errors.New("written")
 	}
 	if retryableChatAttempt(final.result, final.err) {

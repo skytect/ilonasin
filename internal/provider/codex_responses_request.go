@@ -118,7 +118,7 @@ func marshalCodexResponsesRequest(req openai.ChatCompletionRequest, upstreamMode
 		Store:          false,
 		Stream:         true,
 		Include:        []string{},
-		PromptCacheKey: ids.ThreadID,
+		PromptCacheKey: codexResponsesPromptCacheKey(req, ids),
 		ClientMetadata: map[string]string{
 			"x-codex-installation-id": ids.InstallationID,
 		},
@@ -216,6 +216,13 @@ func marshalCodexResponsesRequest(req openai.ChatCompletionRequest, upstreamMode
 	out.Input = inputItems
 	body, err := json.Marshal(out)
 	return body, out.ServiceTier, err
+}
+
+func codexResponsesPromptCacheKey(req openai.ChatCompletionRequest, ids codexRequestIDs) string {
+	if key := strings.TrimSpace(req.CodexPromptCacheKey); key != "" {
+		return key
+	}
+	return ids.ThreadID
 }
 
 func codexResponsesRequestShapeAttrs(req openai.ChatCompletionRequest) []slog.Attr {

@@ -46,6 +46,7 @@ type ChatCompletionRequest struct {
 	PresentFields       map[string]bool        `json:"-"`
 	CodexResponsesInput []json.RawMessage      `json:"-"`
 	CodexResponsesTools []json.RawMessage      `json:"-"`
+	CodexPromptCacheKey string                 `json:"-"`
 	CodexInstructions   string                 `json:"-"`
 }
 

@@ -711,6 +711,7 @@ func (r ResponsesRequest) ToChatCompletionRequest(policy ResponsesConversionPoli
 		PresentFields:       map[string]bool{"model": true, "messages": true},
 		CodexInstructions:   codexInstructions,
 		CodexResponsesInput: nil,
+		CodexPromptCacheKey: r.PromptCacheKey,
 	}
 	if policy.PreserveCodexInput {
 		req.CodexResponsesInput = codexInput

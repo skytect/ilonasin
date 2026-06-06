@@ -14,9 +14,7 @@ func (m Model) writeFallbacks(b *strings.Builder) {
 	b.WriteString(renderSectionBanner(width, "Fallback metadata", fmt.Sprintf("events %d", len(m.fallbackRows))))
 	b.WriteByte('\n')
 	if len(m.fallbackRows) == 0 {
-		b.WriteString(metricLine(
-			statusBadge("enabled"),
-			cardTitleStyle.Render("fallback ledger"),
+		b.WriteString(renderCompactEmptyState(width, "enabled", "fallback ledger",
 			metricChip("events", "0"),
 			metricChip("visibility", "metadata-only"),
 			metricChip("reason", "none"),

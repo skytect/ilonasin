@@ -5,8 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
-
 	"ilonasin/internal/management"
 )
 
@@ -16,9 +14,11 @@ func (m Model) writeHealthAndQuota(b *strings.Builder) {
 	b.WriteString(renderPaneSubhead(width, "Health", fmt.Sprintf("endpoints %d", len(m.healthRows))))
 	b.WriteByte('\n')
 	if len(m.healthRows) == 0 {
-		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("42"), "current health",
-			metricLine(metricChip("endpoints", "0"), metricChip("providers", "0")),
-			metricLine(metricChip("state", "quiet"), metricChip("visibility", "metadata-only")),
+		b.WriteString(renderCompactEmptyState(width, "disabled", "current health",
+			metricChip("endpoints", "0"),
+			metricChip("providers", "0"),
+			metricChip("state", "quiet"),
+			metricChip("visibility", "metadata-only"),
 		))
 		b.WriteByte('\n')
 	}
@@ -33,9 +33,11 @@ func (m Model) writeHealthAndQuota(b *strings.Builder) {
 	b.WriteString(renderPaneSubhead(width, "Quota", fmt.Sprintf("blocks %d", len(m.quotaRows))))
 	b.WriteByte('\n')
 	if len(m.quotaRows) == 0 {
-		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("214"), "quota ledger",
-			metricLine(metricChip("blocks", "0"), metricChip("cooldowns", "0")),
-			metricLine(metricChip("reset", "none"), metricChip("visibility", "metadata-only")),
+		b.WriteString(renderCompactEmptyState(width, "disabled", "quota ledger",
+			metricChip("blocks", "0"),
+			metricChip("cooldowns", "0"),
+			metricChip("reset", "none"),
+			metricChip("visibility", "metadata-only"),
 		))
 		b.WriteByte('\n')
 	}

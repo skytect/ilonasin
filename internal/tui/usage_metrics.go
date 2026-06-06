@@ -5,8 +5,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
-
 	"ilonasin/internal/management"
 )
 
@@ -20,9 +18,12 @@ func (m Model) writeUsageMetrics(b *strings.Builder) {
 		b.WriteByte('\n')
 	}
 	if len(providerRows) == 0 {
-		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("42"), "usage ledger",
-			metricLine(metricChip("providers", "0"), metricChip("requests", "0")),
-			metricLine(metricChip("tokens", "0"), metricChip("latency", "0ms"), metricChip("visibility", "metadata-only")),
+		b.WriteString(renderCompactEmptyState(width, "disabled", "usage ledger",
+			metricChip("providers", "0"),
+			metricChip("requests", "0"),
+			metricChip("tokens", "0"),
+			metricChip("latency", "0ms"),
+			metricChip("visibility", "metadata-only"),
 		))
 		b.WriteByte('\n')
 	}
@@ -37,9 +38,11 @@ func (m Model) writeUsageMetrics(b *strings.Builder) {
 	b.WriteString(renderPaneSubhead(width, "Streams", fmt.Sprintf("streams %d", totalStreamCount(m.streamRows)), fmt.Sprintf("chunks %s", compactInt(totalStreamChunks(m.streamRows)))))
 	b.WriteByte('\n')
 	if len(m.streamRows) == 0 {
-		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("110"), "stream ledger",
-			metricLine(metricChip("streams", "0"), metricChip("chunks", "0")),
-			metricLine(metricChip("status", "quiet"), metricChip("visibility", "metadata-only")),
+		b.WriteString(renderCompactEmptyState(width, "disabled", "stream ledger",
+			metricChip("streams", "0"),
+			metricChip("chunks", "0"),
+			metricChip("status", "quiet"),
+			metricChip("visibility", "metadata-only"),
 		))
 		b.WriteByte('\n')
 	}

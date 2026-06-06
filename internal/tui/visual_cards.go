@@ -45,6 +45,16 @@ func renderPaneSubhead(width int, title string, chips ...string) string {
 	return wrapContainerLine(width, strings.Join(parts, " "))
 }
 
+func renderCompactEmptyState(width int, status, title string, parts ...string) string {
+	title = safeWrappedChromeDisplay(title)
+	if title == "" {
+		title = "ledger"
+	}
+	lineParts := []string{statusBadge(status), cardTitleStyle.Render(title)}
+	lineParts = append(lineParts, parts...)
+	return wrapTargetedLines(width, wrappedMetricLine(width, lineParts...))
+}
+
 func renderCardGrid(width int, cards []string) string {
 	if len(cards) == 0 {
 		return ""

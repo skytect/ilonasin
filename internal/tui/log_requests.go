@@ -14,9 +14,7 @@ func (m Model) writeRecentRequests(b *strings.Builder) {
 	b.WriteString(renderSectionBanner(width, "Request metadata", fmt.Sprintf("recent %d", len(m.requestRows))))
 	b.WriteByte('\n')
 	if len(m.requestRows) == 0 {
-		b.WriteString(metricLine(
-			statusBadge("enabled"),
-			cardTitleStyle.Render("metadata ledger"),
+		b.WriteString(renderCompactEmptyState(width, "enabled", "metadata ledger",
 			metricChip("recent", "0"),
 			metricChip("visibility", "metadata-only"),
 			metricChip("content", "redacted"),

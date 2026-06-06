@@ -53,7 +53,7 @@ func responsesToolsToChatTools(tools []json.RawMessage, preserveCodexTools bool)
 			continue
 		}
 		if typ != "function" {
-			continue
+			return nil, nil, fmt.Errorf("tools[%d].type is unsupported", i)
 		}
 		if key, ok := firstUnsupportedAnyField(tool, "type", "name", "description", "parameters", "strict", "defer_loading"); ok {
 			return nil, nil, fmt.Errorf("tools[%d].%s is unsupported", i, key)
@@ -67,7 +67,7 @@ func responsesToolsToChatTools(tools []json.RawMessage, preserveCodexTools bool)
 			deferLoadingValue = value
 		}
 		if deferLoadingValue {
-			continue
+			return nil, nil, fmt.Errorf("tools[%d].defer_loading is unsupported", i)
 		}
 		if strict, ok := tool["strict"]; ok {
 			value, ok := strict.(bool)
@@ -75,7 +75,7 @@ func responsesToolsToChatTools(tools []json.RawMessage, preserveCodexTools bool)
 				return nil, nil, fmt.Errorf("tools[%d].strict must be a boolean", i)
 			}
 			if value {
-				continue
+				return nil, nil, fmt.Errorf("tools[%d].strict is unsupported", i)
 			}
 		}
 		name, _ := tool["name"].(string)
@@ -102,18 +102,6 @@ func responsesToolsToChatTools(tools []json.RawMessage, preserveCodexTools bool)
 				return nil, nil, fmt.Errorf("tools[%d].parameters must be an object", i)
 			}
 			function["parameters"] = parameters
-		}
-		if strict, ok := tool["strict"]; ok {
-			value, ok := strict.(bool)
-			if !ok {
-				return nil, nil, fmt.Errorf("tools[%d].strict must be a boolean", i)
-			}
-			if value {
-				return nil, nil, fmt.Errorf("tools[%d].strict is unsupported", i)
-			}
-		}
-		if deferLoadingValue {
-			continue
 		}
 		out = append(out, map[string]any{
 			"type":     "function",

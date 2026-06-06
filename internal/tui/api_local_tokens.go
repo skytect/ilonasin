@@ -24,7 +24,7 @@ func (m Model) writeLocalTokens(b *strings.Builder) {
 	b.WriteByte('\n')
 	if len(m.tokenRows) == 0 {
 		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("110"), "downstream tokens",
-			metricLine(metricChip("enabled", "0"), metricChip("disabled", "0"), metricChip("requests", compactInt(localTokenUsageRequestTotal(m.localTokenUsage)))),
+			metricLine(metricChip("usage", "all retained"), metricChip("enabled", "0"), metricChip("disabled", "0"), metricChip("requests", compactInt(localTokenUsageRequestTotal(m.localTokenUsage)))),
 			metricLine(metricChip("scope", "local-api"), metricChip("upstream", "providers")),
 		))
 		b.WriteByte('\n')
@@ -71,9 +71,7 @@ type localTokenOverview struct {
 
 func localTokenOverviewFromRows(rows []management.LocalToken, usageRows []management.LocalTokenUsageSummary) localTokenOverview {
 	var overview localTokenOverview
-	knownTokenIDs := make(map[int64]bool, len(rows))
 	for _, row := range rows {
-		knownTokenIDs[row.ID] = true
 		if row.Disabled {
 			overview.Disabled++
 		} else {
@@ -88,9 +86,6 @@ func localTokenOverviewFromRows(rows []management.LocalToken, usageRows []manage
 		}
 	}
 	for _, row := range usageRows {
-		if !knownTokenIDs[row.LocalTokenID] {
-			continue
-		}
 		overview.Requests += row.RequestCount
 		overview.OK += row.OKCount
 		overview.Warning += row.WarningCount
@@ -115,6 +110,7 @@ func localTokenOverviewLine(rows []management.LocalToken, usageRows []management
 	lines := []string{
 		wrappedMetricLine(width,
 			statusBadge(localTokenOverviewState(overview)),
+			metricChip("usage", "all retained"),
 			metricChip("req", compactInt(overview.Requests)),
 			metricChip("ok", compactInt(overview.OK)),
 			metricChip("warn", compactInt(overview.Warning)),
@@ -127,6 +123,7 @@ func localTokenOverviewLine(rows []management.LocalToken, usageRows []management
 		lines = []string{
 			wrappedMetricLine(width,
 				statusBadge(localTokenOverviewState(overview)),
+				metricChip("usage", "all retained"),
 				metricChip("scope", "local-api"),
 				metricChip("upstream", "providers"),
 				timeChip("newest", now, overview.NewestCreated),
@@ -259,6 +256,7 @@ func localTokenUnknownUsageRow(row management.LocalTokenUsageSummary, now time.T
 	headParts := append([]string{
 		statusBadge(localTokenUsageState(row)),
 		cardTitleStyle.Render("unknown/deleted token"),
+		metricChip("included", "aggregate"),
 	}, localTokenUsageStatusChips(row)...)
 	lines := []string{
 		wrappedMetricLine(width, headParts...),

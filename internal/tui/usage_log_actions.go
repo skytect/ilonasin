@@ -2,13 +2,17 @@ package tui
 
 import (
 	"context"
-	"log/slog"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"ilonasin/internal/management"
 )
+
+type telemetryPrunedMsg struct {
+	result management.PruneResult
+	err    error
+}
 
 func (m Model) updateUsageLogKey(key tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	switch key.String() {
@@ -29,14 +33,14 @@ func (m Model) updateUsageLogKey(key tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 }
 
 func (m Model) pruneTelemetryAction() (tea.Model, tea.Cmd) {
-	m.clearReveal()
-	if err := m.pruneTelemetry(); err != nil {
-		m.logError(context.Background(), "tui_telemetry_prune_failed", err)
-		m.err = "telemetry prune failed"
+	if m.mutationInFlight {
 		return m, nil
 	}
-	next, cmd := m.startSnapshotRefresh(false)
-	return next, cmd
+	m.clearReveal()
+	if m.pruner == nil {
+		return m, nil
+	}
+	return m.startMutation(m.pruneTelemetryCmd())
 }
 
 func (m Model) refreshSubscriptionUsageAction() (tea.Model, tea.Cmd) {
@@ -48,22 +52,10 @@ func (m Model) refreshSubscriptionUsageAction() (tea.Model, tea.Cmd) {
 	return m, m.refreshSubscriptionUsageCmd(true)
 }
 
-func (m *Model) pruneTelemetry() error {
-	if m.pruner == nil {
-		return nil
-	}
+func (m Model) pruneTelemetryCmd() tea.Cmd {
 	cutoff := m.nowTime().Add(-30 * 24 * time.Hour).UTC()
-	resp, err := m.pruner.PruneTelemetry(context.Background(), management.PruneTelemetryRequest{Cutoff: cutoff})
-	if err != nil {
-		return err
+	return func() tea.Msg {
+		resp, err := m.pruner.PruneTelemetry(context.Background(), management.PruneTelemetryRequest{Cutoff: cutoff})
+		return telemetryPrunedMsg{result: resp.Result, err: err}
 	}
-	result := resp.Result
-	m.pruneResult = &result
-	m.logInfo(context.Background(), "tui_telemetry_pruned",
-		slog.Int("requests", result.Requests),
-		slog.Int("streams", result.Streams),
-		slog.Int("fallbacks", result.Fallbacks),
-		slog.Int("health", result.Health),
-	)
-	return nil
 }

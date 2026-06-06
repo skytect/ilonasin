@@ -3,7 +3,6 @@ package tui
 import (
 	"context"
 	"errors"
-	"log/slog"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -16,6 +15,11 @@ type oauthLoginStartedMsg struct {
 }
 
 type oauthLoginCompletedMsg struct {
+	err error
+}
+
+type oauthCredentialRefreshedMsg struct {
+	row management.OAuthCredential
 	err error
 }
 
@@ -61,15 +65,15 @@ func (m Model) startOAuthLoginAction() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) refreshSelectedOAuthCredentialAction() (tea.Model, tea.Cmd) {
-	m.clearReveal()
-	if err := m.refreshSelectedOAuthCredential(); err != nil {
-		m.logError(context.Background(), "tui_oauth_refresh_failed", err)
-		m.err = "OAuth refresh failed"
-		next, cmd := m.startSnapshotRefresh(false)
-		return next, cmd
+	if m.mutationInFlight {
+		return m, nil
 	}
-	next, cmd := m.startSnapshotRefresh(false)
-	return next, cmd
+	m.clearReveal()
+	row, ok := m.selectedOAuthCredential()
+	if !ok {
+		return m, nil
+	}
+	return m.startMutation(m.refreshOAuthCredentialCmd(row))
 }
 
 func (m Model) cycleOAuthSelectionAction() (tea.Model, tea.Cmd) {
@@ -80,25 +84,25 @@ func (m Model) cycleOAuthSelectionAction() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *Model) refreshSelectedOAuthCredential() error {
+func (m Model) selectedOAuthCredential() (management.OAuthCredential, bool) {
 	if m.oauth == nil || len(m.oauthRows) == 0 {
-		return nil
+		return management.OAuthCredential{}, false
 	}
 	if m.oauthSelected < 0 || m.oauthSelected >= len(m.oauthRows) {
-		return nil
+		return management.OAuthCredential{}, false
 	}
 	row := m.oauthRows[m.oauthSelected]
 	if row.Disabled {
-		return nil
+		return management.OAuthCredential{}, false
 	}
-	if _, err := m.oauth.RefreshOAuthCredential(context.Background(), management.RefreshOAuthCredentialRequest{ID: row.ID}); err != nil {
-		return err
+	return row, true
+}
+
+func (m Model) refreshOAuthCredentialCmd(row management.OAuthCredential) tea.Cmd {
+	return func() tea.Msg {
+		_, err := m.oauth.RefreshOAuthCredential(context.Background(), management.RefreshOAuthCredentialRequest{ID: row.ID})
+		return oauthCredentialRefreshedMsg{row: row, err: err}
 	}
-	m.logInfo(context.Background(), "tui_oauth_refreshed",
-		slog.String("provider_instance", row.ProviderInstanceID),
-		slog.Int64("credential_id", row.ID),
-	)
-	return nil
 }
 
 func firstOAuthLoginProvider(providers []management.ProviderInstance) (string, bool) {

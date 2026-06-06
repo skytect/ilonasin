@@ -2,12 +2,17 @@ package tui
 
 import (
 	"context"
-	"log/slog"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"ilonasin/internal/management"
 )
+
+type upstreamAPIKeyAddedMsg struct {
+	providerID string
+	created    management.AddUpstreamAPIKeyResponse
+	err        error
+}
 
 func (m Model) updateAPIKeyInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key.Type {
@@ -20,7 +25,6 @@ func (m Model) updateAPIKeyInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEnter:
 		apiKey := m.apiKeyInput
 		providerID := m.apiKeyProvider
-		m.clearAPIKeyInput()
 		if apiKey == "" {
 			m.err = "API key is required"
 			return m, nil
@@ -29,22 +33,11 @@ func (m Model) updateAPIKeyInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.err = "upstream credential management is unavailable"
 			return m, nil
 		}
-		created, err := m.upstreams.AddUpstreamAPIKey(context.Background(), management.AddUpstreamAPIKeyRequest{
-			ProviderInstanceID: providerID,
-			Label:              "api key",
-			APIKey:             apiKey,
-		})
-		if err != nil {
-			m.logError(context.Background(), "tui_upstream_credential_create_failed", err, slog.String("provider_instance", providerID))
-			m.err = err.Error()
+		if m.mutationInFlight {
 			return m, nil
 		}
-		m.logInfo(context.Background(), "tui_upstream_credential_created",
-			slog.String("provider_instance", providerID),
-			slog.Int64("credential_id", created.Credential.ID),
-		)
-		next, cmd := m.startSnapshotRefresh(false)
-		return next, cmd
+		m.clearAPIKeyInput()
+		return m.startMutation(m.addUpstreamAPIKeyCmd(providerID, apiKey))
 	case tea.KeyBackspace:
 		if len(m.apiKeyInput) > 0 {
 			m.apiKeyInput = m.apiKeyInput[:len(m.apiKeyInput)-1]
@@ -75,6 +68,17 @@ func (m *Model) clearAPIKeyInput() {
 	m.apiKeyMode = false
 	m.apiKeyProvider = ""
 	m.apiKeyInput = ""
+}
+
+func (m Model) addUpstreamAPIKeyCmd(providerID string, apiKey string) tea.Cmd {
+	return func() tea.Msg {
+		created, err := m.upstreams.AddUpstreamAPIKey(context.Background(), management.AddUpstreamAPIKeyRequest{
+			ProviderInstanceID: providerID,
+			Label:              "api key",
+			APIKey:             apiKey,
+		})
+		return upstreamAPIKeyAddedMsg{providerID: providerID, created: created, err: err}
+	}
 }
 
 func firstAPIKeyProvider(providers []management.ProviderInstance) (management.ProviderInstance, bool) {

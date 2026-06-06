@@ -2,39 +2,44 @@ package tui
 
 import (
 	"context"
-	"log/slog"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"ilonasin/internal/management"
 )
 
-func (m Model) disableUpstreamCredentialAction() (tea.Model, tea.Cmd) {
-	m.clearReveal()
-	if err := m.disableFirstUpstreamCredential(); err != nil {
-		m.logError(context.Background(), "tui_upstream_credential_disable_failed", err)
-		m.err = err.Error()
-		return m, nil
-	}
-	next, cmd := m.startSnapshotRefresh(false)
-	return next, cmd
+type upstreamCredentialDisabledMsg struct {
+	credential management.UpstreamCredential
+	err        error
 }
 
-func (m *Model) disableFirstUpstreamCredential() error {
+func (m Model) disableUpstreamCredentialAction() (tea.Model, tea.Cmd) {
+	if m.mutationInFlight {
+		return m, nil
+	}
+	m.clearReveal()
+	credential, ok := m.firstEnabledUpstreamCredential()
+	if !ok {
+		return m, nil
+	}
+	return m.startMutation(m.disableUpstreamCredentialCmd(credential))
+}
+
+func (m Model) firstEnabledUpstreamCredential() (management.UpstreamCredential, bool) {
 	if m.upstreams == nil {
-		return nil
+		return management.UpstreamCredential{}, false
 	}
 	for _, cred := range m.credentials {
 		if !cred.Disabled {
-			if _, err := m.upstreams.DisableUpstreamCredential(context.Background(), management.DisableUpstreamCredentialRequest{ID: cred.ID}); err != nil {
-				return err
-			}
-			m.logInfo(context.Background(), "tui_upstream_credential_disabled",
-				slog.String("provider_instance", cred.ProviderInstanceID),
-				slog.Int64("credential_id", cred.ID),
-			)
-			return nil
+			return cred, true
 		}
 	}
-	return nil
+	return management.UpstreamCredential{}, false
+}
+
+func (m Model) disableUpstreamCredentialCmd(credential management.UpstreamCredential) tea.Cmd {
+	return func() tea.Msg {
+		_, err := m.upstreams.DisableUpstreamCredential(context.Background(), management.DisableUpstreamCredentialRequest{ID: credential.ID})
+		return upstreamCredentialDisabledMsg{credential: credential, err: err}
+	}
 }

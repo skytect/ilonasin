@@ -2,12 +2,21 @@ package tui
 
 import (
 	"context"
-	"log/slog"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"ilonasin/internal/management"
 )
+
+type localTokenCreatedMsg struct {
+	metadata management.LocalToken
+	err      error
+}
+
+type localTokenDisabledMsg struct {
+	id  int64
+	err error
+}
 
 func (m *Model) clearReveal() {
 	m.revealTokenID = 0
@@ -28,32 +37,43 @@ func (m *Model) selectPreviousLocalToken() {
 }
 
 func (m Model) createLocalToken() (tea.Model, tea.Cmd) {
-	m.clearReveal()
-	created, err := m.tokens.CreateLocalToken(context.Background(), management.CreateLocalTokenRequest{Label: "local client"})
-	if err != nil {
-		m.logError(context.Background(), "tui_local_token_create_failed", err)
-		m.err = err.Error()
+	if m.mutationInFlight {
 		return m, nil
 	}
-	m.logInfo(context.Background(), "tui_local_token_created", slog.Int64("local_id", created.Metadata.ID))
-	m.revealTokenID = created.Metadata.ID
-	m.revealTokenPrefix = created.Metadata.TokenPrefix
-	m.revealTokenLast4 = created.Metadata.TokenLast4
-	next, cmd := m.startSnapshotRefresh(false)
-	return next, cmd
+	m.clearReveal()
+	if m.tokens == nil {
+		m.err = "local token management is unavailable"
+		return m, nil
+	}
+	return m.startMutation(m.createLocalTokenCmd())
 }
 
 func (m Model) disableSelectedLocalToken() (tea.Model, tea.Cmd) {
+	if m.mutationInFlight {
+		return m, nil
+	}
 	m.clearReveal()
+	if m.tokens == nil {
+		m.err = "local token management is unavailable"
+		return m, nil
+	}
 	if len(m.tokenRows) == 0 {
 		return m, nil
 	}
-	if _, err := m.tokens.DisableLocalToken(context.Background(), management.DisableLocalTokenRequest{ID: m.tokenRows[m.selected].ID}); err != nil {
-		m.logError(context.Background(), "tui_local_token_disable_failed", err, slog.Int64("local_id", m.tokenRows[m.selected].ID))
-		m.err = err.Error()
-		return m, nil
+	id := m.tokenRows[m.selected].ID
+	return m.startMutation(m.disableLocalTokenCmd(id))
+}
+
+func (m Model) createLocalTokenCmd() tea.Cmd {
+	return func() tea.Msg {
+		created, err := m.tokens.CreateLocalToken(context.Background(), management.CreateLocalTokenRequest{Label: "local client"})
+		return localTokenCreatedMsg{metadata: created.Metadata, err: err}
 	}
-	m.logInfo(context.Background(), "tui_local_token_disabled", slog.Int64("local_id", m.tokenRows[m.selected].ID))
-	next, cmd := m.startSnapshotRefresh(false)
-	return next, cmd
+}
+
+func (m Model) disableLocalTokenCmd(id int64) tea.Cmd {
+	return func() tea.Msg {
+		_, err := m.tokens.DisableLocalToken(context.Background(), management.DisableLocalTokenRequest{ID: id})
+		return localTokenDisabledMsg{id: id, err: err}
+	}
 }

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"log/slog"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -65,6 +66,55 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applySubscriptionUsage(msg.response)
 		next, cmd := m.startSnapshotRefresh(false)
 		return next, cmd
+	case localTokenCreatedMsg:
+		m = m.completeMutation()
+		if msg.err != nil {
+			m.logError(context.Background(), "tui_local_token_create_failed", msg.err)
+			m.err = msg.err.Error()
+			return m, nil
+		}
+		m.logInfo(context.Background(), "tui_local_token_created", slog.Int64("local_id", msg.metadata.ID))
+		m.revealTokenID = msg.metadata.ID
+		m.revealTokenPrefix = msg.metadata.TokenPrefix
+		m.revealTokenLast4 = msg.metadata.TokenLast4
+		next, cmd := m.startSnapshotRefresh(false)
+		return next, cmd
+	case localTokenDisabledMsg:
+		m = m.completeMutation()
+		if msg.err != nil {
+			m.logError(context.Background(), "tui_local_token_disable_failed", msg.err, slog.Int64("local_id", msg.id))
+			m.err = msg.err.Error()
+			return m, nil
+		}
+		m.logInfo(context.Background(), "tui_local_token_disabled", slog.Int64("local_id", msg.id))
+		next, cmd := m.startSnapshotRefresh(false)
+		return next, cmd
+	case upstreamAPIKeyAddedMsg:
+		m = m.completeMutation()
+		if msg.err != nil {
+			m.logError(context.Background(), "tui_upstream_credential_create_failed", msg.err, slog.String("provider_instance", msg.providerID))
+			m.err = msg.err.Error()
+			return m, nil
+		}
+		m.logInfo(context.Background(), "tui_upstream_credential_created",
+			slog.String("provider_instance", msg.providerID),
+			slog.Int64("credential_id", msg.created.Credential.ID),
+		)
+		next, cmd := m.startSnapshotRefresh(false)
+		return next, cmd
+	case upstreamCredentialDisabledMsg:
+		m = m.completeMutation()
+		if msg.err != nil {
+			m.logError(context.Background(), "tui_upstream_credential_disable_failed", msg.err)
+			m.err = msg.err.Error()
+			return m, nil
+		}
+		m.logInfo(context.Background(), "tui_upstream_credential_disabled",
+			slog.String("provider_instance", msg.credential.ProviderInstanceID),
+			slog.Int64("credential_id", msg.credential.ID),
+		)
+		next, cmd := m.startSnapshotRefresh(false)
+		return next, cmd
 	case oauthLoginStartedMsg:
 		if msg.err != nil {
 			m.logError(context.Background(), "tui_oauth_login_start_failed", msg.err)
@@ -87,6 +137,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.logInfo(context.Background(), "tui_oauth_login_completed")
+		next, cmd := m.startSnapshotRefresh(false)
+		return next, cmd
+	case oauthCredentialRefreshedMsg:
+		m = m.completeMutation()
+		if msg.err != nil {
+			m.logError(context.Background(), "tui_oauth_refresh_failed", msg.err)
+			m.err = "OAuth refresh failed"
+			next, cmd := m.startSnapshotRefresh(false)
+			return next, cmd
+		}
+		m.logInfo(context.Background(), "tui_oauth_refreshed",
+			slog.String("provider_instance", msg.row.ProviderInstanceID),
+			slog.Int64("credential_id", msg.row.ID),
+		)
+		next, cmd := m.startSnapshotRefresh(false)
+		return next, cmd
+	case telemetryPrunedMsg:
+		m = m.completeMutation()
+		if msg.err != nil {
+			m.logError(context.Background(), "tui_telemetry_prune_failed", msg.err)
+			m.err = "telemetry prune failed"
+			return m, nil
+		}
+		result := msg.result
+		m.pruneResult = &result
+		m.logInfo(context.Background(), "tui_telemetry_pruned",
+			slog.Int("requests", result.Requests),
+			slog.Int("streams", result.Streams),
+			slog.Int("fallbacks", result.Fallbacks),
+			slog.Int("health", result.Health),
+		)
 		next, cmd := m.startSnapshotRefresh(false)
 		return next, cmd
 	case tea.WindowSizeMsg:

@@ -43,6 +43,7 @@ type Model struct {
 	snapshotRefreshInFlight     bool
 	snapshotForegroundPending   bool
 	subscriptionRefreshInFlight bool
+	mutationInFlight            bool
 	pruneResult                 *management.PruneResult
 	pruningAvailable            bool
 	width                       int

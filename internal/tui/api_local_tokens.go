@@ -20,7 +20,6 @@ func (m Model) writeLocalTokens(b *strings.Builder) {
 		"local-api",
 		fmt.Sprintf("enabled %d", enabled),
 		fmt.Sprintf("disabled %d", disabled),
-		fmt.Sprintf("requests %s", compactInt(localTokenUsageRequestTotal(m.localTokenUsage))),
 	))
 	b.WriteByte('\n')
 	if len(m.tokenRows) == 0 {
@@ -46,7 +45,7 @@ func (m Model) writeLocalTokens(b *strings.Builder) {
 		fmt.Fprintf(b, "\n%s %s %s\n",
 			goodBadgeStyle.Render("created"),
 			strconv.FormatInt(m.revealTokenID, 10),
-			fragmentChip("token", m.revealTokenPrefix, m.revealTokenLast4))
+			localTokenFragmentChip(m.revealTokenPrefix, m.revealTokenLast4))
 	}
 }
 
@@ -54,7 +53,17 @@ type localTokenOverview struct {
 	Enabled        int
 	Disabled       int
 	Requests       int
-	TotalTokens    int
+	OK             int
+	Warning        int
+	Error          int
+	PromptTokens   int
+	OutputTokens   int
+	Reasoning      int
+	CacheHit       int
+	CacheMiss      int
+	CacheWrite     int
+	LatencyRows    int
+	LatencyTotalMS int64
 	NewestCreated  time.Time
 	LatestRequest  time.Time
 	NewestDisabled *time.Time
@@ -62,7 +71,9 @@ type localTokenOverview struct {
 
 func localTokenOverviewFromRows(rows []management.LocalToken, usageRows []management.LocalTokenUsageSummary) localTokenOverview {
 	var overview localTokenOverview
+	knownTokenIDs := make(map[int64]bool, len(rows))
 	for _, row := range rows {
+		knownTokenIDs[row.ID] = true
 		if row.Disabled {
 			overview.Disabled++
 		} else {
@@ -77,8 +88,21 @@ func localTokenOverviewFromRows(rows []management.LocalToken, usageRows []manage
 		}
 	}
 	for _, row := range usageRows {
+		if !knownTokenIDs[row.LocalTokenID] {
+			continue
+		}
 		overview.Requests += row.RequestCount
-		overview.TotalTokens += row.TotalTokens
+		overview.OK += row.OKCount
+		overview.Warning += row.WarningCount
+		overview.Error += row.ErrorCount
+		overview.PromptTokens += row.PromptTokens
+		overview.OutputTokens += row.CompletionTokens
+		overview.Reasoning += row.ReasoningTokens
+		overview.CacheHit += row.CacheHitTokens
+		overview.CacheMiss += row.CacheMissTokens
+		overview.CacheWrite += row.CacheWriteTokens
+		overview.LatencyRows += row.RequestCount
+		overview.LatencyTotalMS += row.AverageLatencyMS * int64(row.RequestCount)
 		if row.LatestRequestAt.After(overview.LatestRequest) {
 			overview.LatestRequest = row.LatestRequestAt
 		}
@@ -88,26 +112,46 @@ func localTokenOverviewFromRows(rows []management.LocalToken, usageRows []manage
 
 func localTokenOverviewLine(rows []management.LocalToken, usageRows []management.LocalTokenUsageSummary, now time.Time, width int) string {
 	overview := localTokenOverviewFromRows(rows, usageRows)
-	total := overview.Enabled + overview.Disabled
-	parts := []string{
-		statusBadge(localTokenOverviewState(overview)),
-		meterRow("enabled", remainingBar(providerCapabilityPercent(overview.Enabled, total), compactMetricBarWidth(width)), fmt.Sprintf("%d/%d", overview.Enabled, total), 0),
-		metricChip("disabled", compactInt(overview.Disabled)),
-		metricChip("requests", compactInt(overview.Requests)),
-		metricChip("tokens", compactInt(overview.TotalTokens)),
-		metricChip("scope", "local-api"),
-		metricChip("upstream", "providers"),
+	lines := []string{
+		wrappedMetricLine(width,
+			statusBadge(localTokenOverviewState(overview)),
+			metricChip("req", compactInt(overview.Requests)),
+			metricChip("ok", compactInt(overview.OK)),
+			metricChip("warn", compactInt(overview.Warning)),
+			metricChip("err", compactInt(overview.Error)),
+		),
+		compactTokenMixLine(overview.PromptTokens, overview.OutputTokens, overview.Reasoning, overview.CacheHit, overview.CacheMiss, overview.CacheWrite, width),
+		localTokenOverviewActivityLine(overview, now, width),
 	}
-	if !overview.NewestCreated.IsZero() {
-		parts = append(parts, timeChip("newest", now, overview.NewestCreated))
+	if overview.Requests == 0 {
+		lines = []string{
+			wrappedMetricLine(width,
+				statusBadge(localTokenOverviewState(overview)),
+				metricChip("scope", "local-api"),
+				metricChip("upstream", "providers"),
+				timeChip("newest", now, overview.NewestCreated),
+				optionalTimeChip("last-off", now, overview.NewestDisabled),
+			),
+		}
+	}
+	return wrapTargetedLines(width, lines...)
+}
+
+func localTokenOverviewActivityLine(overview localTokenOverview, now time.Time, width int) string {
+	parts := []string{
+		compactRateBars(width,
+			rateMetric{"hit", tokenRatePercent(overview.CacheHit, overview.PromptTokens)},
+			rateMetric{"write", tokenRatePercent(overview.CacheWrite, overview.PromptTokens)},
+			rateMetric{"reason", tokenRatePercent(overview.Reasoning, overview.OutputTokens)},
+		),
+	}
+	if overview.LatencyRows > 0 {
+		parts = append(parts, msText("avg", overview.LatencyTotalMS/int64(overview.LatencyRows)))
 	}
 	if !overview.LatestRequest.IsZero() {
 		parts = append(parts, timeChip("latest", now, overview.LatestRequest))
 	}
-	if overview.NewestDisabled != nil {
-		parts = append(parts, timeChip("last-off", now, *overview.NewestDisabled))
-	}
-	return wrappedMetricLine(width, parts...)
+	return detailMetricLine(width, "activity", parts...)
 }
 
 func localTokenOverviewState(overview localTokenOverview) string {
@@ -129,7 +173,7 @@ func localTokenRow(token management.LocalToken, usage *management.LocalTokenUsag
 	headParts := []string{
 		statusBadge(state),
 		cardTitleStyle.Render(localTokenIdentity(cursor, token.ID, token.Label)),
-		fragmentChip("token", token.TokenPrefix, token.TokenLast4),
+		localTokenFragmentChip(token.TokenPrefix, token.TokenLast4),
 	}
 	if usage != nil {
 		headParts = append(headParts, localTokenUsageStatusChips(*usage)...)
@@ -144,6 +188,16 @@ func localTokenRow(token management.LocalToken, usage *management.LocalTokenUsag
 		lines = append(lines, localTokenUsageMetricLine(*usage, now, width))
 	}
 	return wrapTargetedLinesPreserveBlank(width, lines...)
+}
+
+func localTokenFragmentChip(prefix, last4 string) string {
+	prefix = safeTokenFragmentDisplay(prefix, 8)
+	last4 = safeTokenFragmentDisplay(last4, 4)
+	value := strings.Trim(prefix+"/"+last4, "/")
+	if value == "" {
+		value = "none"
+	}
+	return chipStyle.Render("token " + value)
 }
 
 func localTokenIdentity(cursor string, id int64, label string) string {

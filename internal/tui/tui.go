@@ -5,6 +5,8 @@ import (
 	"log/slog"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 
 	"ilonasin/internal/management"
 )
@@ -22,6 +24,7 @@ func Run(snapshot management.SnapshotClient, tokens management.LocalTokenClient,
 	if err := model.reload(); err != nil {
 		return err
 	}
+	lipgloss.SetColorProfile(termenv.ANSI256)
 	_, err := tea.NewProgram(model, tea.WithMouseCellMotion()).Run()
 	return err
 }

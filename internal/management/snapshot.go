@@ -67,7 +67,7 @@ func (s Service) LoadManagementSnapshot(ctx context.Context) (ManagementSnapshot
 		}
 		out.SubscriptionUsage = usage
 	}
-	out.PruningAvailable = true
+	out.PruningAvailable = s.Pruner != nil
 	sanitizeSnapshot(&out)
 	return out, nil
 }

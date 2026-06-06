@@ -9,9 +9,10 @@ import (
 )
 
 func (s *Store) RecordRequestMetadata(ctx context.Context, m metadata.Request) (int64, error) {
+	outputTPS := m.OutputTokensPerSecond
 	outputTPSTotal := m.OutputTokensPerSecondTotal
 	if outputTPSTotal == 0 {
-		outputTPSTotal = m.OutputTokensPerSecond
+		outputTPSTotal = outputTPS
 	}
 	res, err := s.DB.ExecContext(ctx, `
 		INSERT INTO request_metadata(
@@ -32,7 +33,7 @@ func (s *Store) RecordRequestMetadata(ctx context.Context, m metadata.Request) (
 		m.RequestedModel, m.ResolvedProviderInstance, m.ResolvedModel, m.HTTPStatus,
 		m.ErrorClass, m.RetryCount, m.AuthRetryCount, m.AttemptCount, m.FallbackCount, m.FallbackReason, m.PromptTokens, m.CompletionTokens,
 		m.TotalTokens, m.ReasoningTokens, m.CacheHitTokens, m.CacheWriteTokens, m.CostMicrounits, m.TotalLatencyMS, m.UpstreamLatencyMS,
-		m.TimeToFirstTokenMS, outputTPSTotal, outputTPSTotal, m.OutputTokensPerSecondAfterTTFT)
+		m.TimeToFirstTokenMS, outputTPS, outputTPSTotal, m.OutputTokensPerSecondAfterTTFT)
 	if err != nil {
 		return 0, err
 	}

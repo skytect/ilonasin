@@ -280,7 +280,7 @@ func (s *Server) recordStreamingChat(r *http.Request, sc streamContext, exec str
 	if requestMeta.OutputTokensPerSecondTotal == 0 {
 		requestMeta.OutputTokensPerSecondTotal = summary.OutputTokensPerSecond
 	}
-	requestMeta.OutputTokensPerSecond = requestMeta.OutputTokensPerSecondTotal
+	requestMeta.OutputTokensPerSecond = summary.OutputTokensPerSecond
 	requestMeta.OutputTokensPerSecondAfterTTFT = outputTPSAfterTTFT(requestMeta.CompletionTokens, requestMeta.TotalLatencyMS, requestMeta.TimeToFirstTokenMS)
 	requestID, _ := s.recordWithID(recordCtx, requestMeta)
 	_ = s.recordStream(recordCtx, metadata.Stream{

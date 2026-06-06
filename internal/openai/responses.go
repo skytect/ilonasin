@@ -728,7 +728,10 @@ func (r ResponsesRequest) ToChatCompletionRequest(policy ResponsesConversionPoli
 	if policy.PreserveCodexTools && len(codexTools) > 0 {
 		req.CodexResponsesTools = codexTools
 	}
-	if r.ParallelToolCalls != nil && policy.AllowParallelToolCalls {
+	if r.ParallelToolCalls != nil {
+		if !policy.AllowParallelToolCalls {
+			return ChatCompletionRequest{}, errors.New("parallel_tool_calls is unsupported")
+		}
 		req.ParallelToolCalls = r.ParallelToolCalls
 		req.PresentFields["parallel_tool_calls"] = true
 	}

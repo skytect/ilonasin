@@ -72,7 +72,7 @@ func bootstrapCore(ctx context.Context, opts Options, createDefaultConfig bool) 
 			previous()
 		}
 	}(cleanup)
-	ioLogger, err := logging.SetupIO(loggingIOOptions(cfg))
+	ioLogger, err := logging.SetupIO(loggingIOOptions(cfg, logger))
 	if err != nil {
 		cleanup()
 		return nil, err
@@ -108,10 +108,13 @@ func loggingOptions(cfg config.Config) logging.Options {
 	}
 }
 
-func loggingIOOptions(cfg config.Config) logging.IOOptions {
+func loggingIOOptions(cfg config.Config, logger *slog.Logger) logging.IOOptions {
 	return logging.IOOptions{
-		Capture: cfg.Logging.CaptureIO,
-		LogDir:  cfg.Paths.LogDir,
+		Capture:  cfg.Logging.CaptureIO,
+		LogDir:   cfg.Paths.LogDir,
+		MaxBytes: cfg.Logging.IOMaxBytes,
+		MaxFiles: cfg.Logging.IOMaxFiles,
+		Logger:   logger,
 	}
 }
 

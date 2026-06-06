@@ -3,6 +3,8 @@ package tui
 import (
 	"fmt"
 	"strings"
+
+	"ilonasin/internal/management"
 )
 
 func (m Model) writePruning(b *strings.Builder) {
@@ -38,7 +40,7 @@ func (m Model) pruningPolicyBlock(width int) string {
 		detailMetricLine(width, "policy",
 			statusBadge(ioCaptureState(m.runtime.CaptureIO)),
 			metricChip("io", ioCaptureMode(m.runtime.CaptureIO)),
-			wrappedMetricChip("store", ioCaptureRetention(m.runtime.CaptureIO)),
+			wrappedMetricChip("store", ioCaptureRetention(m.runtime)),
 			wrappedMetricChip("content", ioCaptureContentBoundary(m.runtime.CaptureIO)),
 			wrappedMetricChip("prune", "manual 30d"),
 		),
@@ -59,9 +61,9 @@ func ioCaptureMode(enabled bool) string {
 	return "disabled"
 }
 
-func ioCaptureRetention(enabled bool) string {
-	if enabled {
-		return "debug-log"
+func ioCaptureRetention(runtime management.RuntimeStatus) string {
+	if runtime.CaptureIO {
+		return fmt.Sprintf("debug-log %s x%d", compactBytes(runtime.IOMaxBytes), runtime.IOMaxFiles)
 	}
 	return "metadata"
 }
@@ -71,4 +73,17 @@ func ioCaptureContentBoundary(enabled bool) string {
 		return "body debug"
 	}
 	return "redacted"
+}
+
+func compactBytes(value int64) string {
+	switch {
+	case value >= 1024*1024*1024:
+		return fmt.Sprintf("%dGiB", value/(1024*1024*1024))
+	case value >= 1024*1024:
+		return fmt.Sprintf("%dMiB", value/(1024*1024))
+	case value >= 1024:
+		return fmt.Sprintf("%dKiB", value/1024)
+	default:
+		return fmt.Sprintf("%dB", value)
+	}
 }

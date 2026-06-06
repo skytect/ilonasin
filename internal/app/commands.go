@@ -28,7 +28,7 @@ func Serve(opts Options) error {
 	captureUpstreamIO := rt.IOLogger != nil && logging.DebugEnabled(rt.Config.Logging.Level)
 	secretRefresh := ioSecretRefreshHook(context.Background(), rt.IOLogger, rt.Store)
 	keepalive := subscriptionKeepaliveSettingsFromConfig(rt.Config.SubscriptionKeepalive)
-	mgmt, err := startManagementServer(context.Background(), rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database, rt.Config.Server.Bind, rt.Registry, rt.Store, keepalive, rt.IOLogger, captureUpstreamIO, secretRefresh, rt.Logger)
+	mgmt, err := startManagementServer(context.Background(), rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database, rt.Config.Server.Bind, rt.Config.Logging, rt.Registry, rt.Store, keepalive, rt.IOLogger, captureUpstreamIO, secretRefresh, rt.Logger)
 	if err != nil {
 		return err
 	}

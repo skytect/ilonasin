@@ -3,7 +3,9 @@ package logging
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -12,17 +14,21 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"ilonasin/internal/home"
 )
 
 const IOLogFileName = "ilonasin-io.log"
+const DefaultIOMaxBytes int64 = 50 * 1024 * 1024
+const DefaultIOMaxFiles = 3
 
 type IOLogger struct {
 	mu       sync.Mutex
+	path     string
 	file     *os.File
-	enc      *json.Encoder
+	size     int64
+	maxBytes int64
+	maxFiles int
 	scrubber *IOScrubber
+	logger   *slog.Logger
 }
 
 type IOScrubber struct {
@@ -45,8 +51,11 @@ type IORecord struct {
 }
 
 type IOOptions struct {
-	Capture bool
-	LogDir  string
+	Capture  bool
+	LogDir   string
+	MaxBytes int64
+	MaxFiles int
+	Logger   *slog.Logger
 }
 
 func SetupIO(opts IOOptions) (*IOLogger, error) {
@@ -56,12 +65,32 @@ func SetupIO(opts IOOptions) (*IOLogger, error) {
 	if err := os.MkdirAll(opts.LogDir, 0o700); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(filepath.Join(opts.LogDir, IOLogFileName), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err := secureLogDir(opts.LogDir); err != nil {
+		return nil, err
+	}
+	path := filepath.Join(opts.LogDir, IOLogFileName)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, err
 	}
-	home.SecureFile(f.Name())
-	return &IOLogger{file: f, enc: json.NewEncoder(f), scrubber: NewIOScrubber(nil)}, nil
+	if err := secureLogFile(f.Name()); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return &IOLogger{
+		path:     path,
+		file:     f,
+		size:     info.Size(),
+		maxBytes: normalizeIOMaxBytes(opts.MaxBytes),
+		maxFiles: normalizeIOMaxFiles(opts.MaxFiles),
+		scrubber: NewIOScrubber(nil),
+		logger:   opts.Logger,
+	}, nil
 }
 
 func (l *IOLogger) Close() error {
@@ -72,15 +101,201 @@ func (l *IOLogger) Close() error {
 }
 
 func (l *IOLogger) Record(record IORecord) {
-	if l == nil || l.enc == nil {
+	if l == nil {
 		return
 	}
 	if record.Time.IsZero() {
 		record.Time = time.Now().UTC()
 	}
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(record); err != nil {
+		l.reportError("encode", err)
+		return
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	_ = l.enc.Encode(record)
+	if l.file == nil {
+		if err := l.openActiveLocked(); err != nil {
+			l.reportError("open", err)
+			return
+		}
+	}
+	if err := l.rotateBeforeWriteLocked(int64(buf.Len())); err != nil {
+		l.reportError("rotate", err)
+		return
+	}
+	startSize := l.size
+	n, err := l.file.Write(buf.Bytes())
+	if err != nil {
+		l.rollbackWriteLocked(startSize)
+		l.reportError("write", err)
+		return
+	}
+	if n != buf.Len() {
+		l.rollbackWriteLocked(startSize)
+		l.reportError("write", io.ErrShortWrite)
+		return
+	}
+	l.size += int64(n)
+}
+
+func (l *IOLogger) rollbackWriteLocked(size int64) {
+	if l == nil || l.file == nil || size < 0 {
+		return
+	}
+	if err := l.file.Truncate(size); err != nil {
+		l.reportError("rollback", err)
+		return
+	}
+	if _, err := l.file.Seek(size, io.SeekStart); err != nil {
+		l.reportError("rollback", err)
+		return
+	}
+	l.size = size
+}
+
+func (l *IOLogger) rotateBeforeWriteLocked(nextBytes int64) error {
+	if l.file == nil || l.path == "" || l.maxBytes <= 0 {
+		return nil
+	}
+	if nextBytes <= 0 || l.size == 0 || l.size+nextBytes <= l.maxBytes {
+		return nil
+	}
+	if err := l.file.Close(); err != nil {
+		return err
+	}
+	l.file = nil
+	if l.maxFiles > 1 {
+		oldest := l.rotatedPath(l.maxFiles - 1)
+		if err := removeIfExists(oldest); err != nil {
+			return l.reopenAfterRotationErrorLocked(err)
+		}
+		for index := l.maxFiles - 2; index >= 1; index-- {
+			from := l.rotatedPath(index)
+			to := l.rotatedPath(index + 1)
+			if err := renameIfExists(from, to); err != nil {
+				return l.reopenAfterRotationErrorLocked(err)
+			}
+			if err := secureLogFileIfExists(to); err != nil {
+				return l.reopenAfterRotationErrorLocked(err)
+			}
+		}
+		if err := renameIfExists(l.path, l.rotatedPath(1)); err != nil {
+			return l.reopenAfterRotationErrorLocked(err)
+		}
+		if err := secureLogFileIfExists(l.rotatedPath(1)); err != nil {
+			return l.reopenAfterRotationErrorLocked(err)
+		}
+	} else if err := removeIfExists(l.path); err != nil {
+		return l.reopenAfterRotationErrorLocked(err)
+	}
+	if err := l.openActiveLocked(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (l *IOLogger) reopenAfterRotationErrorLocked(rotationErr error) error {
+	if err := l.openActiveLocked(); err != nil {
+		return fmt.Errorf("%w; reopen active IO log: %v", rotationErr, err)
+	}
+	return rotationErr
+}
+
+func (l *IOLogger) openActiveLocked() error {
+	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	if err := secureLogFile(f.Name()); err != nil {
+		_ = f.Close()
+		return err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return err
+	}
+	l.file = f
+	l.size = info.Size()
+	return nil
+}
+
+func secureLogDir(path string) error {
+	return os.Chmod(path, 0o700)
+}
+
+func secureLogFile(path string) error {
+	return os.Chmod(path, 0o600)
+}
+
+func secureLogFileIfExists(path string) error {
+	if path == "" {
+		return nil
+	}
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	return secureLogFile(path)
+}
+
+func (l *IOLogger) rotatedPath(index int) string {
+	return fmt.Sprintf("%s.%d", l.path, index)
+}
+
+func removeIfExists(path string) error {
+	if path == "" {
+		return nil
+	}
+	err := os.Remove(path)
+	if err == nil || os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
+
+func renameIfExists(from, to string) error {
+	if from == "" || to == "" {
+		return nil
+	}
+	if _, err := os.Stat(from); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if err := os.Rename(from, to); err != nil {
+		return err
+	}
+	return nil
+}
+
+func normalizeIOMaxBytes(value int64) int64 {
+	if value <= 0 {
+		return DefaultIOMaxBytes
+	}
+	return value
+}
+
+func normalizeIOMaxFiles(value int) int {
+	if value <= 0 {
+		return DefaultIOMaxFiles
+	}
+	return value
+}
+
+func (l *IOLogger) reportError(stage string, err error) {
+	if l == nil || l.logger == nil || err == nil {
+		return
+	}
+	l.logger.Error("io log write failed",
+		slog.String("event", "io_log_write_failed"),
+		slog.String("stage", stage),
+		slog.String("error", err.Error()),
+	)
 }
 
 func (l *IOLogger) ReplaceConfiguredSecrets(secrets []string) {

@@ -27,6 +27,11 @@ The desired policy is binary:
 Replace layered redaction and partial IO metadata with one clear logging
 policy.
 
+Current note: plan 485 supersedes this plan's earlier unbounded-file assumption.
+`ilonasin-io.log` remains the IO logging destination, but current architecture
+requires bounded local rotation with safe retention metadata exposed through
+management and the TUI.
+
 After this work:
 
 - `ilonasin.log` remains safe structured application logging,

@@ -28,8 +28,10 @@ type ManagementSnapshotResponse struct {
 }
 
 type RuntimeStatus struct {
-	Bind      string `json:"bind"`
-	CaptureIO bool   `json:"capture_io"`
+	Bind       string `json:"bind"`
+	CaptureIO  bool   `json:"capture_io"`
+	IOMaxBytes int64  `json:"io_max_bytes"`
+	IOMaxFiles int    `json:"io_max_files"`
 }
 
 type ProviderInstance struct {

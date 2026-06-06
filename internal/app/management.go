@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"ilonasin/internal/config"
 	"ilonasin/internal/credentials"
 	"ilonasin/internal/logging"
 	"ilonasin/internal/management"
@@ -20,7 +21,7 @@ type managementRuntime struct {
 	server     *http.Server
 }
 
-func startManagementServer(ctx context.Context, homeDir, configPath, databasePath, bind string, registry provider.Registry, store *sqlite.Store, keepalive subscriptionKeepaliveSettings, ioLogger *logging.IOLogger, captureUpstreamIO bool, secretRefresh func(context.Context, ...string), loggers ...*slog.Logger) (managementRuntime, error) {
+func startManagementServer(ctx context.Context, homeDir, configPath, databasePath, bind string, loggingConfig config.LoggingConfig, registry provider.Registry, store *sqlite.Store, keepalive subscriptionKeepaliveSettings, ioLogger *logging.IOLogger, captureUpstreamIO bool, secretRefresh func(context.Context, ...string), loggers ...*slog.Logger) (managementRuntime, error) {
 	logger := firstSlogLogger(loggers)
 	refresher := provider.NewHTTPOAuthRefresher(nil)
 	refresher.Logger = logger
@@ -44,8 +45,10 @@ func startManagementServer(ctx context.Context, homeDir, configPath, databasePat
 	}
 	return startManagementServerWithService(ctx, homeDir, configPath, databasePath, management.Service{
 		Runtime: management.RuntimeStatus{
-			Bind:      bind,
-			CaptureIO: ioLogger != nil,
+			Bind:       bind,
+			CaptureIO:  ioLogger != nil,
+			IOMaxBytes: loggingConfig.IOMaxBytes,
+			IOMaxFiles: loggingConfig.IOMaxFiles,
 		},
 		Tokens:            tokens,
 		Providers:         managementProviderInstances(registry),

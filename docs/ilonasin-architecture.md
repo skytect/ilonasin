@@ -427,6 +427,14 @@ tokens, upstream API keys, OAuth tokens, cookies, authorization codes, device
 codes, code verifiers, provider command stdout, or configured credential secret
 values.
 
+IO logging must be bounded by local rotation settings. Defaults should keep a
+small retained set of local JSONL debug files, with `ilonasin-io.log` as the
+active file and numeric suffixes for older files. Implementations should preserve
+complete JSONL records rather than truncating oversized records, so the practical
+disk bound is the retained file count times the larger of the rotation threshold
+or the largest single retained encoded record. Management and TUI surfaces may
+show only safe retention policy metadata, not IO log paths or payload content.
+
 Full upstream account IDs may be derived transiently from credential secrets
 when building outbound provider routing headers. They must not be stored
 separately, logged, rendered, exposed in management snapshots, written to

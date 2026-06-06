@@ -31,10 +31,12 @@ type PathsConfig struct {
 }
 
 type LoggingConfig struct {
-	Level     string   `toml:"level"`
-	Format    string   `toml:"format"`
-	Outputs   []string `toml:"outputs"`
-	CaptureIO bool     `toml:"capture_io"`
+	Level      string   `toml:"level"`
+	Format     string   `toml:"format"`
+	Outputs    []string `toml:"outputs"`
+	CaptureIO  bool     `toml:"capture_io"`
+	IOMaxBytes int64    `toml:"io_max_bytes"`
+	IOMaxFiles int      `toml:"io_max_files"`
 }
 
 type SubscriptionKeepaliveConfig struct {
@@ -61,9 +63,11 @@ func Default(homeDir string) Config {
 			CacheDir: filepath.Join(homeDir, "cache"),
 		},
 		Logging: LoggingConfig{
-			Level:   "info",
-			Format:  "json",
-			Outputs: []string{"file"},
+			Level:      "info",
+			Format:     "json",
+			Outputs:    []string{"file"},
+			IOMaxBytes: 50 * 1024 * 1024,
+			IOMaxFiles: 3,
 		},
 		SubscriptionKeepalive: SubscriptionKeepaliveConfig{
 			Timezone:        "local",
@@ -147,6 +151,12 @@ func (c *Config) applyDefaults(homeDir string) {
 	}
 	if len(c.Logging.Outputs) == 0 {
 		c.Logging.Outputs = append([]string(nil), def.Logging.Outputs...)
+	}
+	if c.Logging.IOMaxBytes <= 0 {
+		c.Logging.IOMaxBytes = def.Logging.IOMaxBytes
+	}
+	if c.Logging.IOMaxFiles <= 0 {
+		c.Logging.IOMaxFiles = def.Logging.IOMaxFiles
 	}
 	if c.SubscriptionKeepalive.Timezone == "" {
 		c.SubscriptionKeepalive.Timezone = def.SubscriptionKeepalive.Timezone

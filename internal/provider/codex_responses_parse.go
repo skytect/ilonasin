@@ -233,12 +233,12 @@ func codexEventErrorClass(err error) string {
 	return "upstream_invalid_response"
 }
 
-func codexReadErrorReason(err error) string {
+func codexSafeReadErrorReason(err error) string {
 	var failure codexEventFailure
-	if errors.As(err, &failure) && failure.reason != "" {
+	if errors.As(err, &failure) {
 		return failure.reason
 	}
-	return err.Error()
+	return ""
 }
 
 func codexReadErrorAttrs(err error) []slog.Attr {
@@ -290,10 +290,10 @@ func handleCodexEvent(data []byte, state *codexResponseParseState) (retErr error
 		retErr = codexEventContextError(retErr, event.Type, eventItemType(event.Item))
 	}()
 	if unsupportedCodexToolEvent(event.Type) {
-		return codexEventFailure{class: "upstream_invalid_response", reason: fmt.Sprintf("unsupported codex event type %q", event.Type)}
+		return codexEventFailure{class: "upstream_invalid_response", reason: "unsupported codex event type"}
 	}
 	if event.Item != nil && unsupportedCodexOutputItem(event.Item.Type) {
-		return codexEventFailure{class: "upstream_invalid_response", reason: fmt.Sprintf("unsupported codex output item type %q", event.Item.Type)}
+		return codexEventFailure{class: "upstream_invalid_response", reason: "unsupported codex output item type"}
 	}
 	if model := codexServerModelFromHeaders(event.Response, event.Headers); model != "" {
 		state.servedModel = model
@@ -449,9 +449,9 @@ func codexEventContextError(err error, eventType, itemType string) error {
 	if !errors.As(err, &failure) || failure.reason != "" || codexEventFailureIsUpstreamStatus(eventType) {
 		return err
 	}
-	reason := fmt.Sprintf("invalid codex event %q", eventType)
+	reason := "invalid codex event"
 	if itemType != "" {
-		reason = fmt.Sprintf("%s item %q", reason, itemType)
+		reason = "invalid codex event item"
 	}
 	return codexEventFailure{class: failure.class, reason: reason}
 }
@@ -478,7 +478,7 @@ func codexFailureFromError(err codexResponseError) codexEventFailure {
 	message := strings.TrimSpace(err.Message)
 	param := strings.TrimSpace(err.Param)
 	class := codexErrorClass(code, typ, message)
-	reason := codexErrorReason(code, typ, message)
+	reason := codexErrorReason(code, typ)
 	return codexEventFailure{class: class, reason: reason, code: code, type_: typ, param: param}
 }
 
@@ -498,16 +498,13 @@ func codexErrorClass(code, typ, message string) string {
 	}
 }
 
-func codexErrorReason(code, typ, message string) string {
-	parts := make([]string, 0, 3)
+func codexErrorReason(code, typ string) string {
+	parts := make([]string, 0, 2)
 	if code != "" {
 		parts = append(parts, "code="+code)
 	}
 	if typ != "" {
 		parts = append(parts, "type="+typ)
-	}
-	if message != "" {
-		parts = append(parts, "message="+message)
 	}
 	if len(parts) == 0 {
 		return "codex response failed"

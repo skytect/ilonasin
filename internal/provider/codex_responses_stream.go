@@ -167,7 +167,7 @@ func (a HTTPChatAdapter) streamCodexChat(ctx context.Context, req ChatRequest, s
 			slog.String("stream_status", summary.CompletionStatus),
 		}
 		attrs = append(attrs, codexReadErrorAttrs(err)...)
-		if reason := codexReadErrorReason(err); reason != "" {
+		if reason := codexSafeReadErrorReason(err); reason != "" {
 			attrs = append(attrs, slog.String("error_reason", reason))
 		}
 		logProviderHTTP(ctx, a.Logger, statusLevel(summary.StatusCode, summary.ErrorClass), "provider_http", attrs...)

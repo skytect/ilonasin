@@ -155,9 +155,11 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 			slog.Int("status", status),
 			slog.Int64("duration_ms", durationMS(start)),
 			slog.String("error_class", errorClass),
-			slog.String("error_reason", codexReadErrorReason(err)),
 		}
 		attrs = append(attrs, codexReadErrorAttrs(err)...)
+		if reason := codexSafeReadErrorReason(err); reason != "" {
+			attrs = append(attrs, slog.String("error_reason", reason))
+		}
 		logProviderHTTP(ctx, a.Logger, statusLevel(status, errorClass), "provider_http", attrs...)
 		return ChatResult{StatusCode: status, ContentType: "application/json", ErrorClass: errorClass, Latency: time.Since(start), HealthEventClasses: codexResultHealthEvents(req.UpstreamModel, parsed.ServedModel, parsed.HealthEventClasses)}, err
 	}
@@ -177,7 +179,7 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 			slog.Int("status", http.StatusBadGateway),
 			slog.Int64("duration_ms", durationMS(start)),
 			slog.String("error_class", "upstream_invalid_response"),
-			slog.String("error_reason", err.Error()),
+			slog.String("error_reason", "codex response marshal failed"),
 		)
 		return ChatResult{StatusCode: http.StatusBadGateway, ContentType: "application/json", ErrorClass: "upstream_invalid_response", Latency: time.Since(start)}, err
 	}

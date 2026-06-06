@@ -118,6 +118,13 @@ func loggingIOOptions(cfg config.Config, logger *slog.Logger) logging.IOOptions 
 	}
 }
 
+func ioRetentionStatusFromConfig(cfg config.LoggingConfig) ioRetentionStatus {
+	return ioRetentionStatus{
+		maxBytes: cfg.IOMaxBytes,
+		maxFiles: cfg.IOMaxFiles,
+	}
+}
+
 func providerRegistryConfig(cfg config.Config) provider.RegistryConfig {
 	providers := make(map[string]provider.ProviderConfig, len(cfg.Providers))
 	for id, row := range cfg.Providers {

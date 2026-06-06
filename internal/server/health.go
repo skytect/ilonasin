@@ -62,3 +62,46 @@ func healthFromModelDiscovery(instance provider.Instance, credential provider.Be
 		RetryAfter:         retryAfter,
 	}
 }
+
+func cyberHealthEventsFromChat(addr routing.ModelAddress, credential provider.BearerCredential, result provider.ChatResult) []metadata.HealthEvent {
+	return cyberHealthEvents(addr, credential, result.StatusCode, result.HealthEventClasses)
+}
+
+func cyberHealthEventsFromStream(addr routing.ModelAddress, credential provider.BearerCredential, summary provider.ChatStreamSummary) []metadata.HealthEvent {
+	return cyberHealthEvents(addr, credential, summary.StatusCode, summary.HealthEventClasses)
+}
+
+func cyberHealthEvents(addr routing.ModelAddress, credential provider.BearerCredential, status int, classes []string) []metadata.HealthEvent {
+	if len(classes) == 0 {
+		return nil
+	}
+	if status == 0 {
+		status = http.StatusOK
+	}
+	now := time.Now()
+	out := make([]metadata.HealthEvent, 0, len(classes))
+	for _, class := range classes {
+		if !isCodexCyberHealthEvent(class) {
+			continue
+		}
+		out = append(out, metadata.HealthEvent{
+			OccurredAt:         now,
+			ProviderInstanceID: addr.ProviderInstanceID,
+			CredentialID:       credential.ID,
+			ModelID:            addr.ProviderModelID,
+			EventClass:         class,
+			HTTPStatus:         status,
+			ErrorClass:         class,
+		})
+	}
+	return out
+}
+
+func isCodexCyberHealthEvent(class string) bool {
+	switch class {
+	case "codex_verification_recommended", "codex_mitigated_rerouted", "codex_policy_blocked":
+		return true
+	default:
+		return false
+	}
+}

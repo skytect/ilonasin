@@ -45,6 +45,15 @@ func (s *Server) recordHealth(ctx context.Context, m metadata.HealthEvent) error
 	return s.meta.RecordHealthEvent(ctx, m)
 }
 
+func (s *Server) recordHealthEvents(ctx context.Context, events []metadata.HealthEvent) {
+	if s.meta == nil {
+		return
+	}
+	for _, event := range events {
+		_ = s.meta.RecordHealthEvent(ctx, event)
+	}
+}
+
 func (s *Server) recordFallbacks(ctx context.Context, requestID int64, events []metadata.FallbackEvent) {
 	if s.meta == nil || requestID == 0 {
 		return

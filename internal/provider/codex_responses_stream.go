@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -122,10 +123,12 @@ func (a HTTPChatAdapter) streamCodexChat(ctx context.Context, req ChatRequest, s
 		EffectiveServiceTier: effectiveServiceTier,
 	}
 	state := codexStreamState{
-		id:           localChatCompletionID(),
-		model:        req.Instance.ID + "/" + req.UpstreamModel,
-		created:      time.Now().Unix(),
-		includeUsage: includeStreamUsage(req.Request),
+		id:             localChatCompletionID(),
+		model:          req.Instance.ID + "/" + req.UpstreamModel,
+		requestedModel: req.UpstreamModel,
+		servedModel:    codexHTTPHeaderModel(resp.Header),
+		created:        time.Now().Unix(),
+		includeUsage:   includeStreamUsage(req.Request),
 	}
 	streamCapture := upstreamStreamCapture{instance: req.Instance, credentialID: req.Credential.ID, endpoint: "responses_stream", status: resp.StatusCode, id: ioID}
 	if err := a.readCodexStream(streamCtx, resp.Body, sink, &summary, &state, start, streamCapture); err != nil {
@@ -148,6 +151,9 @@ func (a HTTPChatAdapter) streamCodexChat(ctx context.Context, req ChatRequest, s
 		}
 		if !summary.Started {
 			summary.PreStreamError = true
+		}
+		if len(summary.HealthEventClasses) == 0 {
+			summary.HealthEventClasses = codexResultHealthEvents(state.requestedModel, state.servedModel, state.healthEventClasses())
 		}
 		attrs := []slog.Attr{
 			slog.String("endpoint", "responses_stream"),
@@ -184,6 +190,8 @@ func (a HTTPChatAdapter) streamCodexChat(ctx context.Context, req ChatRequest, s
 type codexStreamState struct {
 	id                string
 	model             string
+	requestedModel    string
+	servedModel       string
 	created           int64
 	includeUsage      bool
 	wroteRole         bool
@@ -198,6 +206,7 @@ type codexStreamState struct {
 	sawToolCall       bool
 	toolCallIndex     int
 	toolCalls         map[string]*codexStreamToolCall
+	healthEvents      codexHealthEventSet
 }
 
 type codexStreamToolCall struct {
@@ -319,10 +328,9 @@ func (a HTTPChatAdapter) handleCodexStreamEvent(ctx context.Context, data []byte
 				Text string `json:"text"`
 			} `json:"content"`
 		} `json:"item"`
-		Response *struct {
-			Error *codexResponseError `json:"error"`
-			Usage *codexUsagePayload  `json:"usage"`
-		} `json:"response"`
+		Response *codexResponsePayload         `json:"response"`
+		Metadata *codexResponseMetadataPayload `json:"metadata"`
+		Headers  map[string]any                `json:"headers"`
 	}
 	if err := json.Unmarshal(data, &event); err != nil {
 		summary.ErrorClass = "upstream_stream_invalid"
@@ -334,7 +342,18 @@ func (a HTTPChatAdapter) handleCodexStreamEvent(ctx context.Context, data []byte
 		summary.CompletionStatus = "upstream_invalid"
 		return fmt.Errorf("codex stream contained unsupported tool event")
 	}
+	if model := codexServerModelFromHeaders(event.Response, event.Headers); model != "" {
+		state.servedModel = model
+	}
 	switch event.Type {
+	case "response.metadata":
+		metadata := event.Metadata
+		if metadata == nil && event.Response != nil {
+			metadata = event.Response.Metadata
+		}
+		if metadata != nil && codexVerificationRecommended(metadata.OpenAIVerificationRecommendation) {
+			state.addHealthEventClass("codex_verification_recommended")
+		}
 	case "response.output_text.delta":
 		if event.Delta == "" {
 			return nil
@@ -463,6 +482,9 @@ func (a HTTPChatAdapter) handleCodexStreamEvent(ctx context.Context, data []byte
 			summary.CompletionStatus = "upstream_invalid"
 			return fmt.Errorf("missing codex response")
 		}
+		if model := strings.TrimSpace(event.Response.Model); model != "" && state.servedModel == "" {
+			state.servedModel = openai.SafeResolvedModel(model)
+		}
 		if event.Response.Usage != nil {
 			usage, err := codexUsageFromResponse(event.Response.Usage)
 			if err != nil {
@@ -501,10 +523,15 @@ func (a HTTPChatAdapter) handleCodexStreamEvent(ctx context.Context, data []byte
 			summary.CompletionStatus = "client_disconnected"
 			return err
 		}
+		summary.HealthEventClasses = codexResultHealthEvents(state.requestedModel, state.servedModel, state.healthEventClasses())
 		summary.Done = true
 	case "response.failed":
 		failure := codexStreamFailedEventFailure(event.Response)
 		summary.ErrorClass = failure.class
+		if failure.class == "cyber_policy" {
+			state.addHealthEventClass("codex_policy_blocked")
+		}
+		summary.HealthEventClasses = codexResultHealthEvents(state.requestedModel, state.servedModel, state.healthEventClasses())
 		summary.CompletionStatus = "upstream_error"
 		return failure
 	case "response.incomplete":
@@ -722,6 +749,29 @@ func (state *codexStreamState) aggregateBytes() int {
 	return total
 }
 
+func (state *codexStreamState) addHealthEventClass(class string) {
+	class = strings.TrimSpace(class)
+	if class == "" {
+		return
+	}
+	if state.healthEvents == nil {
+		state.healthEvents = codexHealthEventSet{}
+	}
+	state.healthEvents[class] = true
+}
+
+func (state *codexStreamState) healthEventClasses() []string {
+	if len(state.healthEvents) == 0 {
+		return nil
+	}
+	classes := make([]string, 0, len(state.healthEvents))
+	for class := range state.healthEvents {
+		classes = append(classes, class)
+	}
+	sort.Strings(classes)
+	return classes
+}
+
 func codexToolCallArguments(call map[string]any) string {
 	function, ok := call["function"].(map[string]any)
 	if !ok {
@@ -813,10 +863,7 @@ func marshalCodexUsageChunk(id, model string, created int64, usage openai.Usage)
 	})
 }
 
-func codexStreamFailedEventFailure(response *struct {
-	Error *codexResponseError `json:"error"`
-	Usage *codexUsagePayload  `json:"usage"`
-}) codexEventFailure {
+func codexStreamFailedEventFailure(response *codexResponsePayload) codexEventFailure {
 	if response == nil || response.Error == nil {
 		return codexEventFailure{class: "upstream_response_failed", reason: "codex response failed"}
 	}

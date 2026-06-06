@@ -9,17 +9,20 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sort"
 	"strings"
 
 	"ilonasin/internal/openai"
 )
 
 type codexResponsesResult struct {
-	Text        string
-	ToolCalls   []map[string]any
-	OutputItems []openai.ResponsesOutputItem
-	Usage       openai.Usage
-	ErrorClass  string
+	Text               string
+	ToolCalls          []map[string]any
+	OutputItems        []openai.ResponsesOutputItem
+	Usage              openai.Usage
+	ErrorClass         string
+	ServedModel        string
+	HealthEventClasses []string
 }
 
 type codexResponseError struct {
@@ -35,13 +38,17 @@ type codexResponseParseState struct {
 	deltaText       strings.Builder
 	sawItemDoneText bool
 	sawTextDoneText bool
+	servedModel     string
 	toolCalls       []map[string]any
 	outputItems     []openai.ResponsesOutputItem
 	toolState       codexResponseToolState
 	customToolState codexResponseCustomToolState
 	usage           openai.Usage
 	completed       bool
+	healthEvents    codexHealthEventSet
 }
+
+type codexHealthEventSet map[string]bool
 
 type codexResponseToolState struct {
 	order   []string
@@ -86,15 +93,17 @@ func (a HTTPChatAdapter) readCodexResponses(ctx context.Context, body io.ReadClo
 					capture.eventIndex++
 					capture.id = a.recordUpstreamSSE(capture.instance, capture.credentialID, capture.endpoint, capture.status, data, capture.id, capture.eventIndex)
 					if err := handleCodexEvent(data, &state); err != nil {
-						return codexResponsesResult{ErrorClass: "upstream_invalid_response"}, err
+						result := state.codexResponsesResult()
+						result.ErrorClass = "upstream_invalid_response"
+						return result, err
 					}
 				}
 				if state.completed {
 					return state.codexResponsesResult(), nil
 				}
-				return codexResponsesResult{ErrorClass: "upstream_invalid_response"}, io.ErrUnexpectedEOF
+				return state.codexResponsesErrorResult("upstream_invalid_response"), io.ErrUnexpectedEOF
 			}
-			return codexResponsesResult{ErrorClass: classifyCodexReadError(ctx, err)}, err
+			return state.codexResponsesErrorResult(classifyCodexReadError(ctx, err)), err
 		}
 		line = bytes.TrimRight(line, "\r\n")
 		if len(line) == 0 {
@@ -103,16 +112,18 @@ func (a HTTPChatAdapter) readCodexResponses(ctx context.Context, body io.ReadClo
 			}
 			events++
 			if events > a.maxStreamEvents() {
-				return codexResponsesResult{ErrorClass: "upstream_invalid_response"}, fmt.Errorf("codex response event limit exceeded")
+				return state.codexResponsesErrorResult("upstream_invalid_response"), fmt.Errorf("codex response event limit exceeded")
 			}
 			data := bytes.Join(parts, []byte("\n"))
 			capture.eventIndex++
 			capture.id = a.recordUpstreamSSE(capture.instance, capture.credentialID, capture.endpoint, capture.status, data, capture.id, capture.eventIndex)
 			if err := handleCodexEvent(data, &state); err != nil {
-				return codexResponsesResult{ErrorClass: codexEventErrorClass(err)}, err
+				result := state.codexResponsesResult()
+				result.ErrorClass = codexEventErrorClass(err)
+				return result, err
 			}
 			if state.aggregateBytes() > a.maxCodexAggregateBytes() {
-				return codexResponsesResult{ErrorClass: "upstream_invalid_response"}, fmt.Errorf("codex response text too large")
+				return state.codexResponsesErrorResult("upstream_invalid_response"), fmt.Errorf("codex response text too large")
 			}
 			if state.completed {
 				return state.codexResponsesResult(), nil
@@ -133,7 +144,7 @@ func (a HTTPChatAdapter) readCodexResponses(ctx context.Context, body io.ReadClo
 		}
 		eventBytes += len(data) + 1
 		if eventBytes > a.maxStreamEventBytes() {
-			return codexResponsesResult{ErrorClass: "upstream_invalid_response"}, bufio.ErrBufferFull
+			return state.codexResponsesErrorResult("upstream_invalid_response"), bufio.ErrBufferFull
 		}
 		part := make([]byte, len(data))
 		copy(part, data)
@@ -143,11 +154,42 @@ func (a HTTPChatAdapter) readCodexResponses(ctx context.Context, body io.ReadClo
 
 func (state *codexResponseParseState) codexResponsesResult() codexResponsesResult {
 	return codexResponsesResult{
-		Text:        codexFinalText(state.itemDoneText, state.textDoneText, state.deltaText, state.sawItemDoneText, state.sawTextDoneText),
-		ToolCalls:   state.toolCalls,
-		OutputItems: append(state.outputItems, state.customToolItems()...),
-		Usage:       state.usage,
+		Text:               codexFinalText(state.itemDoneText, state.textDoneText, state.deltaText, state.sawItemDoneText, state.sawTextDoneText),
+		ToolCalls:          state.toolCalls,
+		OutputItems:        append(state.outputItems, state.customToolItems()...),
+		Usage:              state.usage,
+		ServedModel:        state.servedModel,
+		HealthEventClasses: state.healthEventClasses(),
 	}
+}
+
+func (state *codexResponseParseState) codexResponsesErrorResult(class string) codexResponsesResult {
+	result := state.codexResponsesResult()
+	result.ErrorClass = class
+	return result
+}
+
+func (state *codexResponseParseState) addHealthEventClass(class string) {
+	class = strings.TrimSpace(class)
+	if class == "" {
+		return
+	}
+	if state.healthEvents == nil {
+		state.healthEvents = codexHealthEventSet{}
+	}
+	state.healthEvents[class] = true
+}
+
+func (state *codexResponseParseState) healthEventClasses() []string {
+	if len(state.healthEvents) == 0 {
+		return nil
+	}
+	classes := make([]string, 0, len(state.healthEvents))
+	for class := range state.healthEvents {
+		classes = append(classes, class)
+	}
+	sort.Strings(classes)
+	return classes
 }
 
 func (state *codexResponseParseState) aggregateBytes() int {
@@ -237,22 +279,9 @@ func handleCodexEvent(data []byte, state *codexResponseParseState) (retErr error
 				Text string `json:"text"`
 			} `json:"content"`
 		} `json:"item"`
-		Response *struct {
-			ID      string              `json:"id"`
-			EndTurn *bool               `json:"end_turn"`
-			Error   *codexResponseError `json:"error"`
-			Usage   *struct {
-				InputTokens        *int `json:"input_tokens"`
-				OutputTokens       *int `json:"output_tokens"`
-				TotalTokens        *int `json:"total_tokens"`
-				InputTokensDetails *struct {
-					CachedTokens int `json:"cached_tokens"`
-				} `json:"input_tokens_details"`
-				OutputTokensDetails *struct {
-					ReasoningTokens int `json:"reasoning_tokens"`
-				} `json:"output_tokens_details"`
-			} `json:"usage"`
-		} `json:"response"`
+		Response *codexResponsePayload         `json:"response"`
+		Metadata *codexResponseMetadataPayload `json:"metadata"`
+		Headers  map[string]any                `json:"headers"`
 	}
 	if err := json.Unmarshal(data, &event); err != nil {
 		return err
@@ -266,7 +295,18 @@ func handleCodexEvent(data []byte, state *codexResponseParseState) (retErr error
 	if event.Item != nil && unsupportedCodexOutputItem(event.Item.Type) {
 		return codexEventFailure{class: "upstream_invalid_response", reason: fmt.Sprintf("unsupported codex output item type %q", event.Item.Type)}
 	}
+	if model := codexServerModelFromHeaders(event.Response, event.Headers); model != "" {
+		state.servedModel = model
+	}
 	switch event.Type {
+	case "response.metadata":
+		metadata := event.Metadata
+		if metadata == nil && event.Response != nil {
+			metadata = event.Response.Metadata
+		}
+		if metadata != nil && codexVerificationRecommended(metadata.OpenAIVerificationRecommendation) {
+			state.addHealthEventClass("codex_verification_recommended")
+		}
 	case "response.output_item.added":
 		if event.Item == nil {
 			return codexEventFailure{class: "upstream_invalid_response"}
@@ -335,6 +375,9 @@ func handleCodexEvent(data []byte, state *codexResponseParseState) (retErr error
 		if event.Response == nil {
 			return fmt.Errorf("missing codex response")
 		}
+		if model := strings.TrimSpace(event.Response.Model); model != "" && state.servedModel == "" {
+			state.servedModel = openai.SafeResolvedModel(model)
+		}
 		if err := state.flushCodexFunctionCalls(); err != nil {
 			return err
 		}
@@ -354,11 +397,24 @@ func handleCodexEvent(data []byte, state *codexResponseParseState) (retErr error
 			}
 		}
 	case "response.failed":
-		return codexFailedEventFailure(event.Response)
+		failure := codexFailedEventFailure(event.Response)
+		if failure.class == "cyber_policy" {
+			state.addHealthEventClass("codex_policy_blocked")
+		}
+		return failure
 	case "response.incomplete":
 		return codexEventFailure{class: "upstream_response_incomplete"}
 	}
 	return nil
+}
+
+func codexVerificationRecommended(values []string) bool {
+	for _, value := range values {
+		if strings.TrimSpace(value) == "trusted_access_for_cyber" {
+			return true
+		}
+	}
+	return false
 }
 
 func eventItemType(item *struct {
@@ -409,22 +465,7 @@ func codexEventFailureIsUpstreamStatus(eventType string) bool {
 	}
 }
 
-func codexFailedEventFailure(response *struct {
-	ID      string              `json:"id"`
-	EndTurn *bool               `json:"end_turn"`
-	Error   *codexResponseError `json:"error"`
-	Usage   *struct {
-		InputTokens        *int `json:"input_tokens"`
-		OutputTokens       *int `json:"output_tokens"`
-		TotalTokens        *int `json:"total_tokens"`
-		InputTokensDetails *struct {
-			CachedTokens int `json:"cached_tokens"`
-		} `json:"input_tokens_details"`
-		OutputTokensDetails *struct {
-			ReasoningTokens int `json:"reasoning_tokens"`
-		} `json:"output_tokens_details"`
-	} `json:"usage"`
-}) codexEventFailure {
+func codexFailedEventFailure(response *codexResponsePayload) codexEventFailure {
 	if response == nil || response.Error == nil {
 		return codexEventFailure{class: "upstream_response_failed", reason: "codex response failed"}
 	}
@@ -444,6 +485,8 @@ func codexFailureFromError(err codexResponseError) codexEventFailure {
 func codexErrorClass(code, typ, message string) string {
 	text := strings.ToLower(code + " " + typ + " " + message)
 	switch {
+	case code == "cyber_policy":
+		return "cyber_policy"
 	case strings.Contains(text, "rate_limit") || strings.Contains(text, "rate limit") || strings.Contains(text, "too many requests"):
 		return "rate_limit_exceeded"
 	case strings.Contains(text, "insufficient_quota") || strings.Contains(text, "insufficient balance") || strings.Contains(text, "payment required"):

@@ -107,6 +107,7 @@ type ChatResult struct {
 	Latency              time.Duration
 	EffectiveServiceTier string
 	RetryAfter           *time.Time
+	HealthEventClasses   []string
 	InvalidBody          bool
 	BodyTruncated        bool
 }
@@ -133,6 +134,7 @@ type ChatStreamSummary struct {
 	Latency               time.Duration
 	EffectiveServiceTier  string
 	RetryAfter            *time.Time
+	HealthEventClasses    []string
 	Started               bool
 	Done                  bool
 	PreStreamError        bool

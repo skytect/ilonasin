@@ -55,6 +55,9 @@ func healthEndpointRow(row management.HealthSummary, now time.Time, width int) s
 	head := []string{
 		statusBadge(state),
 	}
+	if cyber := cyberHealthChip(row.EventClass); cyber != "" {
+		head = append(head, cyber)
+	}
 	tail := []string{
 		mutedStyle.Render(wrappedCredentialDisplay(row.CredentialID, row.CredentialLabel)),
 		timeChip("last", now, row.OccurredAt),
@@ -73,7 +76,35 @@ func healthEndpointRow(row management.HealthSummary, now time.Time, width int) s
 }
 
 func healthEndpointState(row management.HealthSummary) string {
+	if isCyberHealthEvent(row.EventClass) {
+		if row.EventClass == "codex_policy_blocked" {
+			return "error"
+		}
+		return "warning"
+	}
 	return eventState(row.EventClass, row.ErrorClass, row.HTTPStatus)
+}
+
+func isCyberHealthEvent(class string) bool {
+	switch class {
+	case "codex_verification_recommended", "codex_mitigated_rerouted", "codex_policy_blocked":
+		return true
+	default:
+		return false
+	}
+}
+
+func cyberHealthChip(class string) string {
+	switch class {
+	case "codex_verification_recommended":
+		return warnBadgeStyle.Render("verify")
+	case "codex_mitigated_rerouted":
+		return warnBadgeStyle.Render("reroute")
+	case "codex_policy_blocked":
+		return badBadgeStyle.Render("cyber")
+	default:
+		return ""
+	}
 }
 
 func quotaSummaryRow(row management.QuotaSummary, now time.Time, width int) string {

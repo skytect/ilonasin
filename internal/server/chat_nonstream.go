@@ -116,6 +116,7 @@ func (s *Server) executeNonStreamingChat(r *http.Request, nc nonStreamContext) n
 		if shouldRecordChatHealth(result) {
 			s.recordHealth(r.Context(), healthFromChatAttempt(nc.address, exec.final))
 		}
+		s.recordHealthEvents(r.Context(), cyberHealthEventsFromChat(nc.address, credential, result))
 		status := localChatStatus(result, err)
 		errorClass := localChatErrorClass(result, err, status)
 		if isQuotaObservation(status, errorClass) {

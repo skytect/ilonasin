@@ -183,6 +183,7 @@ func (s *Server) executeStreamingChat(r *http.Request, sc streamContext, sink *s
 			if shouldRecordStreamHealth(summary) {
 				s.recordHealth(r.Context(), healthFromStreamAttempt(sc.address, exec.final))
 			}
+			s.recordHealthEvents(r.Context(), cyberHealthEventsFromStream(sc.address, credential, summary))
 			status, errorClass := streamQuotaStatusAndError(summary)
 			if isQuotaObservation(status, errorClass) {
 				exec.quotaObservations = append(exec.quotaObservations, chatQuotaObservation(s.now(), sc.address, credential, "stream", status, errorClass, summary.RetryAfter))

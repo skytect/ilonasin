@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -136,6 +137,9 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 	}
 	capture := upstreamStreamCapture{instance: req.Instance, credentialID: req.Credential.ID, endpoint: "responses", status: resp.StatusCode, id: ioID}
 	parsed, err := a.readCodexResponses(streamCtx, resp.Body, capture)
+	if parsed.ServedModel == "" {
+		parsed.ServedModel = codexHTTPHeaderModel(resp.Header)
+	}
 	if err != nil {
 		errorClass := parsed.ErrorClass
 		if errorClass == "" {
@@ -155,7 +159,7 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 		}
 		attrs = append(attrs, codexReadErrorAttrs(err)...)
 		logProviderHTTP(ctx, a.Logger, statusLevel(status, errorClass), "provider_http", attrs...)
-		return ChatResult{StatusCode: status, ContentType: "application/json", ErrorClass: errorClass, Latency: time.Since(start)}, err
+		return ChatResult{StatusCode: status, ContentType: "application/json", ErrorClass: errorClass, Latency: time.Since(start), HealthEventClasses: codexResultHealthEvents(req.UpstreamModel, parsed.ServedModel, parsed.HealthEventClasses)}, err
 	}
 	var out []byte
 	if len(parsed.ToolCalls) > 0 {
@@ -195,7 +199,32 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 		ResponsesOutputItems: parsed.OutputItems,
 		Latency:              time.Since(start),
 		EffectiveServiceTier: effectiveServiceTier,
+		HealthEventClasses:   codexResultHealthEvents(req.UpstreamModel, parsed.ServedModel, parsed.HealthEventClasses),
 	}, nil
+}
+
+func codexResultHealthEvents(requestedModel, servedModel string, classes []string) []string {
+	out := make([]string, 0, len(classes)+1)
+	seen := map[string]bool{}
+	for _, class := range classes {
+		class = strings.TrimSpace(class)
+		if class == "" || seen[class] {
+			continue
+		}
+		seen[class] = true
+		out = append(out, class)
+	}
+	if codexServedModelRerouted(requestedModel, servedModel) && !seen["codex_mitigated_rerouted"] {
+		out = append(out, "codex_mitigated_rerouted")
+	}
+	sort.Strings(out)
+	return out
+}
+
+func codexServedModelRerouted(requestedModel, servedModel string) bool {
+	requestedModel = strings.TrimSpace(requestedModel)
+	servedModel = strings.TrimSpace(servedModel)
+	return requestedModel != "" && servedModel != "" && requestedModel != servedModel
 }
 
 func codexToolCall(callID, name, arguments string) (map[string]any, error) {
@@ -318,6 +347,69 @@ type codexUsagePayload struct {
 	OutputTokensDetails *struct {
 		ReasoningTokens int `json:"reasoning_tokens"`
 	} `json:"output_tokens_details"`
+}
+
+type codexResponseMetadataPayload struct {
+	OpenAIVerificationRecommendation []string `json:"openai_verification_recommendation"`
+}
+
+type codexResponsePayload struct {
+	ID       string                        `json:"id"`
+	EndTurn  *bool                         `json:"end_turn"`
+	Model    string                        `json:"model"`
+	Headers  map[string]any                `json:"headers"`
+	Error    *codexResponseError           `json:"error"`
+	Metadata *codexResponseMetadataPayload `json:"metadata"`
+	Usage    *codexUsagePayload            `json:"usage"`
+}
+
+func codexServerModelFromHeaders(response *codexResponsePayload, eventHeaders map[string]any) string {
+	if response != nil {
+		if model := codexHeaderModel(response.Headers); model != "" {
+			return model
+		}
+	}
+	return codexHeaderModel(eventHeaders)
+}
+
+func codexHeaderModel(headers map[string]any) string {
+	for name, value := range headers {
+		name = strings.TrimSpace(name)
+		if !strings.EqualFold(name, "openai-model") && !strings.EqualFold(name, "x-openai-model") {
+			continue
+		}
+		if model := codexHeaderValueModel(value); model != "" {
+			return model
+		}
+	}
+	return ""
+}
+
+func codexHeaderValueModel(value any) string {
+	switch v := value.(type) {
+	case string:
+		return openai.SafeResolvedModel(v)
+	case []any:
+		for _, item := range v {
+			if model := codexHeaderValueModel(item); model != "" {
+				return model
+			}
+		}
+	default:
+		return ""
+	}
+	return ""
+}
+
+func codexHTTPHeaderModel(headers http.Header) string {
+	for _, name := range []string{"OpenAI-Model", "X-OpenAI-Model"} {
+		for _, value := range headers.Values(name) {
+			if model := openai.SafeResolvedModel(value); model != "" {
+				return model
+			}
+		}
+	}
+	return ""
 }
 
 func codexUsageFromResponse(usage *codexUsagePayload) (openai.Usage, error) {

@@ -11,7 +11,7 @@ type SnapshotClient interface {
 }
 
 func (s Service) LoadManagementSnapshot(ctx context.Context) (ManagementSnapshotResponse, error) {
-	out := ManagementSnapshotResponse{Runtime: s.Runtime}
+	out := ManagementSnapshotResponse{Runtime: s.Runtime, RoutingPolicy: routingPolicyStatus()}
 	out.Providers = snapshotProviderInstances(s.Providers)
 	if s.Tokens != nil {
 		tokens, err := s.ListLocalTokens(ctx)
@@ -70,4 +70,18 @@ func (s Service) LoadManagementSnapshot(ctx context.Context) (ManagementSnapshot
 	out.PruningAvailable = true
 	sanitizeSnapshot(&out)
 	return out, nil
+}
+
+func routingPolicyStatus() RoutingPolicyStatus {
+	return RoutingPolicyStatus{
+		Scope:             "same-provider-model",
+		Pooling:           "enabled",
+		Affinity:          "safe-client-signal-or-local-token-route",
+		Pressure:          "least-in-flight",
+		TieBreaker:        "token-scoped-cursor",
+		Quota:             "active-quota-blocks-considered",
+		Fallback:          "same-provider-model-credential",
+		Cache:             "safe-prompt-cache-key-preferred",
+		ExposesBodyValues: false,
+	}
 }

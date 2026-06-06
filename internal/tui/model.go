@@ -25,6 +25,7 @@ type Model struct {
 	providers                   []management.ProviderInstance
 	credentials                 []management.UpstreamCredential
 	credentialPoolGroups        []management.CredentialPoolGroup
+	routingPolicy               management.RoutingPolicyStatus
 	oauthRows                   []management.OAuthCredential
 	accountRows                 []management.ProviderAccount
 	modelRows                   []management.ModelMetadata

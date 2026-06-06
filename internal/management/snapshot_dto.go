@@ -13,6 +13,7 @@ type ManagementSnapshotResponse struct {
 	LocalTokenUsage      []LocalTokenUsageSummary  `json:"local_token_usage"`
 	UpstreamCredentials  []UpstreamCredential      `json:"upstream_credentials"`
 	CredentialPoolGroups []CredentialPoolGroup     `json:"credential_pool_groups"`
+	RoutingPolicy        RoutingPolicyStatus       `json:"routing_policy"`
 	OAuthCredentials     []OAuthCredential         `json:"oauth_credentials"`
 	ProviderAccounts     []ProviderAccount         `json:"provider_accounts"`
 	ModelCache           []ModelMetadata           `json:"model_cache"`
@@ -69,6 +70,18 @@ type CredentialPoolGroup struct {
 	CredentialKind     string `json:"credential_kind"`
 	GroupLabel         string `json:"group_label"`
 	CredentialCount    int    `json:"credential_count"`
+}
+
+type RoutingPolicyStatus struct {
+	Scope             string `json:"scope"`
+	Pooling           string `json:"pooling"`
+	Affinity          string `json:"affinity"`
+	Pressure          string `json:"pressure"`
+	TieBreaker        string `json:"tie_breaker"`
+	Quota             string `json:"quota"`
+	Fallback          string `json:"fallback"`
+	Cache             string `json:"cache"`
+	ExposesBodyValues bool   `json:"exposes_body_values"`
 }
 
 type OAuthCredential struct {

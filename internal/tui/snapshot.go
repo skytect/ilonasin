@@ -39,6 +39,7 @@ func (m *Model) applySnapshot(snapshot management.ManagementSnapshotResponse, op
 	m.providers = append([]management.ProviderInstance(nil), snapshot.Providers...)
 	m.credentials = append([]management.UpstreamCredential(nil), snapshot.UpstreamCredentials...)
 	m.credentialPoolGroups = append([]management.CredentialPoolGroup(nil), snapshot.CredentialPoolGroups...)
+	m.routingPolicy = snapshot.RoutingPolicy
 	m.oauthRows = append([]management.OAuthCredential(nil), snapshot.OAuthCredentials...)
 	m.accountRows = append([]management.ProviderAccount(nil), snapshot.ProviderAccounts...)
 	m.modelRows = append([]management.ModelMetadata(nil), snapshot.ModelCache...)

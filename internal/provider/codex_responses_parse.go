@@ -612,8 +612,7 @@ func (state *codexResponseParseState) emitCodexFunctionCall(key string) error {
 		return fmt.Errorf("missing codex function_call")
 	}
 	if call.Namespace != "" {
-		state.toolState.emitted[key] = true
-		return state.addCodexResponsesFunctionCallItem(call)
+		return codexEventFailure{class: "upstream_invalid_response", reason: "unsupported namespaced function_call"}
 	}
 	out, err := codexToolCall(call.CallID, call.Name, call.Arguments.String())
 	if err != nil {
@@ -621,32 +620,6 @@ func (state *codexResponseParseState) emitCodexFunctionCall(key string) error {
 	}
 	state.toolCalls = append(state.toolCalls, out)
 	state.toolState.emitted[key] = true
-	return nil
-}
-
-func (state *codexResponseParseState) addCodexResponsesFunctionCallItem(call *codexResponseToolCall) error {
-	if call == nil || call.CallID == "" || call.Name == "" {
-		return fmt.Errorf("invalid codex function_call")
-	}
-	arguments := json.RawMessage(call.Arguments.String())
-	if len(bytes.TrimSpace(arguments)) == 0 {
-		arguments = json.RawMessage(`"{}"`)
-	} else if bytes.TrimSpace(arguments)[0] != '"' {
-		body, err := json.Marshal(call.Arguments.String())
-		if err != nil {
-			return err
-		}
-		arguments = body
-	}
-	stateOutput := openai.ResponsesOutputItem{
-		ID:        call.ItemID,
-		Type:      "function_call",
-		CallID:    call.CallID,
-		Name:      call.Name,
-		Namespace: call.Namespace,
-		Arguments: arguments,
-	}
-	state.outputItem(stateOutput)
 	return nil
 }
 

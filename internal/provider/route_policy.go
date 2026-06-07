@@ -35,6 +35,7 @@ func RoutePolicyForInstance(instance Instance) RoutePolicy {
 				PreserveResponsesInput: true,
 				PreserveResponsesTools: true,
 				AllowProviderOptions:   true,
+				AllowParallelTools:     true,
 			},
 			Anthropic: AnthropicRoutePolicy{
 				IncludeGenerationOptions: false,

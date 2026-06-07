@@ -401,8 +401,8 @@ func parseResponsesFunctionCallItem(raw map[string]json.RawMessage, index int, t
 		if err != nil {
 			return ResponseInputItem{}, err
 		}
-		if parsed != "" && !isFunctionName(parsed) {
-			return ResponseInputItem{}, fmt.Errorf("input[%d].namespace is invalid", index)
+		if parsed != "" {
+			return ResponseInputItem{}, fmt.Errorf("input[%d].namespace is unsupported", index)
 		}
 		namespace = parsed
 	}

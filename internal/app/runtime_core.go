@@ -87,8 +87,8 @@ func bootstrapCore(ctx context.Context, opts Options, createDefaultConfig bool) 
 	}
 	logger.InfoContext(ctx, "application bootstrap complete",
 		slog.String("event", "app_bootstrap"),
-		slog.String("home_dir", homeDir),
-		slog.String("config_file", cfgPath),
+		slog.String("home", "configured"),
+		slog.String("config", "loaded"),
 		slog.String("log_output", "configured"),
 	)
 	registry, err := provider.NewRegistry(providerRegistryConfig(cfg))

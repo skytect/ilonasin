@@ -355,6 +355,9 @@ func normalizeResponsesInputItem(raw map[string]json.RawMessage) map[string]json
 }
 
 func parseResponsesMessageItem(raw map[string]json.RawMessage, index int, typ string) (ResponseInputItem, error) {
+	if err := rejectUnsupportedResponsesInputFields(raw, index, "type", "role", "content", "id", "status"); err != nil {
+		return ResponseInputItem{}, err
+	}
 	role, err := requiredRawString(raw["role"], fmt.Sprintf("input[%d].role", index))
 	if err != nil {
 		return ResponseInputItem{}, err
@@ -372,6 +375,9 @@ func parseResponsesMessageItem(raw map[string]json.RawMessage, index int, typ st
 }
 
 func parseResponsesFunctionCallItem(raw map[string]json.RawMessage, index int, typ string) (ResponseInputItem, error) {
+	if err := rejectUnsupportedResponsesInputFields(raw, index, "type", "id", "call_id", "name", "namespace", "arguments"); err != nil {
+		return ResponseInputItem{}, err
+	}
 	if _, err := optionalRawString(raw["id"], fmt.Sprintf("input[%d].id", index)); err != nil {
 		return ResponseInputItem{}, err
 	}
@@ -422,6 +428,9 @@ func parseResponsesFunctionArguments(raw json.RawMessage, field string) (string,
 }
 
 func parseResponsesFunctionCallOutputItem(raw map[string]json.RawMessage, index int, typ string) (ResponseInputItem, error) {
+	if err := rejectUnsupportedResponsesInputFields(raw, index, "type", "call_id", "output"); err != nil {
+		return ResponseInputItem{}, err
+	}
 	callID, err := requiredRawString(raw["call_id"], fmt.Sprintf("input[%d].call_id", index))
 	if err != nil {
 		return ResponseInputItem{}, err
@@ -437,6 +446,9 @@ func parseResponsesFunctionCallOutputItem(raw map[string]json.RawMessage, index 
 }
 
 func parseResponsesToolSearchCallItem(raw map[string]json.RawMessage, index int, typ string) (ResponseInputItem, error) {
+	if err := rejectUnsupportedResponsesInputFields(raw, index, "type", "id", "call_id", "execution", "status", "arguments"); err != nil {
+		return ResponseInputItem{}, err
+	}
 	if _, err := optionalRawString(raw["id"], fmt.Sprintf("input[%d].id", index)); err != nil {
 		return ResponseInputItem{}, err
 	}
@@ -464,6 +476,9 @@ func parseResponsesToolSearchCallItem(raw map[string]json.RawMessage, index int,
 }
 
 func parseResponsesToolSearchOutputItem(raw map[string]json.RawMessage, index int, typ string) (ResponseInputItem, error) {
+	if err := rejectUnsupportedResponsesInputFields(raw, index, "type", "call_id", "status", "execution", "tools"); err != nil {
+		return ResponseInputItem{}, err
+	}
 	callID, err := requiredRawString(raw["call_id"], fmt.Sprintf("input[%d].call_id", index))
 	if err != nil {
 		return ResponseInputItem{}, err
@@ -492,6 +507,9 @@ func parseResponsesToolSearchOutputItem(raw map[string]json.RawMessage, index in
 }
 
 func parseResponsesCustomToolCallItem(raw map[string]json.RawMessage, index int, typ string) (ResponseInputItem, error) {
+	if err := rejectUnsupportedResponsesInputFields(raw, index, "type", "id", "call_id", "name", "input"); err != nil {
+		return ResponseInputItem{}, err
+	}
 	if _, err := optionalRawString(raw["id"], fmt.Sprintf("input[%d].id", index)); err != nil {
 		return ResponseInputItem{}, err
 	}
@@ -517,6 +535,9 @@ func parseResponsesCustomToolCallItem(raw map[string]json.RawMessage, index int,
 }
 
 func parseResponsesCustomToolCallOutputItem(raw map[string]json.RawMessage, index int, typ string) (ResponseInputItem, error) {
+	if err := rejectUnsupportedResponsesInputFields(raw, index, "type", "call_id", "name", "output"); err != nil {
+		return ResponseInputItem{}, err
+	}
 	callID, err := requiredRawString(raw["call_id"], fmt.Sprintf("input[%d].call_id", index))
 	if err != nil {
 		return ResponseInputItem{}, err
@@ -538,6 +559,13 @@ func parseResponsesCustomToolCallOutputItem(raw map[string]json.RawMessage, inde
 		return ResponseInputItem{}, err
 	}
 	return ResponseInputItem{Type: typ, CallID: callID, Output: output, StructuredOutput: structured}, nil
+}
+
+func rejectUnsupportedResponsesInputFields(raw map[string]json.RawMessage, index int, allowed ...string) error {
+	if key, ok := firstUnsupportedRawField(raw, allowed...); ok {
+		return fmt.Errorf("input[%d].%s is unsupported", index, key)
+	}
+	return nil
 }
 
 func parseResponsesOutput(raw json.RawMessage, field string) (string, bool, error) {

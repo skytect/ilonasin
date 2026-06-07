@@ -317,7 +317,7 @@ func parseResponsesInputItem(raw map[string]json.RawMessage, index int) (Respons
 	case "custom_tool_call_output":
 		return parseResponsesCustomToolCallOutputItem(raw, index, typ)
 	default:
-		return ResponseInputItem{Type: typ}, nil
+		return ResponseInputItem{}, fmt.Errorf("input[%d].type is unsupported", index)
 	}
 }
 

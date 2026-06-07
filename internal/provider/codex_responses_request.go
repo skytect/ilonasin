@@ -238,9 +238,9 @@ func codexResponsesRequestShapeAttrs(req openai.ChatCompletionRequest) []slog.At
 		slog.Int("codex_input_missing_type", shape.missingType),
 		slog.Int("codex_message_items", shape.messageItems),
 		slog.Int("codex_assistant_input_text_parts", shape.assistantInputTextParts),
-		slog.String("codex_last_input_type", shape.lastType),
-		slog.String("codex_last_input_role", shape.lastRole),
-		slog.String("codex_last_content_types", strings.Join(shape.lastContentTypes, ",")),
+		slog.String("codex_last_input_type_bucket", codexInputTypeBucket(shape.lastType)),
+		slog.String("codex_last_input_role_bucket", codexInputRoleBucket(shape.lastRole)),
+		slog.String("codex_last_content_type_bucket", codexContentTypeBucket(shape.lastContentTypes)),
 	)
 	return attrs
 }
@@ -285,6 +285,54 @@ func codexResponsesInputShape(input []json.RawMessage) codexInputShape {
 		shape.lastContentTypes = uniqueCodexContentTypes(item.Content)
 	}
 	return shape
+}
+
+func codexInputTypeBucket(value string) string {
+	switch value {
+	case "":
+		return "none"
+	case "message", "function_call", "function_call_output", "tool_search_call", "tool_search_output", "custom_tool_call", "custom_tool_call_output":
+		return value
+	default:
+		return "other"
+	}
+}
+
+func codexInputRoleBucket(value string) string {
+	switch value {
+	case "":
+		return "none"
+	case "system", "developer", "user", "assistant", "tool":
+		return value
+	default:
+		return "other"
+	}
+}
+
+func codexContentTypeBucket(values []string) string {
+	if len(values) == 0 {
+		return "none"
+	}
+	known := 0
+	unknown := false
+	for _, value := range values {
+		switch value {
+		case "input_text", "output_text", "text", "input_image":
+			known++
+		default:
+			unknown = true
+		}
+	}
+	switch {
+	case unknown && known > 0:
+		return "mixed"
+	case unknown:
+		return "other"
+	case known > 1:
+		return "multiple"
+	default:
+		return values[0]
+	}
 }
 
 func uniqueCodexContentTypes(parts []struct {

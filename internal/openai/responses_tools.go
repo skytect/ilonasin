@@ -136,7 +136,7 @@ func validateCodexResponsesTool(tool map[string]any, index int) error {
 	typ, _ := tool["type"].(string)
 	switch typ {
 	case "function":
-		if key, ok := firstUnsupportedAnyField(tool, "type", "name", "description", "parameters"); ok {
+		if key, ok := firstUnsupportedAnyField(tool, "type", "name", "description", "parameters", "strict"); ok {
 			return fmt.Errorf("tools[%d].%s is unsupported", index, key)
 		}
 		if name, _ := tool["name"].(string); name == "" {
@@ -152,6 +152,11 @@ func validateCodexResponsesTool(tool map[string]any, index int) error {
 		if parameters, ok := tool["parameters"]; ok {
 			if _, ok := parameters.(map[string]any); !ok {
 				return fmt.Errorf("tools[%d].parameters must be an object", index)
+			}
+		}
+		if strict, ok := tool["strict"]; ok {
+			if _, ok := strict.(bool); !ok {
+				return fmt.Errorf("tools[%d].strict must be a boolean", index)
 			}
 		}
 	default:

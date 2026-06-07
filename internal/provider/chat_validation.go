@@ -34,7 +34,7 @@ func chatValidationPolicyForInstance(instance Instance) (chatValidationPolicy, b
 		}, true
 	case "codex":
 		codexUnsupportedOpenRouterFields := []string{"top_k", "min_p", "top_a", "repetition_penalty", "seed", "logit_bias", "session_id", "metadata"}
-		unsupported := []string{"parallel_tool_calls", "prediction", "user", "logprobs", "top_logprobs", "max_tokens", "max_completion_tokens", "temperature", "top_p", "presence_penalty", "frequency_penalty", "stop", "response_format"}
+		unsupported := []string{"prediction", "user", "logprobs", "top_logprobs", "max_tokens", "max_completion_tokens", "temperature", "top_p", "presence_penalty", "frequency_penalty", "stop", "response_format"}
 		unsupported = append(unsupported, codexUnsupportedOpenRouterFields...)
 		return chatValidationPolicy{
 			providerType:                "codex",

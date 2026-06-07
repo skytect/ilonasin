@@ -60,7 +60,7 @@ type codexResponsesRequest struct {
 	Input             any                `json:"input"`
 	Tools             any                `json:"tools"`
 	ToolChoice        string             `json:"tool_choice"`
-	ParallelToolCalls bool               `json:"parallel_tool_calls"`
+	ParallelToolCalls *bool              `json:"parallel_tool_calls,omitempty"`
 	Reasoning         *codexReasoning    `json:"reasoning,omitempty"`
 	Store             bool               `json:"store"`
 	Stream            bool               `json:"stream"`
@@ -112,7 +112,7 @@ func marshalCodexResponsesRequest(req openai.ChatCompletionRequest, upstreamMode
 		Input:             []codexResponseItem{},
 		Tools:             []any{},
 		ToolChoice:        "auto",
-		ParallelToolCalls: model.SupportsParallelToolCalls,
+		ParallelToolCalls: codexParallelToolCalls(req, model),
 		// Privacy boundary: ilonasin remains stateless with Codex backends.
 		// Do not ask upstream to persist prompts, completions, or response state.
 		Store:          false,
@@ -216,6 +216,12 @@ func marshalCodexResponsesRequest(req openai.ChatCompletionRequest, upstreamMode
 	out.Input = inputItems
 	body, err := json.Marshal(out)
 	return body, out.ServiceTier, err
+}
+
+func codexParallelToolCalls(req openai.ChatCompletionRequest, model codexResponsesModel) *bool {
+	// Codex CLI sends this Responses field, but Codex upstream rejects it.
+	// Accept it at ilonasin's edge and omit it from the provider request.
+	return nil
 }
 
 func codexResponsesPromptCacheKey(req openai.ChatCompletionRequest, ids codexRequestIDs) string {

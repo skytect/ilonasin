@@ -136,6 +136,9 @@ func validateCodexResponsesTool(tool map[string]any, index int) error {
 	typ, _ := tool["type"].(string)
 	switch typ {
 	case "function":
+		if key, ok := firstUnsupportedAnyField(tool, "type", "name", "description", "parameters"); ok {
+			return fmt.Errorf("tools[%d].%s is unsupported", index, key)
+		}
 		if name, _ := tool["name"].(string); name == "" {
 			return fmt.Errorf("tools[%d].name is required", index)
 		} else if !isFunctionName(name) {
@@ -151,33 +154,8 @@ func validateCodexResponsesTool(tool map[string]any, index int) error {
 				return fmt.Errorf("tools[%d].parameters must be an object", index)
 			}
 		}
-	case "namespace":
-		if name, _ := tool["name"].(string); name == "" {
-			return fmt.Errorf("tools[%d].name is required", index)
-		} else if !isFunctionName(name) {
-			return fmt.Errorf("tools[%d].name is invalid", index)
-		}
-		children, ok := tool["tools"].([]any)
-		if !ok {
-			return fmt.Errorf("tools[%d].tools must be an array", index)
-		}
-		for childIndex, child := range children {
-			childTool, ok := child.(map[string]any)
-			if !ok {
-				return fmt.Errorf("tools[%d].tools[%d] must be an object", index, childIndex)
-			}
-			if typ, _ := childTool["type"].(string); typ != "function" {
-				return fmt.Errorf("tools[%d].tools[%d].type is unsupported", index, childIndex)
-			}
-			if name, _ := childTool["name"].(string); name == "" {
-				return fmt.Errorf("tools[%d].tools[%d].name is required", index, childIndex)
-			} else if !isFunctionName(name) {
-				return fmt.Errorf("tools[%d].tools[%d].name is invalid", index, childIndex)
-			}
-		}
 	default:
-		// Codex uses Responses-native hosted and custom tool families. Keep
-		// ilonasin out of the business of second-guessing those schemas.
+		return fmt.Errorf("tools[%d].type is unsupported", index)
 	}
 	return nil
 }

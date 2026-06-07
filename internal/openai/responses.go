@@ -312,6 +312,8 @@ func parseResponsesInputItem(raw map[string]json.RawMessage, index int) (Respons
 		return parseResponsesToolSearchCallItem(raw, index, typ)
 	case "tool_search_output":
 		return parseResponsesToolSearchOutputItem(raw, index, typ)
+	case "web_search_call":
+		return parseResponsesWebSearchCallItem(raw, index, typ)
 	case "custom_tool_call":
 		return parseResponsesCustomToolCallItem(raw, index, typ)
 	case "custom_tool_call_output":
@@ -501,6 +503,25 @@ func parseResponsesToolSearchOutputItem(raw map[string]json.RawMessage, index in
 		return ResponseInputItem{}, fmt.Errorf("input[%d].tools is required", index)
 	}
 	return ResponseInputItem{Type: typ, CallID: callID, Execution: execution}, nil
+}
+
+func parseResponsesWebSearchCallItem(raw map[string]json.RawMessage, index int, typ string) (ResponseInputItem, error) {
+	if err := rejectUnsupportedResponsesInputFields(raw, index, "type", "id", "status", "action"); err != nil {
+		return ResponseInputItem{}, err
+	}
+	if _, err := optionalRawString(raw["id"], fmt.Sprintf("input[%d].id", index)); err != nil {
+		return ResponseInputItem{}, err
+	}
+	if _, err := optionalRawString(raw["status"], fmt.Sprintf("input[%d].status", index)); err != nil {
+		return ResponseInputItem{}, err
+	}
+	if action, ok := raw["action"]; ok && len(bytes.TrimSpace(action)) > 0 && !isJSONNull(action) {
+		var obj map[string]json.RawMessage
+		if err := json.Unmarshal(action, &obj); err != nil {
+			return ResponseInputItem{}, fmt.Errorf("input[%d].action must be an object", index)
+		}
+	}
+	return ResponseInputItem{Type: typ}, nil
 }
 
 func parseResponsesCustomToolCallItem(raw map[string]json.RawMessage, index int, typ string) (ResponseInputItem, error) {

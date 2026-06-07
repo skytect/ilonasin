@@ -3,8 +3,10 @@ package logging
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/url"
 	"os"
@@ -309,8 +311,30 @@ func (l *IOLogger) reportError(stage string, err error) {
 	l.logger.Error("io log write failed",
 		slog.String("event", "io_log_write_failed"),
 		slog.String("stage", stage),
-		slog.String("error", err.Error()),
+		slog.String("error_class", ioLoggerErrorClass(stage, err)),
 	)
+}
+
+func ioLoggerErrorClass(stage string, err error) string {
+	if stage == "encode" {
+		return "io_log_encode_failed"
+	}
+	switch {
+	case errors.Is(err, io.ErrShortWrite):
+		return "io_log_short_write"
+	case errors.Is(err, fs.ErrPermission):
+		return "io_log_permission_denied"
+	case errors.Is(err, fs.ErrNotExist):
+		return "io_log_path_missing"
+	case errors.Is(err, fs.ErrExist):
+		return "io_log_path_exists"
+	case errors.Is(err, fs.ErrInvalid):
+		return "io_log_invalid_path"
+	case errors.Is(err, fs.ErrClosed):
+		return "io_log_file_closed"
+	default:
+		return "io_log_failure"
+	}
 }
 
 func (l *IOLogger) ReplaceConfiguredSecrets(secrets []string) {

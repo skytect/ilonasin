@@ -23,7 +23,7 @@ func (m Model) writeLocalTokens(b *strings.Builder) {
 	))
 	b.WriteByte('\n')
 	if len(m.tokenRows) == 0 {
-		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("110"), "downstream tokens",
+		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("81"), "downstream tokens",
 			metricLine(metricChip("usage", "all retained"), metricChip("enabled", "0"), metricChip("disabled", "0"), metricChip("requests", compactInt(localTokenUsageRequestTotal(m.localTokenUsage)))),
 			metricLine(metricChip("scope", "local-api"), metricChip("upstream", "providers")),
 		))

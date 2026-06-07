@@ -25,7 +25,7 @@ func (m Model) writeOAuth(b *strings.Builder) {
 			metricChip("code", m.oauthChallenge.UserCode), safeDisplay(m.oauthChallenge.VerificationURL))
 	}
 	if len(m.oauthRows) == 0 {
-		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("110"), "oauth credentials",
+		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("219"), "oauth credentials",
 			metricLine(metricChip("oauth", "0"), metricChip("accounts", fmt.Sprintf("%d", len(m.accountRows)))),
 			metricLine(metricChip("login", "available"), metricChip("identity", "not-captured")),
 		))
@@ -39,7 +39,7 @@ func (m Model) writeOAuth(b *strings.Builder) {
 	b.WriteString(renderPaneSubhead(width, "Provider accounts", fmt.Sprintf("accounts %d", len(m.accountRows))))
 	b.WriteByte('\n')
 	if len(m.accountRows) == 0 {
-		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("24"), "provider identities",
+		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("48"), "provider identities",
 			metricLine(metricChip("accounts", "0"), metricChip("email", "not-captured")),
 			metricLine(metricChip("source", "oauth-refresh"), metricChip("privacy", "safe-labels")),
 		))

@@ -21,7 +21,7 @@ func (m Model) writeCredentialPoolGroups(b *strings.Builder) {
 		b.WriteByte('\n')
 	}
 	if len(m.credentialPoolGroups) == 0 {
-		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("110"), "credential groups",
+		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("220"), "credential groups",
 			metricLine(metricChip("groups", "0"), metricChip("pool", "same-provider")),
 			metricLine(metricChip("scope", "metadata"), metricChip("min creds", "2")),
 		))

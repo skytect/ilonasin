@@ -44,7 +44,7 @@ func (m Model) writeModelCache(b *strings.Builder) {
 	b.WriteString(renderPaneSubhead(width, "Model cache", fmt.Sprintf("providers %d", len(summaries))))
 	b.WriteByte('\n')
 	if len(summaries) == 0 {
-		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("110"), "model cache",
+		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("117"), "model cache",
 			metricLine(metricChip("providers", "0"), metricChip("models", "0")),
 			metricLine(metricChip("status", "empty"), metricChip("source", "discovery")),
 		))

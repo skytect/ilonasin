@@ -34,7 +34,7 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder, view subscriptionQuota
 	b.WriteString(renderPaneSubhead(width, "Subscription pools", fmt.Sprintf("pools %d", len(pools))))
 	b.WriteByte('\n')
 	if len(pools) == 0 {
-		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("110"), "subscription pools",
+		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("46"), "subscription pools",
 			metricLine(metricChip("pools", "0"), metricChip("accounts", "0"), metricChip("visibility", "metadata-only")),
 			metricLine(metricChip("used", "0pp"), metricChip("left", "0pp"), metricChip("capacity", "0pp")),
 		))
@@ -51,7 +51,7 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder, view subscriptionQuota
 	b.WriteString(renderPaneSubhead(width, "Subscription accounts", fmt.Sprintf("accounts %d", len(rows))))
 	b.WriteByte('\n')
 	if len(rows) == 0 {
-		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("110"), "subscription accounts",
+		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("213"), "subscription accounts",
 			metricLine(metricChip("accounts", "0"), metricChip("fresh", "0"), metricChip("stale", "0")),
 			metricLine(metricChip("limits", "none"), metricChip("visibility", "metadata-only")),
 		))

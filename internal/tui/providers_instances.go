@@ -15,7 +15,7 @@ func (m Model) writeProviderInstances(b *strings.Builder) {
 	b.WriteByte('\n')
 	inventory := providerInventoryForModel(m)
 	if len(m.providers) == 0 {
-		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("110"), "provider instances",
+		b.WriteString(renderEmptyMetricCard(width, lipgloss.Color("207"), "provider instances",
 			metricLine(metricChip("providers", "0"), metricChip("source", "config")),
 			metricLine(metricChip("auth", "none"), metricChip("routes", "none")),
 		))

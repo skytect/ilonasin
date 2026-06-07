@@ -435,7 +435,6 @@ func (l HTTPOAuthDeviceLogin) doJSON(ctx context.Context, req *http.Request, end
 			slog.Int("response_bytes", len(respBody)),
 			slog.String("error_class", "oauth_login_http_error"),
 		}
-		attrs = append(attrs, oauthDeviceHTTPErrorAttrs(respBody)...)
 		if readErr != nil {
 			attrs = append(attrs, slog.String("response_error_class", oauthDeviceDiagnosticReadClass(readErr)))
 		}
@@ -534,57 +533,6 @@ func oauthDeviceDiagnosticReadClass(err error) string {
 		return loginErr.Class
 	}
 	return "oauth_login_network_error"
-}
-
-func oauthDeviceHTTPErrorAttrs(body []byte) []slog.Attr {
-	body = bytes.TrimSpace(body)
-	if len(body) == 0 {
-		return nil
-	}
-	var raw map[string]any
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return nil
-	}
-	var attrs []slog.Attr
-	if value := safeOAuthMapString(raw, "error"); value != "" {
-		attrs = append(attrs, slog.String("upstream_error", value))
-	}
-	if value := safeOAuthMapString(raw, "error_code", "code", "type"); value != "" {
-		attrs = append(attrs, slog.String("upstream_error_kind", value))
-	}
-	if value := safeOAuthMapString(raw, "error_description", "message", "detail"); value != "" {
-		attrs = append(attrs, slog.String("upstream_error_summary", value))
-	}
-	if nested, ok := raw["error"].(map[string]any); ok {
-		if value := safeOAuthMapString(nested, "code", "type"); value != "" {
-			attrs = append(attrs, slog.String("upstream_error_kind", value))
-		}
-		if value := safeOAuthMapString(nested, "message", "detail"); value != "" {
-			attrs = append(attrs, slog.String("upstream_error_summary", value))
-		}
-	}
-	return attrs
-}
-
-func safeOAuthMapString(raw map[string]any, keys ...string) string {
-	for _, key := range keys {
-		value, ok := raw[key]
-		if !ok {
-			continue
-		}
-		if text := safeOAuthLogString(value); text != "" {
-			return text
-		}
-	}
-	return ""
-}
-
-func safeOAuthLogString(value any) string {
-	text, ok := value.(string)
-	if !ok {
-		return ""
-	}
-	return safeOAuthLogValue(text)
 }
 
 func safeOAuthLogValue(value string) string {

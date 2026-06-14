@@ -791,7 +791,7 @@ func (r ResponsesRequest) ToChatCompletionRequest(policy ResponsesConversionPoli
 			codex["reasoning"] = r.Reasoning
 		}
 		if r.Text != nil {
-			if key, ok := firstUnsupportedAnyField(r.Text, "verbosity"); ok {
+			if key, ok := firstUnsupportedAnyField(r.Text, "verbosity", "format"); ok {
 				return ChatCompletionRequest{}, fmt.Errorf("text.%s is unsupported", key)
 			}
 			if rawVerbosity, ok := r.Text["verbosity"]; ok {
@@ -801,6 +801,16 @@ func (r ResponsesRequest) ToChatCompletionRequest(policy ResponsesConversionPoli
 				}
 				codex["verbosity"] = verbosity
 			}
+			if rawFormat, ok := r.Text["format"]; ok {
+				format, ok := rawFormat.(map[string]any)
+				if !ok || format == nil {
+					return ChatCompletionRequest{}, errors.New("text.format must be an object")
+				}
+				if err := validateResponsesTextFormat(format); err != nil {
+					return ChatCompletionRequest{}, err
+				}
+				codex["format"] = format
+			}
 		}
 		if r.ServiceTier != nil {
 			codex["service_tier"] = *r.ServiceTier
@@ -809,6 +819,45 @@ func (r ResponsesRequest) ToChatCompletionRequest(policy ResponsesConversionPoli
 		req.PresentFields["provider_options"] = true
 	}
 	return req, nil
+}
+
+func validateResponsesTextFormat(format map[string]any) error {
+	if len(format) < 3 || len(format) > 4 {
+		return errors.New("text.format only supports type, name, schema, and strict")
+	}
+	typ, ok := format["type"].(string)
+	if !ok {
+		return errors.New("text.format.type must be a string")
+	}
+	if typ != "json_schema" {
+		return errors.New("text.format.type is unsupported")
+	}
+	name, ok := format["name"].(string)
+	if !ok {
+		return errors.New("text.format.name must be a string")
+	}
+	if !isFunctionName(name) {
+		return errors.New("text.format.name is invalid")
+	}
+	schema, ok := format["schema"].(map[string]any)
+	if !ok || schema == nil {
+		return errors.New("text.format.schema must be an object")
+	}
+	if len(schema) == 0 {
+		return errors.New("text.format.schema must not be empty")
+	}
+	for key, value := range format {
+		switch key {
+		case "type", "name", "schema":
+		case "strict":
+			if _, ok := value.(bool); !ok {
+				return errors.New("text.format.strict must be a boolean")
+			}
+		default:
+			return errors.New("text.format contains an unsupported field")
+		}
+	}
+	return nil
 }
 
 func (r ResponsesRequest) AffinityKey() string {

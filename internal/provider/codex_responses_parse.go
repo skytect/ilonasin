@@ -342,7 +342,7 @@ func handleCodexEvent(data []byte, state *codexResponseParseState) (retErr error
 			}
 			return state.emitCodexFunctionCall(codexToolCallKey(event.Item.ID, event.Item.CallID))
 		case "tool_search_call":
-			return state.addCodexToolSearchCall(event.Item.ID, event.Item.CallID, event.Item.Execution, event.Item.Arguments, event.Item.Tools)
+			return state.addCodexToolSearchCall(event.Item.ID, event.Item.CallID, event.Item.Execution, event.Item.Status, event.Item.Arguments, event.Item.Tools)
 		case "web_search_call":
 			return state.addCodexWebSearchCall(event.Item.ID, event.Item.Status, event.Item.Action)
 		case "custom_tool_call":
@@ -612,20 +612,7 @@ func (state *codexResponseParseState) emitCodexFunctionCall(key string) error {
 		return fmt.Errorf("missing codex function_call")
 	}
 	if call.Namespace != "" {
-		arguments := json.RawMessage(call.Arguments.String())
-		if len(bytes.TrimSpace(arguments)) == 0 {
-			arguments = json.RawMessage(`{}`)
-		}
-		state.outputItem(openai.ResponsesOutputItem{
-			ID:        call.ItemID,
-			Type:      "function_call",
-			CallID:    call.CallID,
-			Name:      call.Name,
-			Namespace: call.Namespace,
-			Arguments: arguments,
-		})
-		state.toolState.emitted[key] = true
-		return nil
+		return codexEventFailure{class: "upstream_invalid_response", reason: "unsupported namespaced function_call"}
 	}
 	out, err := codexToolCall(call.CallID, call.Name, call.Arguments.String())
 	if err != nil {
@@ -654,7 +641,7 @@ func (state *codexResponseParseState) addCodexWebSearchCall(id, status string, a
 	return nil
 }
 
-func (state *codexResponseParseState) addCodexToolSearchCall(id, callID, execution string, arguments json.RawMessage, tools []json.RawMessage) error {
+func (state *codexResponseParseState) addCodexToolSearchCall(id, callID, execution, status string, arguments json.RawMessage, tools []json.RawMessage) error {
 	if callID == "" {
 		return codexEventFailure{class: "upstream_invalid_response"}
 	}
@@ -673,6 +660,7 @@ func (state *codexResponseParseState) addCodexToolSearchCall(id, callID, executi
 		CallID:    callID,
 		Arguments: json.RawMessage(bytes.TrimSpace(arguments)),
 		Execution: execution,
+		Status:    status,
 		Tools:     tools,
 	})
 	return nil

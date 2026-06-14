@@ -30,39 +30,46 @@ func (s *Server) writeResponsesSSE(w http.ResponseWriter, r *http.Request, respo
 		if err != nil {
 			return err
 		}
-		if item.Type == "web_search_call" {
-			added := map[string]any{}
-			for key, value := range body {
-				added[key] = value
-			}
-			delete(added, "action")
-			if _, ok := added["status"]; !ok {
-				added["status"] = "in_progress"
-			}
-			if err := s.writeResponseSSEEvent(r, w, flusher, "response.output_item.added", map[string]any{
-				"type": "response.output_item.added",
-				"item": added,
-			}); err != nil {
-				return err
-			}
+		added := responseOutputItemAdded(body)
+		if err := s.writeResponseSSEEvent(r, w, flusher, "response.output_item.added", map[string]any{
+			"type":         "response.output_item.added",
+			"output_index": itemIndex,
+			"item":         added,
+		}); err != nil {
+			return err
 		}
 		if err := s.writeResponseSSEEvent(r, w, flusher, "response.output_item.done", map[string]any{
-			"type": "response.output_item.done",
-			"item": body,
+			"type":         "response.output_item.done",
+			"output_index": itemIndex,
+			"item":         body,
 		}); err != nil {
 			return err
 		}
 		itemIndex++
 	}
 	if message.Content != "" || (!message.HasToolCalls && len(message.ResponsesOutputItems) == 0) {
-		if err := s.writeResponseSSEEvent(r, w, flusher, "response.output_item.done", map[string]any{
-			"type": "response.output_item.done",
+		item := map[string]any{
+			"id":      fmt.Sprintf("%s_item_%d", responseID, itemIndex),
+			"type":    "message",
+			"role":    "assistant",
+			"content": []any{map[string]any{"type": "output_text", "text": message.Content}},
+		}
+		if err := s.writeResponseSSEEvent(r, w, flusher, "response.output_item.added", map[string]any{
+			"type":         "response.output_item.added",
+			"output_index": itemIndex,
 			"item": map[string]any{
-				"id":      fmt.Sprintf("%s_item_%d", responseID, itemIndex),
+				"id":      item["id"],
 				"type":    "message",
 				"role":    "assistant",
-				"content": []any{map[string]any{"type": "output_text", "text": message.Content}},
+				"content": []any{},
 			},
+		}); err != nil {
+			return err
+		}
+		if err := s.writeResponseSSEEvent(r, w, flusher, "response.output_item.done", map[string]any{
+			"type":         "response.output_item.done",
+			"output_index": itemIndex,
+			"item":         item,
 		}); err != nil {
 			return err
 		}
@@ -73,9 +80,17 @@ func (s *Server) writeResponsesSSE(w http.ResponseWriter, r *http.Request, respo
 		if err != nil {
 			return err
 		}
+		if err := s.writeResponseSSEEvent(r, w, flusher, "response.output_item.added", map[string]any{
+			"type":         "response.output_item.added",
+			"output_index": itemIndex,
+			"item":         responseOutputItemAdded(item),
+		}); err != nil {
+			return err
+		}
 		if err := s.writeResponseSSEEvent(r, w, flusher, "response.output_item.done", map[string]any{
-			"type": "response.output_item.done",
-			"item": item,
+			"type":         "response.output_item.done",
+			"output_index": itemIndex,
+			"item":         item,
 		}); err != nil {
 			return err
 		}
@@ -135,6 +150,9 @@ func responseOutputItem(responseID string, index int, item openai.ResponsesOutpu
 	case "tool_search_call":
 		out["call_id"] = item.CallID
 		out["execution"] = item.Execution
+		if item.Status != "" {
+			out["status"] = item.Status
+		}
 		if len(item.Arguments) > 0 {
 			out["arguments"] = item.Arguments
 		} else {
@@ -158,6 +176,28 @@ func responseOutputItem(responseID string, index int, item openai.ResponsesOutpu
 		return nil, fmt.Errorf("unsupported responses output item %q", item.Type)
 	}
 	return out, nil
+}
+
+func responseOutputItemAdded(done map[string]any) map[string]any {
+	added := map[string]any{}
+	for key, value := range done {
+		added[key] = value
+	}
+	switch added["type"] {
+	case "function_call":
+		delete(added, "arguments")
+	case "tool_search_call":
+		delete(added, "arguments")
+		delete(added, "tools")
+	case "custom_tool_call":
+		delete(added, "input")
+	case "web_search_call":
+		delete(added, "action")
+		if _, ok := added["status"]; !ok {
+			added["status"] = "in_progress"
+		}
+	}
+	return added
 }
 
 func (s *Server) writeResponseSSEEvent(r *http.Request, w http.ResponseWriter, flusher http.Flusher, event string, payload map[string]any) error {

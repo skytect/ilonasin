@@ -85,7 +85,8 @@ type codexReasoning struct {
 }
 
 type codexTextControls struct {
-	Verbosity string `json:"verbosity,omitempty"`
+	Verbosity string         `json:"verbosity,omitempty"`
+	Format    map[string]any `json:"format,omitempty"`
 }
 
 type codexResponseItem struct {
@@ -437,6 +438,12 @@ func codexRequestOptions(req openai.ChatCompletionRequest, model codexResponsesM
 	var textControls *codexTextControls
 	if verbosity, ok := opts["verbosity"].(string); ok {
 		textControls = &codexTextControls{Verbosity: verbosity}
+	}
+	if format, ok := opts["format"].(map[string]any); ok {
+		if textControls == nil {
+			textControls = &codexTextControls{}
+		}
+		textControls.Format = format
 	}
 	serviceTier := ""
 	if tier, ok := opts["service_tier"].(string); ok {

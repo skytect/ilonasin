@@ -24,6 +24,14 @@ func validateCodexOptions(raw any) error {
 			if verbosity != "low" && verbosity != "medium" && verbosity != "high" {
 				return errors.New("provider_options.codex.verbosity is unsupported")
 			}
+		case "format":
+			format, ok := value.(map[string]any)
+			if !ok || format == nil {
+				return errors.New("provider_options.codex.format must be an object")
+			}
+			if err := validateCodexTextFormat(format); err != nil {
+				return err
+			}
 		case "service_tier":
 			tier, ok := value.(string)
 			if !ok {
@@ -34,6 +42,55 @@ func validateCodexOptions(raw any) error {
 			}
 		default:
 			return errors.New("provider_options.codex contains an unsupported field")
+		}
+	}
+	return nil
+}
+
+func validateCodexTextFormat(format map[string]any) error {
+	if len(format) < 3 || len(format) > 4 {
+		return errors.New("provider_options.codex.format only supports type, name, schema, and strict")
+	}
+	typ, ok := format["type"].(string)
+	if !ok {
+		return errors.New("provider_options.codex.format.type must be a string")
+	}
+	if typ != "json_schema" {
+		return errors.New("provider_options.codex.format.type is unsupported")
+	}
+	name, ok := format["name"].(string)
+	if !ok {
+		return errors.New("provider_options.codex.format.name must be a string")
+	}
+	if name == "" || len(name) > 64 {
+		return errors.New("provider_options.codex.format.name is invalid")
+	}
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '_' || r == '-':
+		default:
+			return errors.New("provider_options.codex.format.name is invalid")
+		}
+	}
+	schema, ok := format["schema"].(map[string]any)
+	if !ok || schema == nil {
+		return errors.New("provider_options.codex.format.schema must be an object")
+	}
+	if len(schema) == 0 {
+		return errors.New("provider_options.codex.format.schema must not be empty")
+	}
+	for key, value := range format {
+		switch key {
+		case "type", "name", "schema":
+		case "strict":
+			if _, ok := value.(bool); !ok {
+				return errors.New("provider_options.codex.format.strict must be a boolean")
+			}
+		default:
+			return errors.New("provider_options.codex.format contains an unsupported field")
 		}
 	}
 	return nil

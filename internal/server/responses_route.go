@@ -158,6 +158,10 @@ func responsesMessageResult(final chatAttempt) (openai.ChatCompletionMessageResu
 		return openai.ChatCompletionMessageResult{}, http.StatusBadGateway, "upstream_invalid_response"
 	}
 	message.ResponsesOutputItems = final.result.ResponsesOutputItems
+	if len(message.ResponsesOutputItems) > 0 {
+		message.ToolCalls = nil
+		message.HasToolCalls = false
+	}
 	return message, status, errorClass
 }
 

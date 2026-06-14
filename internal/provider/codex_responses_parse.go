@@ -33,19 +33,20 @@ type codexResponseError struct {
 }
 
 type codexResponseParseState struct {
-	itemDoneText    strings.Builder
-	textDoneText    strings.Builder
-	deltaText       strings.Builder
-	sawItemDoneText bool
-	sawTextDoneText bool
-	servedModel     string
-	toolCalls       []map[string]any
-	outputItems     []openai.ResponsesOutputItem
-	toolState       codexResponseToolState
-	customToolState codexResponseCustomToolState
-	usage           openai.Usage
-	completed       bool
-	healthEvents    codexHealthEventSet
+	itemDoneText           strings.Builder
+	textDoneText           strings.Builder
+	deltaText              strings.Builder
+	sawItemDoneText        bool
+	sawTextDoneText        bool
+	servedModel            string
+	allowNativeOutputItems bool
+	toolCalls              []map[string]any
+	outputItems            []openai.ResponsesOutputItem
+	toolState              codexResponseToolState
+	customToolState        codexResponseCustomToolState
+	usage                  openai.Usage
+	completed              bool
+	healthEvents           codexHealthEventSet
 }
 
 type codexHealthEventSet map[string]bool
@@ -78,12 +79,12 @@ type codexResponseCustomToolCall struct {
 	Input  strings.Builder
 }
 
-func (a HTTPChatAdapter) readCodexResponses(ctx context.Context, body io.ReadCloser, capture upstreamStreamCapture) (codexResponsesResult, error) {
+func (a HTTPChatAdapter) readCodexResponses(ctx context.Context, body io.ReadCloser, capture upstreamStreamCapture, allowNativeOutputItems bool) (codexResponsesResult, error) {
 	reader := bufio.NewReaderSize(body, a.maxStreamLineBytes()+1)
 	var parts [][]byte
 	eventBytes := 0
 	events := 0
-	var state codexResponseParseState
+	state := codexResponseParseState{allowNativeOutputItems: allowNativeOutputItems}
 	for {
 		line, err := a.readStreamLine(ctx, body, reader)
 		if err != nil {
@@ -201,6 +202,7 @@ func (state *codexResponseParseState) aggregateBytes() int {
 		total += call.Input.Len()
 	}
 	for _, item := range state.outputItems {
+		total += len(item.Raw)
 		total += len(item.Arguments)
 		total += len(item.Action)
 		for _, tool := range item.Tools {
@@ -290,10 +292,15 @@ func handleCodexEvent(data []byte, state *codexResponseParseState) (retErr error
 		retErr = codexEventContextError(retErr, event.Type, eventItemType(event.Item))
 	}()
 	if unsupportedCodexToolEvent(event.Type) {
+		if state.allowNativeOutputItems {
+			return nil
+		}
 		return codexEventFailure{class: "upstream_invalid_response", reason: "unsupported codex event type"}
 	}
 	if event.Item != nil && unsupportedCodexOutputItem(event.Item.Type) {
-		return codexEventFailure{class: "upstream_invalid_response", reason: "unsupported codex output item type"}
+		if !state.allowNativeOutputItems || (event.Type != "response.output_item.added" && event.Type != "response.output_item.done") {
+			return codexEventFailure{class: "upstream_invalid_response", reason: "unsupported codex output item type"}
+		}
 	}
 	if model := codexServerModelFromHeaders(event.Response, event.Headers); model != "" {
 		state.servedModel = model
@@ -321,6 +328,9 @@ func handleCodexEvent(data []byte, state *codexResponseParseState) (retErr error
 		case "message", "reasoning":
 			return nil
 		default:
+			if state.allowNativeOutputItems {
+				return nil
+			}
 			return codexEventFailure{class: "upstream_invalid_response"}
 		}
 	case "response.function_call_arguments.delta":
@@ -359,6 +369,9 @@ func handleCodexEvent(data []byte, state *codexResponseParseState) (retErr error
 		case "reasoning":
 			return nil
 		default:
+			if state.allowNativeOutputItems {
+				return state.addCodexRawOutputItem(data)
+			}
 			return codexEventFailure{class: "upstream_invalid_response"}
 		}
 	case "response.output_text.done":
@@ -611,20 +624,56 @@ func (state *codexResponseParseState) emitCodexFunctionCall(key string) error {
 	if call == nil {
 		return fmt.Errorf("missing codex function_call")
 	}
-	if call.Namespace != "" {
-		return codexEventFailure{class: "upstream_invalid_response", reason: "unsupported namespaced function_call"}
-	}
 	out, err := codexToolCall(call.CallID, call.Name, call.Arguments.String())
 	if err != nil {
 		return err
 	}
 	state.toolCalls = append(state.toolCalls, out)
+	state.outputItem(openai.ResponsesOutputItem{
+		Type:      "function_call",
+		ID:        call.ItemID,
+		CallID:    call.CallID,
+		Name:      call.Name,
+		Namespace: call.Namespace,
+		Arguments: json.RawMessage(call.Arguments.String()),
+	})
 	state.toolState.emitted[key] = true
 	return nil
 }
 
 func (state *codexResponseParseState) outputItem(item openai.ResponsesOutputItem) {
 	state.outputItems = append(state.outputItems, item)
+}
+
+func (state *codexResponseParseState) addCodexRawOutputItem(data []byte) error {
+	var event struct {
+		Item json.RawMessage `json:"item"`
+	}
+	if err := json.Unmarshal(data, &event); err != nil {
+		return err
+	}
+	item := bytes.TrimSpace(event.Item)
+	if len(item) == 0 || bytes.Equal(item, []byte("null")) {
+		return codexEventFailure{class: "upstream_invalid_response"}
+	}
+	var shape struct {
+		ID   string `json:"id"`
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(item, &shape); err != nil {
+		return err
+	}
+	if shape.Type == "" {
+		return codexEventFailure{class: "upstream_invalid_response"}
+	}
+	raw := make([]byte, len(item))
+	copy(raw, item)
+	state.outputItem(openai.ResponsesOutputItem{
+		ID:   shape.ID,
+		Type: shape.Type,
+		Raw:  json.RawMessage(raw),
+	})
+	return nil
 }
 
 func (state *codexResponseParseState) addCodexWebSearchCall(id, status string, action json.RawMessage) error {

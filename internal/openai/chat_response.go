@@ -26,6 +26,7 @@ type ChatCompletionMessageResult struct {
 type ResponsesOutputItem struct {
 	ID        string
 	Type      string
+	Raw       json.RawMessage
 	CallID    string
 	Name      string
 	Namespace string

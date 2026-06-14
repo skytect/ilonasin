@@ -127,6 +127,19 @@ func responseFunctionCallItem(responseID string, index int, call map[string]any)
 }
 
 func responseOutputItem(responseID string, index int, item openai.ResponsesOutputItem) (map[string]any, error) {
+	if len(item.Raw) > 0 {
+		var out map[string]any
+		if err := json.Unmarshal(item.Raw, &out); err != nil {
+			return nil, err
+		}
+		if _, ok := out["type"].(string); !ok {
+			return nil, fmt.Errorf("unsupported responses output item %q", item.Type)
+		}
+		if id, _ := out["id"].(string); id == "" {
+			out["id"] = fmt.Sprintf("%s_item_%d", responseID, index)
+		}
+		return out, nil
+	}
 	id := item.ID
 	if id == "" {
 		id = fmt.Sprintf("%s_item_%d", responseID, index)

@@ -304,6 +304,8 @@ func parseResponsesInputItem(raw map[string]json.RawMessage, index int) (Respons
 	switch typ {
 	case "message":
 		return parseResponsesMessageItem(raw, index, typ)
+	case "compaction":
+		return parseResponsesCompactionItem(raw, index, typ)
 	case "function_call":
 		return parseResponsesFunctionCallItem(raw, index, typ)
 	case "function_call_output":
@@ -374,6 +376,23 @@ func parseResponsesMessageItem(raw map[string]json.RawMessage, index int, typ st
 		return ResponseInputItem{}, err
 	}
 	return ResponseInputItem{Type: typ, Role: role, Content: content}, nil
+}
+
+func parseResponsesCompactionItem(raw map[string]json.RawMessage, index int, typ string) (ResponseInputItem, error) {
+	if err := rejectUnsupportedResponsesInputFields(raw, index, "type", "id", "encrypted_content"); err != nil {
+		return ResponseInputItem{}, err
+	}
+	if _, err := optionalRawString(raw["id"], fmt.Sprintf("input[%d].id", index)); err != nil {
+		return ResponseInputItem{}, err
+	}
+	encryptedContent, err := requiredRawString(raw["encrypted_content"], fmt.Sprintf("input[%d].encrypted_content", index))
+	if err != nil {
+		return ResponseInputItem{}, err
+	}
+	if encryptedContent == "" {
+		return ResponseInputItem{}, fmt.Errorf("input[%d].encrypted_content is required", index)
+	}
+	return ResponseInputItem{Type: typ}, nil
 }
 
 func parseResponsesFunctionCallItem(raw map[string]json.RawMessage, index int, typ string) (ResponseInputItem, error) {

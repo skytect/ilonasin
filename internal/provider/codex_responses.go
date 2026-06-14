@@ -136,7 +136,8 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 		return ChatResult{StatusCode: http.StatusBadGateway, UpstreamStatusCode: resp.StatusCode, ContentType: "application/json", ErrorClass: errorClass, Latency: time.Since(start), RetryAfter: retryAfter}, fmt.Errorf("codex responses status %d", resp.StatusCode)
 	}
 	capture := upstreamStreamCapture{instance: req.Instance, credentialID: req.Credential.ID, endpoint: "responses", status: resp.StatusCode, id: ioID}
-	parsed, err := a.readCodexResponses(streamCtx, resp.Body, capture)
+	allowNativeOutputItems := len(req.Request.CodexResponsesInput) > 0
+	parsed, err := a.readCodexResponses(streamCtx, resp.Body, capture, allowNativeOutputItems)
 	if parsed.ServedModel == "" {
 		parsed.ServedModel = codexHTTPHeaderModel(resp.Header)
 	}
@@ -192,13 +193,17 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 		slog.Int("status", http.StatusOK),
 		slog.Int64("duration_ms", durationMS(start)),
 	)
+	outputItems := []openai.ResponsesOutputItem(nil)
+	if len(req.Request.CodexResponsesInput) > 0 {
+		outputItems = parsed.OutputItems
+	}
 	return ChatResult{
 		StatusCode:           http.StatusOK,
 		ContentType:          "application/json",
 		Body:                 out,
 		Usage:                parsed.Usage,
 		ResolvedModel:        req.UpstreamModel,
-		ResponsesOutputItems: parsed.OutputItems,
+		ResponsesOutputItems: outputItems,
 		Latency:              time.Since(start),
 		EffectiveServiceTier: effectiveServiceTier,
 		HealthEventClasses:   codexResultHealthEvents(req.UpstreamModel, parsed.ServedModel, parsed.HealthEventClasses),

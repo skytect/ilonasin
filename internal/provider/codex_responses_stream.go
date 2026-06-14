@@ -386,11 +386,6 @@ func (a HTTPChatAdapter) handleCodexStreamEvent(ctx context.Context, data []byte
 				return fmt.Errorf("codex stream contained unsupported output item")
 			}
 		}
-		if event.Item.Namespace != "" {
-			summary.ErrorClass = "upstream_invalid_response"
-			summary.CompletionStatus = "upstream_invalid"
-			return fmt.Errorf("codex stream contained unsupported namespaced function_call")
-		}
 		if err := writeCodexRoleChunk(ctx, sink, summary, state); err != nil {
 			return err
 		}
@@ -439,11 +434,6 @@ func (a HTTPChatAdapter) handleCodexStreamEvent(ctx context.Context, data []byte
 			return fmt.Errorf("codex stream missing output item")
 		}
 		if event.Item.Type == "function_call" {
-			if event.Item.Namespace != "" {
-				summary.ErrorClass = "upstream_invalid_response"
-				summary.CompletionStatus = "upstream_invalid"
-				return fmt.Errorf("codex stream contained unsupported namespaced function_call")
-			}
 			if err := writeCodexRoleChunk(ctx, sink, summary, state); err != nil {
 				return err
 			}

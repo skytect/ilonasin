@@ -145,6 +145,7 @@ func codexNativeResponsesBody(raw []byte, upstreamModel string) ([]byte, error) 
 	body["store"] = json.RawMessage("false")
 	codexNormalizeNativeInstructions(body)
 	codexNormalizeNativeTools(body)
+	codexNormalizeNativeInputMessageIDs(body)
 	return json.Marshal(body)
 }
 
@@ -180,10 +181,36 @@ func codexNormalizeNativeTools(body map[string]json.RawMessage) {
 	}
 }
 
+func codexNormalizeNativeInputMessageIDs(body map[string]json.RawMessage) {
+	rawInput := bytes.TrimSpace(body["input"])
+	if len(rawInput) == 0 || rawInput[0] != '[' {
+		return
+	}
+	var items []map[string]json.RawMessage
+	if err := json.Unmarshal(rawInput, &items); err != nil {
+		return
+	}
+	changed := false
+	for _, item := range items {
+		if codexRawString(item["type"]) != "message" {
+			continue
+		}
+		id := codexRawString(item["id"])
+		if id != "" && !strings.HasPrefix(id, "msg") {
+			delete(item, "id")
+			changed = true
+		}
+	}
+	if !changed {
+		return
+	}
+	if encoded, err := json.Marshal(items); err == nil {
+		body["input"] = encoded
+	}
+}
+
 func codexNativeToolType(fields map[string]json.RawMessage) string {
-	var typ string
-	_ = json.Unmarshal(fields["type"], &typ)
-	return strings.TrimSpace(typ)
+	return strings.TrimSpace(codexRawString(fields["type"]))
 }
 
 func codexDeleteNullField(fields map[string]json.RawMessage, name string) bool {
@@ -196,6 +223,14 @@ func codexDeleteNullField(fields map[string]json.RawMessage, name string) bool {
 	}
 	delete(fields, name)
 	return true
+}
+
+func codexRawString(raw json.RawMessage) string {
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return ""
+	}
+	return value
 }
 
 func codexNormalizeNativeInstructions(body map[string]json.RawMessage) {

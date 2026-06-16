@@ -144,7 +144,58 @@ func codexNativeResponsesBody(raw []byte, upstreamModel string) ([]byte, error) 
 	body["stream"] = json.RawMessage("true")
 	body["store"] = json.RawMessage("false")
 	codexNormalizeNativeInstructions(body)
+	codexNormalizeNativeTools(body)
 	return json.Marshal(body)
+}
+
+func codexNormalizeNativeTools(body map[string]json.RawMessage) {
+	rawTools := bytes.TrimSpace(body["tools"])
+	if len(rawTools) == 0 || rawTools[0] != '[' {
+		return
+	}
+	var tools []map[string]json.RawMessage
+	if err := json.Unmarshal(rawTools, &tools); err != nil {
+		return
+	}
+	changed := false
+	for _, tool := range tools {
+		if codexNativeToolType(tool) == "function" && codexDeleteNullField(tool, "strict") {
+			changed = true
+		}
+		if rawFunction, ok := tool["function"]; ok {
+			var function map[string]json.RawMessage
+			if err := json.Unmarshal(rawFunction, &function); err == nil && codexDeleteNullField(function, "strict") {
+				if encoded, err := json.Marshal(function); err == nil {
+					tool["function"] = encoded
+					changed = true
+				}
+			}
+		}
+	}
+	if !changed {
+		return
+	}
+	if encoded, err := json.Marshal(tools); err == nil {
+		body["tools"] = encoded
+	}
+}
+
+func codexNativeToolType(fields map[string]json.RawMessage) string {
+	var typ string
+	_ = json.Unmarshal(fields["type"], &typ)
+	return strings.TrimSpace(typ)
+}
+
+func codexDeleteNullField(fields map[string]json.RawMessage, name string) bool {
+	raw, ok := fields[name]
+	if !ok {
+		return false
+	}
+	if !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return false
+	}
+	delete(fields, name)
+	return true
 }
 
 func codexNormalizeNativeInstructions(body map[string]json.RawMessage) {
@@ -376,7 +427,7 @@ func (a HTTPChatAdapter) handleCodexNativeResponsesEvent(ctx context.Context, li
 	block := bytes.Join(lines, []byte("\n"))
 	data := bytes.Join(dataParts, []byte("\n"))
 	capture.eventIndex++
-	capture.id = a.recordUpstreamSSE(capture.instance, capture.credentialID, capture.endpoint, capture.status, data, capture.id, capture.eventIndex)
+	capture.id = a.recordUpstreamSSE(capture.instance, capture.credentialID, capture.endpoint, capture.status, block, capture.id, capture.eventIndex)
 	if err := sink.WriteEvent(ctx, block); err != nil {
 		summary.ErrorClass = "client_disconnected"
 		summary.CompletionStatus = "client_disconnected"

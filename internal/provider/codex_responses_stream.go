@@ -227,6 +227,7 @@ func includeStreamUsage(req openai.ChatCompletionRequest) bool {
 
 func (a HTTPChatAdapter) readCodexStream(ctx context.Context, body io.ReadCloser, sink ChatStreamSink, summary *ChatStreamSummary, state *codexStreamState, start time.Time, capture upstreamStreamCapture) error {
 	reader := bufio.NewReaderSize(body, a.maxStreamLineBytes()+1)
+	var lines [][]byte
 	var parts [][]byte
 	eventBytes := 0
 	for {
@@ -234,9 +235,10 @@ func (a HTTPChatAdapter) readCodexStream(ctx context.Context, body io.ReadCloser
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				if len(parts) > 0 {
+					block := bytes.Join(lines, []byte("\n"))
 					data := bytes.Join(parts, []byte("\n"))
 					capture.eventIndex++
-					capture.id = a.recordUpstreamSSE(capture.instance, capture.credentialID, capture.endpoint, capture.status, data, capture.id, capture.eventIndex)
+					capture.id = a.recordUpstreamSSE(capture.instance, capture.credentialID, capture.endpoint, capture.status, block, capture.id, capture.eventIndex)
 					if err := a.handleCodexStreamEvent(ctx, data, sink, summary, state, start); err != nil {
 						return err
 					}
@@ -256,6 +258,7 @@ func (a HTTPChatAdapter) readCodexStream(ctx context.Context, body io.ReadCloser
 		line = bytes.TrimRight(line, "\r\n")
 		if len(line) == 0 {
 			if len(parts) == 0 {
+				lines = nil
 				continue
 			}
 			state.events++
@@ -264,9 +267,10 @@ func (a HTTPChatAdapter) readCodexStream(ctx context.Context, body io.ReadCloser
 				summary.CompletionStatus = "event_limit"
 				return fmt.Errorf("codex response event limit exceeded")
 			}
+			block := bytes.Join(lines, []byte("\n"))
 			data := bytes.Join(parts, []byte("\n"))
 			capture.eventIndex++
-			capture.id = a.recordUpstreamSSE(capture.instance, capture.credentialID, capture.endpoint, capture.status, data, capture.id, capture.eventIndex)
+			capture.id = a.recordUpstreamSSE(capture.instance, capture.credentialID, capture.endpoint, capture.status, block, capture.id, capture.eventIndex)
 			if err := a.handleCodexStreamEvent(ctx, data, sink, summary, state, start); err != nil {
 				return err
 			}
@@ -275,13 +279,15 @@ func (a HTTPChatAdapter) readCodexStream(ctx context.Context, body io.ReadCloser
 				summary.CompletionStatus = "too_large"
 				return fmt.Errorf("codex response aggregate too large")
 			}
-			parts = nil
-			eventBytes = 0
 			if summary.Done {
 				return nil
 			}
+			lines = nil
+			parts = nil
+			eventBytes = 0
 			continue
 		}
+		lines = append(lines, append([]byte(nil), line...))
 		if line[0] == ':' {
 			continue
 		}

@@ -81,6 +81,7 @@ type codexResponseCustomToolCall struct {
 
 func (a HTTPChatAdapter) readCodexResponses(ctx context.Context, body io.ReadCloser, capture upstreamStreamCapture, allowNativeOutputItems bool) (codexResponsesResult, error) {
 	reader := bufio.NewReaderSize(body, a.maxStreamLineBytes()+1)
+	var lines [][]byte
 	var parts [][]byte
 	eventBytes := 0
 	events := 0
@@ -90,9 +91,10 @@ func (a HTTPChatAdapter) readCodexResponses(ctx context.Context, body io.ReadClo
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				if len(parts) > 0 {
+					block := bytes.Join(lines, []byte("\n"))
 					data := bytes.Join(parts, []byte("\n"))
 					capture.eventIndex++
-					capture.id = a.recordUpstreamSSE(capture.instance, capture.credentialID, capture.endpoint, capture.status, data, capture.id, capture.eventIndex)
+					capture.id = a.recordUpstreamSSE(capture.instance, capture.credentialID, capture.endpoint, capture.status, block, capture.id, capture.eventIndex)
 					if err := handleCodexEvent(data, &state); err != nil {
 						result := state.codexResponsesResult()
 						result.ErrorClass = "upstream_invalid_response"
@@ -109,15 +111,17 @@ func (a HTTPChatAdapter) readCodexResponses(ctx context.Context, body io.ReadClo
 		line = bytes.TrimRight(line, "\r\n")
 		if len(line) == 0 {
 			if len(parts) == 0 {
+				lines = nil
 				continue
 			}
 			events++
 			if events > a.maxStreamEvents() {
 				return state.codexResponsesErrorResult("upstream_invalid_response"), fmt.Errorf("codex response event limit exceeded")
 			}
+			block := bytes.Join(lines, []byte("\n"))
 			data := bytes.Join(parts, []byte("\n"))
 			capture.eventIndex++
-			capture.id = a.recordUpstreamSSE(capture.instance, capture.credentialID, capture.endpoint, capture.status, data, capture.id, capture.eventIndex)
+			capture.id = a.recordUpstreamSSE(capture.instance, capture.credentialID, capture.endpoint, capture.status, block, capture.id, capture.eventIndex)
 			if err := handleCodexEvent(data, &state); err != nil {
 				result := state.codexResponsesResult()
 				result.ErrorClass = codexEventErrorClass(err)
@@ -129,10 +133,12 @@ func (a HTTPChatAdapter) readCodexResponses(ctx context.Context, body io.ReadClo
 			if state.completed {
 				return state.codexResponsesResult(), nil
 			}
+			lines = nil
 			parts = nil
 			eventBytes = 0
 			continue
 		}
+		lines = append(lines, append([]byte(nil), line...))
 		if line[0] == ':' {
 			continue
 		}

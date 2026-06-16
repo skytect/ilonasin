@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"ilonasin/internal/credentials"
-	"ilonasin/internal/logging"
 	"ilonasin/internal/management"
 	"ilonasin/internal/provider"
 	"ilonasin/internal/server"
@@ -25,7 +24,7 @@ func Serve(opts Options) error {
 	if err := refreshIOConfiguredSecrets(context.Background(), rt.IOLogger, rt.Store); err != nil {
 		return err
 	}
-	captureUpstreamIO := rt.IOLogger != nil && logging.DebugEnabled(rt.Config.Logging.Level)
+	captureUpstreamIO := rt.IOLogger != nil
 	secretRefresh := ioSecretRefreshHook(context.Background(), rt.IOLogger, rt.Store)
 	keepalive := subscriptionKeepaliveSettingsFromConfig(rt.Config.SubscriptionKeepalive)
 	mgmt, err := startManagementServer(context.Background(), rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database, rt.Config.Server.Bind, ioRetentionStatusFromConfig(rt.Config.Logging), rt.Registry, rt.Store, keepalive, rt.IOLogger, captureUpstreamIO, secretRefresh, rt.Logger)

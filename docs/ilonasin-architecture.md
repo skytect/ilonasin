@@ -205,21 +205,22 @@ Anthropic-compatible routes:
 - `POST /v1/messages`
 - `POST /v1/messages/count_tokens`
 
-Unsupported fields should return clear local errors. The daemon should not
-silently forward unknown or unsupported fields to providers.
+Compatibility routes are strict by default. A provider may also expose a
+route-native capability for a specific surface. When a selected provider exposes
+native Responses, the `/responses` route may preserve the validated native
+request shape and relay native provider SSE without converting through Chat
+Completions. When no native capability exists, Responses must convert into the
+local strict request model or fail locally before provider dispatch.
 
-Provider-specific escape hatches can exist, but they should be explicit and
-namespaced.
+Codex native Responses is a route-native capability. Ilonasin may inspect only
+auth, model routing, statelessness, coarse safety limits, credential affinity,
+and safe metadata fields. It must not reject Codex-native input or output
+families solely because they are not representable as Chat Completions.
 
-Responses and Anthropic-compatible routes are local compatibility surfaces, not
-claims of universal upstream feature parity. They should convert into the local
-strict request model or reject unsupported features before provider dispatch.
-Representable function-tool paths are supported through that strict local model.
-Validated Codex-native Responses tool declarations may be preserved for Codex
-provider routing where implemented. Chat-adapter provider paths must not silently
-flatten or forward hosted, deferred, namespaced, MCP, shell, tool-search, or
-other unrepresentable tool families. Unsupported transcript and output families
-outside implemented relay paths must fail locally rather than be lossy-converted.
+Chat-adapter provider paths must not silently flatten or forward hosted,
+deferred, namespaced, MCP, shell, tool-search, or other unrepresentable tool
+families. Unsupported transcript and output families outside implemented relay
+paths must fail locally rather than be lossy-converted.
 
 ### Model Addressing
 
@@ -281,14 +282,10 @@ as `default`, `priority`, and `flex`. Provider-specific service tier values
 must stay under `provider_options.codex.service_tier`; the local `fast` alias
 maps to upstream `priority` when the selected Codex model supports that tier.
 
-For Codex Responses-compatible requests, top-level `reasoning`,
-`text.verbosity`, and `service_tier` are accepted only for Codex provider
-instances and are translated into the same local Codex provider-options
-contract before the Codex provider adapter builds the upstream Responses body.
-Unsupported fields and invalid mode values should fail locally with clear
-errors instead of being silently forwarded. Model-unsupported but locally valid
-Codex reasoning efforts may be normalized to a supported model effort before
-the upstream request is built.
+For Codex native Responses, provider-specific controls remain in the native
+Responses body after local validation of routing, statelessness, and safety
+boundaries. For non-native Responses conversion paths, supported controls are
+translated into the existing local provider-options contract before dispatch.
 
 ### Routing
 
@@ -508,15 +505,24 @@ Health metadata may include:
 The router can use health metadata to avoid known-bad credentials without
 looking at request or response bodies.
 
+Native route relays follow the same metadata-only rule. Raw native request
+bodies, provider payloads, streamed events, tool arguments, and tool results
+must not be stored unless IO logging is enabled. Normal native relay telemetry
+may record provider, model, credential, status, latency, usage, retry, quota,
+and safe event-class metadata.
+
 ## High-Level Runtime Architecture
 
 ```text
 Local API clients
   -> HTTP API auth
-    -> local API request parser/converter
-      -> strict request validator
-        -> model address resolver
-          -> routing policy
+    -> route preflight and model address resolver
+      -> provider route capability selection
+        -> native route capability
+          -> credential resolver
+            -> provider-native request/stream relay
+        -> compatibility parser/converter
+          -> strict request validator
             -> credential resolver
               -> provider adapter
                 -> upstream provider
@@ -550,13 +556,18 @@ Provider adapters own provider-specific behavior.
 Adapter responsibilities:
 
 - know default base URLs and endpoint paths for a provider type,
+- declare supported route capabilities: chat, responses, models, and
+  compatibility surfaces where applicable,
 - apply upstream auth,
-- translate strict common requests into provider-specific requests,
+- translate strict common requests or relay validated provider-native requests
+  through explicit route capabilities,
 - reject unsupported features clearly,
 - stream provider responses into normalized OpenAI-style chunks,
 - normalize provider errors,
 - extract token/cost/cache metadata,
-- expose provider model discovery,
+- keep model discovery independent from chat completion support,
+- parse only safe scalar metadata from native streams unless IO logging is
+  explicitly enabled,
 - expose provider health/account status where safe.
 
 The router core should not embed provider-specific quirks beyond selecting an
@@ -645,7 +656,8 @@ Areas that still need research or stronger live evidence:
 
 - XDG path support.
 - Non-Unix management transport.
-- Provider adapter test strategy for hosted/deferred/namespaced tool families.
+- Provider adapter test strategy for native route capabilities and tool families
+  not yet covered by live Codex, OpenRouter, or DeepSeek evidence.
 - OpenRouter provider/model behavior for Codex CLI tool-response paths.
 - Exact provider-term policy for subscription account keepalive, quota pooling,
   and any subscription account fallback.

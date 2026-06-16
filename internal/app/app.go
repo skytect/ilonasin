@@ -32,6 +32,16 @@ func modelDiscoverers(client *http.Client, ioLogger *logging.IOLogger, captureUp
 	}
 }
 
+func responsesAdapters(client *http.Client, ioLogger *logging.IOLogger, captureUpstreamIO bool, loggers ...*slog.Logger) provider.StaticResponsesAdapters {
+	adapter := provider.NewHTTPChatAdapter(client)
+	adapter.Logger = firstLogger(loggers)
+	adapter.IOLogger = ioLogger
+	adapter.CaptureUpstreamIO = captureUpstreamIO
+	return provider.StaticResponsesAdapters{
+		"codex": adapter,
+	}
+}
+
 func firstLogger(loggers []*slog.Logger) *slog.Logger {
 	if len(loggers) == 0 {
 		return nil

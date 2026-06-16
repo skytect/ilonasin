@@ -17,6 +17,7 @@ type Server struct {
 	refresh   credentials.OAuthProviderRefreshController
 	adapters  provider.ChatAdapters
 	models    provider.ModelDiscoverers
+	responses provider.ResponsesAdapters
 	cache     ModelCache
 	meta      MetadataRecorder
 	quota     QuotaReader
@@ -46,5 +47,10 @@ func (s *Server) WithLogger(logger *slog.Logger) *Server {
 
 func (s *Server) WithIOLogger(logger *logging.IOLogger) *Server {
 	s.ioLogger = logger
+	return s
+}
+
+func (s *Server) WithResponsesAdapters(adapters provider.ResponsesAdapters) *Server {
+	s.responses = adapters
 	return s
 }

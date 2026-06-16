@@ -25,6 +25,14 @@ type ModelDiscoverers interface {
 	ForProvider(providerType string) (ModelDiscoverer, bool)
 }
 
+type ResponsesAdapter interface {
+	StreamResponses(ctx context.Context, req ResponsesRequest, sink ResponsesStreamSink) (ChatStreamSummary, error)
+}
+
+type ResponsesAdapters interface {
+	ForProvider(providerType string) (ResponsesAdapter, bool)
+}
+
 type ChatRequest struct {
 	Instance        Instance
 	UpstreamModel   string
@@ -36,6 +44,14 @@ type ChatRequest struct {
 type ModelRequest struct {
 	Instance   Instance
 	Credential BearerCredential
+}
+
+type ResponsesRequest struct {
+	Instance        Instance
+	UpstreamModel   string
+	RawBody         []byte
+	Credential      ChatCredential
+	ModelCredential BearerCredential
 }
 
 type ModelResult struct {
@@ -121,6 +137,10 @@ type ChatStreamEvent struct {
 	Data []byte
 }
 
+type ResponsesStreamSink interface {
+	WriteEvent(ctx context.Context, event []byte) error
+}
+
 type ChatStreamSummary struct {
 	StatusCode            int
 	UpstreamStatusCode    int
@@ -158,4 +178,11 @@ type StaticModelDiscoverers map[string]ModelDiscoverer
 func (d StaticModelDiscoverers) ForProvider(providerType string) (ModelDiscoverer, bool) {
 	discoverer, ok := d[providerType]
 	return discoverer, ok
+}
+
+type StaticResponsesAdapters map[string]ResponsesAdapter
+
+func (a StaticResponsesAdapters) ForProvider(providerType string) (ResponsesAdapter, bool) {
+	adapter, ok := a[providerType]
+	return adapter, ok
 }

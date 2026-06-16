@@ -61,9 +61,14 @@ func Serve(opts Options) error {
 	adapters["codex"] = codexAdapter
 	stopKeepalive := startSubscriptionKeepalive(context.Background(), keepalive, keepaliveProviderRegistryFromProvider(rt.Registry), upstreams, keepaliveUsageClientFromProvider(codexAdapter), keepaliveChatClientFromProvider(codexAdapter), rt.Logger)
 	defer stopKeepalive()
+	srvHandler := server.New(rt.Registry, auth, upstreams, upstreams, adapters, modelDiscoverers(nil, rt.IOLogger, captureUpstreamIO, rt.Logger), rt.Store, rt.Store).
+		WithLogger(rt.Logger).
+		WithIOLogger(rt.IOLogger).
+		WithResponsesAdapters(responsesAdapters(nil, rt.IOLogger, captureUpstreamIO, rt.Logger)).
+		Handler()
 	srv := &http.Server{
 		Addr:              rt.Config.Server.Bind,
-		Handler:           server.New(rt.Registry, auth, upstreams, upstreams, adapters, modelDiscoverers(nil, rt.IOLogger, captureUpstreamIO, rt.Logger), rt.Store, rt.Store).WithLogger(rt.Logger).WithIOLogger(rt.IOLogger).Handler(),
+		Handler:           srvHandler,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	fmt.Fprintf(opts.Stdout, "ilonasin serving on %s\n", rt.Config.Server.Bind)

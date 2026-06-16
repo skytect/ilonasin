@@ -29,6 +29,18 @@ type ResponsesRequest struct {
 	Metadata          map[string]string
 }
 
+type ResponsesEnvelope struct {
+	Model          string
+	InputCount     int
+	ToolCount      int
+	ImageCount     int
+	ServiceTier    *string
+	Reasoning      map[string]any
+	PromptCacheKey string
+	ClientMetadata map[string]string
+	Metadata       map[string]string
+}
+
 type ResponseInputItem struct {
 	Type             string
 	Role             string
@@ -136,6 +148,112 @@ func DecodeResponses(r io.Reader) (ResponsesRequest, error) {
 		ClientMetadata:    clientMetadata,
 		Metadata:          metadata,
 	}, nil
+}
+
+func DecodeNativeResponsesEnvelope(r io.Reader) (ResponsesEnvelope, error) {
+	dec := json.NewDecoder(r)
+	var raw map[string]json.RawMessage
+	if err := dec.Decode(&raw); err != nil {
+		return ResponsesEnvelope{}, fmt.Errorf("invalid request JSON: %w", err)
+	}
+	if dec.Decode(&struct{}{}) != io.EOF {
+		return ResponsesEnvelope{}, errors.New("request body must contain a single JSON object")
+	}
+	if err := validateResponsesStatelessFields(raw); err != nil {
+		return ResponsesEnvelope{}, err
+	}
+	model, err := requiredRawString(raw["model"], "model")
+	if err != nil {
+		return ResponsesEnvelope{}, err
+	}
+	serviceTier, err := optionalRawString(raw["service_tier"], "service_tier")
+	if err != nil {
+		return ResponsesEnvelope{}, err
+	}
+	reasoning, err := optionalRawObject(raw["reasoning"], "reasoning")
+	if err != nil {
+		return ResponsesEnvelope{}, err
+	}
+	return ResponsesEnvelope{
+		Model:          model,
+		InputCount:     rawItemCount(raw["input"]),
+		ToolCount:      rawArrayCount(raw["tools"]),
+		ImageCount:     rawImageCount(raw["input"]),
+		ServiceTier:    serviceTier,
+		Reasoning:      reasoning,
+		PromptCacheKey: responseAffinityPromptCacheKey(raw["prompt_cache_key"]),
+		ClientMetadata: responseMetadataPairs(raw["client_metadata"]),
+		Metadata:       responseMetadataPairs(raw["metadata"]),
+	}, nil
+}
+
+func (r ResponsesEnvelope) AffinityKey() string {
+	if value := strings.TrimSpace(r.PromptCacheKey); privacy.SafeStrictAffinityValue(value) {
+		return value
+	}
+	if value := responsesMetadataAffinityKey(r.ClientMetadata); value != "" {
+		return value
+	}
+	return responsesMetadataAffinityKey(r.Metadata)
+}
+
+func rawItemCount(raw json.RawMessage) int {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || isJSONNull(trimmed) {
+		return 0
+	}
+	if trimmed[0] != '[' {
+		return 1
+	}
+	return rawArrayCount(trimmed)
+}
+
+func rawArrayCount(raw json.RawMessage) int {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || isJSONNull(trimmed) {
+		return 0
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal(trimmed, &items); err != nil {
+		return 0
+	}
+	return len(items)
+}
+
+func rawImageCount(raw json.RawMessage) int {
+	var value any
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if err := dec.Decode(&value); err != nil {
+		return 0
+	}
+	return countRawImages(value)
+}
+
+func countRawImages(value any) int {
+	switch v := value.(type) {
+	case []any:
+		total := 0
+		for _, item := range v {
+			total += countRawImages(item)
+		}
+		return total
+	case map[string]any:
+		total := 0
+		if typ, _ := v["type"].(string); strings.Contains(strings.ToLower(typ), "image") {
+			total++
+		}
+		for key, item := range v {
+			if strings.Contains(strings.ToLower(key), "image") {
+				total++
+				continue
+			}
+			total += countRawImages(item)
+		}
+		return total
+	default:
+		return 0
+	}
 }
 
 func responseAffinityPromptCacheKey(raw json.RawMessage) string {

@@ -17,9 +17,10 @@ type modelDiscoveryAttempt struct {
 }
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request, _ credentials.VerifiedLocalToken) {
+	ctx := r.Context()
 	cacheByProvider := map[string][]metadata.ModelCacheRow{}
 	if s.cache != nil {
-		cached, err := s.cache.ListModelCache(r.Context())
+		cached, err := s.cache.ListModelCache(ctx)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "model cache is unavailable", "api_error", "model_cache_unavailable")
 			return
@@ -32,10 +33,13 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request, _ credenti
 	attempted := 0
 	failedWithoutCache := 0
 	for _, instance := range s.registry.List() {
+		if ctx.Err() != nil {
+			return
+		}
 		if !instance.ModelDiscovery {
 			continue
 		}
-		credentialsSet, err := s.resolveModelCredentials(r.Context(), instance)
+		credentialsSet, err := s.resolveModelCredentials(ctx, instance)
 		if err != nil {
 			if errors.Is(err, credentials.ErrNoEligibleCredential) {
 				continue
@@ -63,10 +67,13 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request, _ credenti
 			all = append(all, providerModelsFromCacheRows(cached)...)
 			continue
 		}
-		attempt := s.discoverModelsWithCredentials(r.Context(), instance, discoverer, credentialsSet)
+		attempt := s.discoverModelsWithCredentials(ctx, instance, discoverer, credentialsSet)
+		if ctx.Err() != nil {
+			return
+		}
 		if attempt.live && len(attempt.models) > 0 {
 			if s.cache != nil {
-				if err := s.cache.ReplaceModelCache(r.Context(), instance.ID, modelCacheRowsFromProvider(attempt.models)); err != nil {
+				if err := s.cache.ReplaceModelCache(ctx, instance.ID, modelCacheRowsFromProvider(attempt.models)); err != nil {
 					writeError(w, http.StatusInternalServerError, "model cache is unavailable", "api_error", "model_cache_unavailable")
 					return
 				}
@@ -99,11 +106,17 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request, _ credenti
 
 func (s *Server) discoverModelsWithCredentials(ctx context.Context, instance provider.Instance, discoverer provider.ModelDiscoverer, credentialsSet []provider.BearerCredential) modelDiscoveryAttempt {
 	for _, credential := range credentialsSet {
+		if ctx.Err() != nil {
+			return modelDiscoveryAttempt{}
+		}
 		result, err := discoverer.ListModels(ctx, provider.ModelRequest{
 			Instance:   instance,
 			Credential: credential,
 		})
 		s.recordHealth(ctx, healthFromModelDiscovery(instance, credential, result, err))
+		if ctx.Err() != nil {
+			return modelDiscoveryAttempt{}
+		}
 		if err == nil && len(result.Models) > 0 {
 			return modelDiscoveryAttempt{models: result.Models, live: true}
 		}
@@ -114,11 +127,17 @@ func (s *Server) discoverModelsWithCredentials(ctx context.Context, instance pro
 		if refreshErr != nil {
 			continue
 		}
+		if ctx.Err() != nil {
+			return modelDiscoveryAttempt{}
+		}
 		result, err = discoverer.ListModels(ctx, provider.ModelRequest{
 			Instance:   instance,
 			Credential: refreshed,
 		})
 		s.recordHealth(ctx, healthFromModelDiscovery(instance, refreshed, result, err))
+		if ctx.Err() != nil {
+			return modelDiscoveryAttempt{}
+		}
 		if err == nil && len(result.Models) > 0 {
 			return modelDiscoveryAttempt{models: result.Models, live: true}
 		}

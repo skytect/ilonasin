@@ -24,3 +24,15 @@ func applyResponsesOptionMetadata(out *metadata.Request, req openai.ResponsesReq
 	out.ReasoningEffort = options.ReasoningEffort
 	out.ReasoningSummary = options.ReasoningSummary
 }
+
+func applyNativeResponsesOptionMetadata(out *metadata.Request, req openai.ResponsesEnvelope) {
+	if req.ServiceTier != nil {
+		out.RequestedServiceTier = openai.SafeOptionServiceTier(*req.ServiceTier)
+	}
+	if effort, ok := req.Reasoning["effort"].(string); ok {
+		out.ReasoningEffort = openai.SafeOptionReasoningEffort(effort)
+	}
+	if summary, ok := req.Reasoning["summary"].(string); ok {
+		out.ReasoningSummary = openai.SafeOptionReasoningSummary(summary)
+	}
+}

@@ -21,7 +21,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request, token c
 	if readErr == nil {
 		s.ioLogInput(r, rawBody)
 	}
-	responsesReq, err := openai.DecodeResponses(bytes.NewReader(rawBody))
+	envelope, err := openai.DecodeNativeResponsesEnvelope(bytes.NewReader(rawBody))
 	if readErr != nil {
 		err = readErr
 	}
@@ -29,17 +29,32 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request, token c
 		s.writeOpenAIInvalidJSON(w, r, "responses_route", err.Error())
 		return
 	}
-	addr, err := s.resolveModelAddress(r.Context(), responsesReq.Model)
+	addr, err := s.resolveModelAddress(r.Context(), envelope.Model)
 	if err != nil {
 		s.writeOpenAIInvalidModel(w, r, "responses_route", err.Error(), func(status int, errorClass string) {
-			_ = s.record(r.Context(), earlyResponsesRequestMetadata(start, token, responsesReq, status, errorClass))
+			requestMeta := nativeResponsesRequestMetadataBase(start, token, routing.ModelAddress{}, provider.Instance{}, envelope)
+			requestMeta.HTTPStatus = status
+			requestMeta.ErrorClass = errorClass
+			requestMeta.TotalLatencyMS = time.Since(start).Milliseconds()
+			_ = s.record(r.Context(), requestMeta)
 		})
 		return
 	}
 	instance, ok := s.registry.Get(addr.ProviderInstanceID)
 	if !ok {
 		s.writeOpenAIProviderNotConfigured(w, r, "responses_route", func(status int, errorClass string) {
-			_ = s.record(r.Context(), earlyResponsesRequestMetadata(start, token, responsesReq, status, errorClass))
+			s.recordNativeResponsesEarly(r, start, token, addr, provider.Instance{}, envelope, status, errorClass)
+		})
+		return
+	}
+	if adapter, ok := s.nativeResponsesAdapter(instance); ok {
+		s.handleNativeResponsesRoute(w, r, start, token, addr, instance, envelope, rawBody, adapter)
+		return
+	}
+	responsesReq, err := openai.DecodeResponses(bytes.NewReader(rawBody))
+	if err != nil {
+		s.writeOpenAIUnsupportedRequest(w, r, "responses_route", err.Error(), func(status int, errorClass string) {
+			s.recordNativeResponsesEarly(r, start, token, addr, instance, envelope, status, errorClass)
 		})
 		return
 	}
@@ -138,6 +153,55 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request, token c
 		return
 	}
 	s.recordNonStreamingChat(r, nc, exec, status, errorClass)
+}
+
+func (s *Server) nativeResponsesAdapter(instance provider.Instance) (provider.ResponsesAdapter, bool) {
+	if !instance.Chat || (!instance.APIKey && !instance.OAuth) || s.responses == nil {
+		return nil, false
+	}
+	return s.responses.ForProvider(instance.Type)
+}
+
+func (s *Server) handleNativeResponsesRoute(w http.ResponseWriter, r *http.Request, start time.Time, token credentials.VerifiedLocalToken, addr routing.ModelAddress, instance provider.Instance, envelope openai.ResponsesEnvelope, rawBody []byte, adapter provider.ResponsesAdapter) {
+	if s.logger != nil {
+		s.logAttrs(r, slog.LevelInfo, "responses native route accepted",
+			slog.String("event", "responses_route"),
+			slog.String("provider_instance", addr.ProviderInstanceID),
+			slog.String("provider_type", instance.Type),
+			slog.Bool("stream", true),
+			slog.Bool("native_route", true),
+		)
+	}
+	credentialsSet, err := s.resolveModelCredentials(r.Context(), instance)
+	if err != nil {
+		writeOpenAICredentialUnavailable(w, func(status int, errorClass string) {
+			s.recordNativeResponsesEarly(r, start, token, addr, instance, envelope, status, errorClass)
+		})
+		return
+	}
+	affinityKey := envelope.AffinityKey()
+	if affinityKey == "" {
+		affinityKey = requestHeaderAffinity(r)
+	}
+	s.handleNativeResponses(w, r, nativeResponsesContext{
+		start:       start,
+		token:       token,
+		address:     addr,
+		instance:    instance,
+		credentials: credentialsSet,
+		adapter:     adapter,
+		envelope:    envelope,
+		rawBody:     rawBody,
+		affinityKey: affinityKey,
+	})
+}
+
+func (s *Server) recordNativeResponsesEarly(r *http.Request, start time.Time, token credentials.VerifiedLocalToken, addr routing.ModelAddress, instance provider.Instance, req openai.ResponsesEnvelope, status int, errorClass string) {
+	requestMeta := nativeResponsesRequestMetadataBase(start, token, addr, instance, req)
+	requestMeta.HTTPStatus = status
+	requestMeta.ErrorClass = errorClass
+	requestMeta.TotalLatencyMS = time.Since(start).Milliseconds()
+	_ = s.record(r.Context(), requestMeta)
 }
 
 func (s *Server) recordResponsesEarly(r *http.Request, start time.Time, token credentials.VerifiedLocalToken, addr routing.ModelAddress, instance provider.Instance, req openai.ResponsesRequest, status int, errorClass string) {

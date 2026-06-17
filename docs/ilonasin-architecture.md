@@ -184,6 +184,12 @@ Ilonasin client tokens are separate from upstream provider credentials. A client
 token must never double as a provider API key, OAuth token, TUI admin token, or
 provider bearer token.
 
+Nix and Home Manager integrations may expose client connection metadata such as
+the local API base URL and client-specific config fragments. They may reference
+a caller-managed token file, for example a sops-nix secret path, but must not
+generate, store, or persist the full local client token outside the daemon-owned
+management flow and SQLite token hash boundary.
+
 ### Local API Surface
 
 The local daemon exposes bounded compatibility surfaces for local clients.

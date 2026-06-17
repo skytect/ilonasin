@@ -15,6 +15,7 @@ let
   configFile = toml.generate "ilonasin-config.toml" cfg.settings;
   escapedHome = lib.escapeShellArg cfg.home;
   escapedConfigPath = lib.escapeShellArg configPath;
+  tokenFileType = lib.types.nullOr (lib.types.either lib.types.path lib.types.str);
 in
 {
   options.services.ilonasin = {
@@ -52,6 +53,79 @@ in
       type = lib.types.bool;
       default = true;
       description = "Whether to run ilonasin serve as a user systemd service.";
+    };
+
+    client = {
+      host = lib.mkOption {
+        type = lib.types.str;
+        default = "127.0.0.1";
+        description = "Host local clients should use to reach ilonasin.";
+      };
+
+      port = lib.mkOption {
+        type = lib.types.port;
+        default = 11435;
+        description = "Port local clients should use to reach ilonasin.";
+      };
+
+      baseUrl = lib.mkOption {
+        type = lib.types.str;
+        default = "http://${cfg.client.host}:${toString cfg.client.port}";
+        description = "Base URL for local clients, without an API-version suffix.";
+      };
+
+      openAIBaseUrl = lib.mkOption {
+        type = lib.types.str;
+        default = "${cfg.client.baseUrl}/v1";
+        description = "OpenAI-compatible base URL for clients that expect a /v1 endpoint.";
+      };
+
+      tokenFile = lib.mkOption {
+        type = tokenFileType;
+        default = null;
+        description = ''
+          Optional file containing an ilonasin local client token. The file is
+          managed by the caller, for example with sops-nix. Ilonasin itself
+          stores only token hashes in SQLite.
+        '';
+      };
+
+      codex = {
+        providerName = lib.mkOption {
+          type = lib.types.str;
+          default = "ilonasin";
+          description = "Codex model provider name for the generated provider config.";
+        };
+
+        wireAPI = lib.mkOption {
+          type = lib.types.enum [
+            "responses"
+            "chat"
+          ];
+          default = "responses";
+          description = "Codex wire API for the generated provider config.";
+        };
+
+        modelProvider = lib.mkOption {
+          type = lib.types.attrs;
+          readOnly = true;
+          default = {
+            name = cfg.client.codex.providerName;
+            base_url = cfg.client.openAIBaseUrl;
+            wire_api = cfg.client.codex.wireAPI;
+          }
+          // lib.optionalAttrs (cfg.client.tokenFile != null) {
+            auth = {
+              command = "${pkgs.coreutils}/bin/cat";
+              args = [ (toString cfg.client.tokenFile) ];
+            };
+          };
+          description = ''
+            Codex model_providers entry for ilonasin. Set
+            services.ilonasin.client.tokenFile to include bearer auth.
+          '';
+        };
+      };
     };
   };
 

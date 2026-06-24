@@ -31,6 +31,8 @@ var (
 
 const DefaultPoolGroup = "default"
 
+const oauthBearerRefreshLeadTime = 10 * time.Minute
+
 const (
 	CredentialKindAPIKey = "api_key"
 	CredentialKindOAuth  = "oauth"
@@ -399,11 +401,53 @@ func (s *UpstreamService) ResolveOAuthBearers(ctx context.Context, providerInsta
 	if now.IsZero() {
 		now = s.now()
 	}
+	if supportsCodexOAuthRefresh(instance) {
+		s.refreshStaleOAuthBearers(ctx, providerInstanceID, now.UTC())
+	}
 	out, err := s.Repo.ResolveOAuthBearerCredentials(ctx, providerInstanceID, now.UTC())
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
+}
+
+func (s *UpstreamService) refreshStaleOAuthBearers(ctx context.Context, providerInstanceID string, now time.Time) {
+	if s.OAuthRefresher == nil || s.Repo == nil {
+		return
+	}
+	rows, err := s.Repo.ListOAuthCredentials(ctx)
+	if err != nil {
+		s.logError(ctx, "oauth_stale_refresh_list_failed", err, slog.String("provider_instance", providerInstanceID))
+		return
+	}
+	refreshBefore := now.Add(oauthBearerRefreshLeadTime)
+	for _, row := range rows {
+		if row.ProviderInstanceID != providerInstanceID || row.Disabled || terminalOAuthRefreshFailureClass(row.RefreshFailureClass) {
+			continue
+		}
+		if row.ExpiresAt == nil || row.ExpiresAt.After(refreshBefore) {
+			continue
+		}
+		if err := s.RefreshOAuthCredential(ctx, row.ID); err != nil && !staleOAuthRefreshFailureIsNonFatal(err) {
+			s.logError(ctx, "oauth_stale_refresh_failed", err,
+				slog.String("provider_instance", providerInstanceID),
+				slog.Int64("credential_id", row.ID),
+			)
+		}
+	}
+}
+
+func staleOAuthRefreshFailureIsNonFatal(err error) bool {
+	return errors.Is(err, ErrNoEligibleCredential) || errors.Is(err, ErrOAuthRefreshFailed)
+}
+
+func terminalOAuthRefreshFailureClass(failureClass string) bool {
+	switch strings.TrimSpace(failureClass) {
+	case "refresh_token_expired", "refresh_token_invalidated", "refresh_token_reused", "refresh_invalid_grant", "refresh_access_denied":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *UpstreamService) ResolveOAuthBearerByID(ctx context.Context, credentialID int64, now time.Time) (ResolvedOAuthBearerCredential, error) {

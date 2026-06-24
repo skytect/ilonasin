@@ -1,0 +1,2 @@
+# Local file-sync conflict copies are not source files.
+*.sync-conflict-*

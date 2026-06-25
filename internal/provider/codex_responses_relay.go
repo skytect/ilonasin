@@ -463,6 +463,9 @@ func (a HTTPChatAdapter) handleCodexNativeResponsesEvent(ctx context.Context, li
 	data := bytes.Join(dataParts, []byte("\n"))
 	capture.eventIndex++
 	capture.id = a.recordUpstreamSSE(capture.instance, capture.credentialID, capture.endpoint, capture.status, block, capture.id, capture.eventIndex)
+	if err := handleCodexNativeResponsesData(data, summary, state, start); err != nil {
+		return err
+	}
 	if err := sink.WriteEvent(ctx, block); err != nil {
 		summary.ErrorClass = "client_disconnected"
 		summary.CompletionStatus = "client_disconnected"
@@ -476,7 +479,7 @@ func (a HTTPChatAdapter) handleCodexNativeResponsesEvent(ctx context.Context, li
 	if bytes.Equal(bytes.TrimSpace(data), []byte("[DONE]")) {
 		return nil
 	}
-	return handleCodexNativeResponsesData(data, summary, state, start)
+	return nil
 }
 
 func handleCodexNativeResponsesData(data []byte, summary *ChatStreamSummary, state *codexNativeResponsesState, start time.Time) error {
@@ -486,6 +489,7 @@ func handleCodexNativeResponsesData(data []byte, summary *ChatStreamSummary, sta
 	var event struct {
 		Type     string                        `json:"type"`
 		Response *codexResponsePayload         `json:"response"`
+		Error    *codexResponseError           `json:"error"`
 		Metadata *codexResponseMetadataPayload `json:"metadata"`
 		Headers  map[string]any                `json:"headers"`
 	}
@@ -533,10 +537,23 @@ func handleCodexNativeResponsesData(data []byte, summary *ChatStreamSummary, sta
 		summary.HealthEventClasses = codexResultHealthEvents(state.requestedModel, state.servedModel, state.healthEventClasses())
 		summary.CompletionStatus = "upstream_error"
 		return failure
+	case "error":
+		failure := codexErrorEventFailure(event.Error)
+		summary.ErrorClass = failure.class
+		summary.HealthEventClasses = codexResultHealthEvents(state.requestedModel, state.servedModel, state.healthEventClasses())
+		summary.CompletionStatus = "upstream_error"
+		return failure
 	case "response.incomplete":
 		summary.ErrorClass = "upstream_response_incomplete"
 		summary.CompletionStatus = "upstream_error"
 		return fmt.Errorf("codex response incomplete")
 	}
 	return nil
+}
+
+func codexErrorEventFailure(err *codexResponseError) codexEventFailure {
+	if err == nil {
+		return codexEventFailure{class: "upstream_response_failed", reason: "codex response failed"}
+	}
+	return codexFailureFromError(*err)
 }

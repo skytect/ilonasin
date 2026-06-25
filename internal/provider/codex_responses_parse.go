@@ -506,6 +506,8 @@ func codexErrorClass(code, typ, message string) string {
 	switch {
 	case code == "cyber_policy":
 		return "cyber_policy"
+	case code == "server_is_overloaded" || strings.Contains(text, "server") && strings.Contains(text, "overload"):
+		return "upstream_server_overloaded"
 	case strings.Contains(text, "rate_limit") || strings.Contains(text, "rate limit") || strings.Contains(text, "too many requests"):
 		return "rate_limit_exceeded"
 	case strings.Contains(text, "insufficient_quota") || strings.Contains(text, "insufficient balance") || strings.Contains(text, "payment required"):

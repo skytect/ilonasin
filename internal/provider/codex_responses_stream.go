@@ -335,6 +335,7 @@ func (a HTTPChatAdapter) handleCodexStreamEvent(ctx context.Context, data []byte
 			} `json:"content"`
 		} `json:"item"`
 		Response *codexResponsePayload         `json:"response"`
+		Error    *codexResponseError           `json:"error"`
 		Metadata *codexResponseMetadataPayload `json:"metadata"`
 		Headers  map[string]any                `json:"headers"`
 	}
@@ -527,6 +528,12 @@ func (a HTTPChatAdapter) handleCodexStreamEvent(ctx context.Context, data []byte
 		if failure.class == "cyber_policy" {
 			state.addHealthEventClass("codex_policy_blocked")
 		}
+		summary.HealthEventClasses = codexResultHealthEvents(state.requestedModel, state.servedModel, state.healthEventClasses())
+		summary.CompletionStatus = "upstream_error"
+		return failure
+	case "error":
+		failure := codexErrorEventFailure(event.Error)
+		summary.ErrorClass = failure.class
 		summary.HealthEventClasses = codexResultHealthEvents(state.requestedModel, state.servedModel, state.healthEventClasses())
 		summary.CompletionStatus = "upstream_error"
 		return failure

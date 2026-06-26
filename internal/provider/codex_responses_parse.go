@@ -533,6 +533,16 @@ func codexErrorReason(code, typ string) string {
 	return "codex response failed: " + strings.Join(parts, "; ")
 }
 
+func shouldPromoteCodexStreamFailureStatus(summary ChatStreamSummary) bool {
+	if summary.StatusCode == 0 {
+		return true
+	}
+	if summary.StatusCode >= 400 {
+		return false
+	}
+	return summary.ErrorClass != "" && summary.ErrorClass != "client_disconnected" && summary.ErrorClass != "canceled"
+}
+
 func codexFailureLogAttrs(failure codexEventFailure) []slog.Attr {
 	attrs := []slog.Attr{}
 	if failure.code != "" {

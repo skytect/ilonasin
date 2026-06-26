@@ -85,7 +85,7 @@ func (a HTTPChatAdapter) StreamResponses(ctx context.Context, req ResponsesReque
 		if summary.CompletionStatus == "" || summary.CompletionStatus == "completed" {
 			summary.CompletionStatus = streamStatusForError(summary.ErrorClass)
 		}
-		if summary.StatusCode == 0 || (!summary.Started && summary.StatusCode < 400) {
+		if shouldPromoteCodexStreamFailureStatus(summary) {
 			summary.StatusCode = providerStatusForError(http.StatusBadGateway, summary.ErrorClass)
 		}
 		if !summary.Started {

@@ -20,7 +20,7 @@ func (a HTTPChatAdapter) ListModels(ctx context.Context, req ModelRequest) (Mode
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(ctx, a.modelTimeout())
 	defer cancel()
-	endpoint, err := modelsURL(req.Instance)
+	endpoint, err := a.modelsURL(ctx, req.Instance)
 	if err != nil {
 		return ModelResult{ErrorClass: "provider_config_error"}, err
 	}
@@ -136,7 +136,7 @@ func (a HTTPChatAdapter) ListModels(ctx context.Context, req ModelRequest) (Mode
 	return ModelResult{Models: models, StatusCode: resp.StatusCode}, nil
 }
 
-func modelsURL(instance Instance) (string, error) {
+func (a HTTPChatAdapter) modelsURL(ctx context.Context, instance Instance) (string, error) {
 	endpoint, err := joinBasePath(instance.BaseURL, "/models")
 	if err != nil {
 		return "", err
@@ -149,7 +149,11 @@ func modelsURL(instance Instance) (string, error) {
 		return "", err
 	}
 	q := u.Query()
-	q.Set("client_version", CodexClientVersion)
+	version := CodexClientVersion
+	if a.CodexVersionResolver != nil {
+		version = a.CodexVersionResolver.Version(ctx)
+	}
+	q.Set("client_version", version)
 	u.RawQuery = q.Encode()
 	return u.String(), nil
 }

@@ -52,18 +52,24 @@ func Serve(opts Options) error {
 	refresher := provider.NewHTTPOAuthRefresher(nil)
 	refresher.Logger = rt.Logger
 	upstreams.OAuthRefresher = credentialsOAuthRefresher(refresher)
+	codexVersionResolver := provider.NewCachedCodexClientVersionResolver(nil)
 	codexAdapter := provider.NewHTTPChatAdapter(nil)
 	codexAdapter.Logger = rt.Logger
 	codexAdapter.IOLogger = rt.IOLogger
 	codexAdapter.CaptureUpstreamIO = captureUpstreamIO
+	codexAdapter.CodexVersionResolver = codexVersionResolver
 	adapters := chatAdapters(nil, rt.IOLogger, captureUpstreamIO, rt.Logger)
 	adapters["codex"] = codexAdapter
+	modelAdapters := modelDiscoverers(nil, rt.IOLogger, captureUpstreamIO, rt.Logger)
+	modelAdapters["codex"] = codexAdapter
+	responseAdapters := responsesAdapters(nil, rt.IOLogger, captureUpstreamIO, rt.Logger)
+	responseAdapters["codex"] = codexAdapter
 	stopKeepalive := startSubscriptionKeepalive(context.Background(), keepalive, keepaliveProviderRegistryFromProvider(rt.Registry), upstreams, keepaliveUsageClientFromProvider(codexAdapter), keepaliveChatClientFromProvider(codexAdapter), rt.Logger)
 	defer stopKeepalive()
-	srvHandler := server.New(rt.Registry, auth, upstreams, upstreams, adapters, modelDiscoverers(nil, rt.IOLogger, captureUpstreamIO, rt.Logger), rt.Store, rt.Store).
+	srvHandler := server.New(rt.Registry, auth, upstreams, upstreams, adapters, modelAdapters, rt.Store, rt.Store).
 		WithLogger(rt.Logger).
 		WithIOLogger(rt.IOLogger).
-		WithResponsesAdapters(responsesAdapters(nil, rt.IOLogger, captureUpstreamIO, rt.Logger)).
+		WithResponsesAdapters(responseAdapters).
 		Handler()
 	srv := &http.Server{
 		Addr:              rt.Config.Server.Bind,

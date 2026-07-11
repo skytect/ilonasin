@@ -43,6 +43,7 @@ type HTTPChatAdapter struct {
 	MaxStreamEvents        int
 	MaxCodexAggregateBytes int
 	ModelTimeout           time.Duration
+	CodexVersionResolver   CodexClientVersionResolver
 	IOLogger               *logging.IOLogger
 	CaptureUpstreamIO      bool
 }
@@ -55,7 +56,9 @@ func NewHTTPChatAdapter(client *http.Client) HTTPChatAdapter {
 		clone.Timeout = 90 * time.Second
 		client = &clone
 	}
-	return HTTPChatAdapter{Client: client}
+	versionClient := *client
+	versionClient.Timeout = 5 * time.Second
+	return HTTPChatAdapter{Client: client, CodexVersionResolver: NewCachedCodexClientVersionResolver(&versionClient)}
 }
 
 func (a HTTPChatAdapter) CompleteChat(ctx context.Context, req ChatRequest) (ChatResult, error) {

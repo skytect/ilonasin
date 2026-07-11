@@ -475,7 +475,7 @@ func codexRequestOptions(req openai.ChatCompletionRequest, model codexResponsesM
 }
 
 func (a HTTPChatAdapter) resolveCodexResponsesModel(ctx context.Context, req ChatRequest, start time.Time) (codexResponsesModel, error) {
-	endpoint, err := modelsURL(req.Instance)
+	endpoint, err := a.modelsURL(ctx, req.Instance)
 	if err != nil {
 		return codexResponsesModel{}, codexModelDiscoveryFailure("provider_config_error", http.StatusBadGateway, err)
 	}

@@ -9,9 +9,6 @@ const (
 	// Mirrors OpenAI Codex rust-v0.135.0:
 	// codex-rs/login/src/auth/default_client.rs DEFAULT_ORIGINATOR.
 	CodexOriginator = "codex_cli_rs"
-	// Mirrors OpenAI Codex rust-v0.135.0:
-	// codex-rs/models-manager/src/lib.rs passes the Cargo package version to /models.
-	CodexClientVersion = "0.135.0"
 )
 
 func addCodexRequestHeaders(req *http.Request, token, accountID string, fedRAMP bool) {

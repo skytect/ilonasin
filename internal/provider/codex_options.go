@@ -112,7 +112,7 @@ func validateCodexReasoning(raw any) error {
 				return errors.New("provider_options.codex.reasoning.effort must be a string")
 			}
 			switch effort {
-			case "none", "minimal", "low", "medium", "high", "xhigh":
+			case "none", "minimal", "low", "medium", "high", "xhigh", "max":
 			default:
 				return errors.New("provider_options.codex.reasoning.effort is unsupported")
 			}

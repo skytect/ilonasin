@@ -147,6 +147,7 @@ in
       Service = {
         Environment = "ILONASIN_HOME=${cfg.home}";
         ExecStart = "${lib.getExe cfg.package} serve --config ${escapedConfigPath}";
+        UMask = "0077";
         Restart = "on-failure";
         RestartSec = "5s";
       };

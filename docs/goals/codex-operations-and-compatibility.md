@@ -194,8 +194,8 @@ weaken Ilonasin's credential, privacy, or transport boundaries.
 
 ## Compatibility checklist
 
-The former "switch gate" is a compatibility checklist, not a runtime approval
-gate.
+The former switching checklist is evidence for compatibility decisions, not a
+runtime approval gate.
 
 Before describing a Codex client/backend version as compatible, inspect the
 relevant supported surfaces, including:
@@ -211,6 +211,30 @@ relevant supported surfaces, including:
 
 The checklist is evidence for a compatibility decision. It must not become a
 new permission system or a large permanent test framework.
+
+## Implementation status appendix
+
+Current status for the seven goal areas:
+
+| Area | Classification | Current state |
+| --- | --- | --- |
+| Faithful Codex compatibility | PARTIAL | Implemented: dynamic Codex client version plus matching User-Agent, exact source-backed model metadata fields, omission of unverified metadata, explicit rejection of translated Chat output caps, bounded function-tool `strict`, and terminal completed/failed/incomplete/error handling. Deferred: Code Mode, Responses Lite, namespaced/MCP/shell/broader tools, and any Sol/Terra/Luna naming until upstream live evidence identifies them. |
+| Complete capacity visibility | PARTIAL | Implemented: normal/weekly subscription snapshots, stale/error display, active model-scoped cooldown visibility separated from usage snapshots, and read-only banked-reset inventory. Deferred: provider-wide "available now" count because blocks are model-scoped and authoritative auth readiness needs route context. |
+| Safe banked-reset handling | PARTIAL | Implemented: read-only sanitized count/detail inventory and TUI visibility. Deferred: redemption, automatic use, and any protected upstream reset-ID mapping until separately reviewed. |
+| Operator-focused TUI | PARTIAL | Implemented: management-owned subscription, cooldown, credential, telemetry, and banked-reset views. Deferred: larger UX rework beyond current panes. |
+| Correct routing semantics | PARTIAL | Implemented: model-scoped active cooldown separation and automatic reconsideration after `ActiveUntil`; OAuth CAS refresh coordination and backoff. Deferred: inbound admission control until overload semantics are designed. |
+| Operational reliability | PARTIAL | Implemented: graceful drain on shutdown, bounded outbound transport, newer-schema refusal, permission/umask hardening, visible telemetry persistence failures, and manual telemetry pruning. Deferred: automatic telemetry retention until policy/config exists; WAL-safe backup/restore until destination, retention, and free-space UX are specified. |
+| Security and privacy hardening | PARTIAL | Implemented: restrictive home/config/SQLite permissions, service umask, metadata-only default, local Unix management transport, sanitized banked-reset inventory with no upstream reset IDs. Deferred: no public or non-Unix management transport until separately designed. |
+
+Explicit deferrals:
+
+- Responses Lite and Code Mode wait for upstream evidence.
+- Automatic telemetry retention waits for policy and config.
+- WAL-safe backup/restore waits for destination, retention, and free-space UX.
+- Inbound admission control waits for overload semantics.
+- Provider-wide "available now" count is deferred because cooldowns are
+  model-scoped and auth readiness is route-contextual.
+- Public or non-Unix management transport is not implemented.
 
 ## Non-goals
 

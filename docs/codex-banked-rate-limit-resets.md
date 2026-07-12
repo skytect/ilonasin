@@ -13,11 +13,11 @@ saved and redeemed later to reset an eligible Codex usage-limit window. OpenAI
 says banked resets generally expire **30 days after grant**, unless the specific
 offer says otherwise.
 
-Ilonasin already collects normal Codex subscription usage windows, but it does
-**not** currently preserve or expose banked-reset state. Its original
-subscription-usage design intentionally ignored all fields named as credits.
-Banked resets are now operational quota state rather than monetary balance, so
-they need a narrow new safe boundary.
+Ilonasin now collects and exposes a read-only, sanitized banked-reset
+inventory. Its original subscription-usage design intentionally ignored fields
+named as credits to avoid inferring quota from billing or monetary balances.
+Banked resets are the narrow exception: they are non-monetary
+quota-entitlement state, not billing credit.
 
 ## Do not conflate these four concepts
 
@@ -73,6 +73,9 @@ The current Codex protocol can expose each banked reset's:
 Therefore Ilonasin should use the returned `expiresAt`, not calculate 30 days
 locally. The 30-day statement is a default policy, while the per-record backend
 timestamp is authoritative for a particular grant.
+
+Current Ilonasin read-only storage does not persist the upstream reset-record
+ID at all. No hash or local handle exists that can be redeemed later.
 
 ## How to view and use a reset
 
@@ -196,6 +199,8 @@ Existing design and implementation cover:
 - secondary/weekly usage and its separate `reset_at`;
 - per-account sanitized subscription-usage snapshots;
 - summative pool rows and earliest future reset;
+- sanitized banked-reset available count, detail availability, detail error
+  class, reset type, status, grant time, and expiry;
 - stale/error status;
 - management-only refresh and TUI rendering;
 - keepalive status scaffolding.
@@ -203,10 +208,11 @@ Existing design and implementation cover:
 Relevant files:
 
 - `docs/plans/104-codex-subscription-usage.md`
+- `internal/provider/codex_usage.go`
 - `internal/management/subscription_usage_dto.go`
 - `internal/management/subscription_usage_response.go`
-- `internal/management/subscription_usage_keepalive.go`
 - `internal/management/subscription_usage_sanitize.go`
+- `internal/storage/sqlite/subscription_usage.go`
 
 Plan 104 explicitly ignored balances and fields named as credits because those fields were
 originally treated as billing-sensitive and out of scope. That remains correct
@@ -217,30 +223,34 @@ quota-control type.
 
 ### Phase 1: read-only collection
 
-Extend the existing Codex subscription-usage provider boundary to parse the
-sanitized banked-reset summary from the authenticated usage response and fetch
-optional detail rows from the matching backend inventory endpoint. Do not spawn
-or depend on a Codex app-server process and do not make the management layer
-speak app-server RPC. The app-server RPC and schemas are protocol evidence for
-the typed fields and behavior; the provider adapter remains the integration
-boundary. If the usage response has no summary, report banked-reset inventory as
-unavailable. If a summary count exists but the inventory request is unavailable,
-preserve the authoritative count and report that detail rows are unavailable:
+The current implementation extends the existing Codex subscription-usage
+provider boundary to parse the sanitized banked-reset summary from the
+authenticated usage response and fetch optional detail rows from the matching
+backend inventory endpoint. It does not spawn or depend on a Codex app-server
+process and does not make the management layer speak app-server RPC. The
+app-server RPC and schemas remain protocol evidence for the typed fields and
+behavior; the provider adapter remains the integration boundary. If the usage
+response has no summary, banked-reset inventory is unavailable. If a summary
+count exists but the inventory request is unavailable, Ilonasin preserves the
+authoritative count and reports that detail rows are unavailable:
 
 ```text
 available_count
-reset-record opaque local handle or hash
 reset_type
 status
 granted_at
 expires_at
-title/description after strict sanitization
 observed_at
 ```
 
-Keep raw reset-record IDs available only in daemon memory or protected local storage
-when needed for an exact later redemption. Do not expose bearer tokens, full
-account IDs, raw provider payloads, billing balances, or unrelated credit data.
+Current read-only code intentionally drops raw upstream reset-record IDs and
+does not persist a hash or local handle. No stored value is redeemable. Do not
+expose bearer tokens, full account IDs, raw provider payloads, billing balances,
+or unrelated credit data.
+
+Future redemption requires a separately reviewed daemon-owned protected mapping
+from local selection to upstream reset ID, with lifecycle, retention, and
+cleanup rules. That mapping is not implemented.
 
 Expose per-account reset inventory through the existing local Unix management
 API and TUI. Aggregate only counts and nearest expiry across the normal Codex
@@ -281,11 +291,13 @@ If implemented, redemption must:
 1. be a management-only mutable operation;
 2. require explicit confirmation;
 3. select an exact credit, preferably earliest-expiring;
-4. use a caller-generated UUID idempotency key and reuse it on retry;
-5. serialize concurrent redemptions per account;
-6. refetch reset credits and all rate-limit windows after the call;
-7. report `reset`, `nothingToReset`, `noCredit`, or `alreadyRedeemed` precisely;
-8. never claim success solely because the available count decreased.
+4. use a daemon-owned protected upstream reset-ID mapping that is not exposed
+   through management snapshots, TUI, logs, or normal telemetry;
+5. use a caller-generated UUID idempotency key and reuse it on retry;
+6. serialize concurrent redemptions per account;
+7. refetch reset credits and all rate-limit windows after the call;
+8. report `reset`, `nothingToReset`, `noCredit`, or `alreadyRedeemed` precisely;
+9. never claim success solely because the available count decreased.
 
 Do not add automatic redemption until the backend's reset scope is sufficiently
 predictable and explicit operator policy exists.
@@ -315,10 +327,14 @@ fresh direct evidence and an explicit operator decision.
 
 ## Current Ilonasin behavior and live evidence
 
-Read-only source and management-socket inspection at commit `e07d210` found:
+Read-only source and earlier management-socket inspection found:
 
 - subscription snapshots preserve per-account `primary` and `secondary`
   `used_percent`, window duration, UTC `reset_at`, and `observed_at`;
+- current source also persists sanitized banked-reset count, detail availability,
+  detail error class, reset type, status, UTC grant time, and UTC expiry;
+- current source persists no upstream reset-record IDs, hashes, or redeemable
+  local handles;
 - 300-minute primary windows render as `5h`; 10,080-minute secondary windows
   render as `weekly`;
 - per-account reset timestamps remain present even when already past;

@@ -144,6 +144,7 @@ SQLite stores:
 - provider credential records,
 - model cache data,
 - usage and latency metadata,
+- sanitized banked-reset inventory for Codex OAuth accounts,
 - fallback/retry metadata,
 - TUI-managed state.
 
@@ -360,6 +361,14 @@ may apply a short local cooldown to avoid immediately retrying a blocked
 credential. Fabricated local cooldowns are not provider reset times and must not
 be rendered as such.
 
+Banked Codex rate-limit resets are the narrow exception to the older
+"credits" wording above. They are non-monetary quota entitlements, not billing
+balances. The current implementation records only sanitized read-only inventory:
+available count, detail availability/error state, reset type, status, grant
+time, and expiry. It does not persist upstream reset-record IDs, hashes, or
+local redeemable handles. Future redemption requires a separately reviewed
+daemon-owned protected ID mapping with lifecycle and retention rules.
+
 Credential affinity should start from fields clients actually send, then fall
 back to local inputs the daemon always has. The daemon must keep three classes
 separate:
@@ -445,6 +454,13 @@ separately, logged, rendered, exposed in management snapshots, written to
 request metadata, or stored in normal metadata tables. All observable account
 references should use local credential IDs, safe display labels, or one-way
 account hashes.
+
+Codex banked-reset snapshots follow the same durable-snapshot boundary. Normal
+storage, management snapshots, TUI output, and logs may show sanitized count,
+type, status, grant time, expiry, detail availability, and detail error class.
+They must not show or persist upstream reset-record IDs, reset redemption
+tokens, provider account IDs, raw reset inventory payloads, or local values that
+can be redeemed as a reset.
 
 Durable request, health, fallback, and quota metadata rows should reference
 upstream credentials by local credential ID. Management summaries and TUI views
@@ -644,7 +660,9 @@ durable state boundaries those migrations must preserve:
   reset timing linked to request metadata where available.
 - `subscription_usage_snapshots`: metadata-only subscription quota snapshots for
   OAuth-capable accounts, including usage percentages, window sizes, reset
-  times, stale/error state, and safe account display labels.
+  times, stale/error state, safe account display labels, and sanitized
+  read-only banked-reset inventory. The table must not store upstream
+  reset-record IDs, hashes, or redeemable local handles.
 - `migrations`: schema migration state.
 
 Do not create tables for raw prompts, completions, request bodies, response

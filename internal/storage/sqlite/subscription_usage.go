@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"log/slog"
 	"time"
 
@@ -13,14 +14,20 @@ func (s *Store) UpsertSubscriptionUsageSnapshot(ctx context.Context, m metadata.
 	if m.ObservedAt.IsZero() {
 		m.ObservedAt = time.Now()
 	}
-	_, err := s.DB.ExecContext(ctx, `
+	detailsJSON, err := encodeBankedResetDetails(m.BankedResetInventory.Details)
+	if err != nil {
+		return err
+	}
+	_, err = s.DB.ExecContext(ctx, `
 		INSERT INTO subscription_usage_snapshots(
 			observed_at, provider_instance_id, credential_id, account_display_label,
 			plan_label, limit_id, limit_name, plan_type, reached_type,
 			primary_used_percent, primary_window_minutes, primary_reset_at,
 			secondary_used_percent, secondary_window_minutes, secondary_reset_at,
-			source, error_class, stale
-		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			source, error_class, stale, banked_reset_available_count,
+			banked_reset_details_available, banked_reset_detail_error_class,
+			banked_reset_details_json
+		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(provider_instance_id, credential_id, limit_id) DO UPDATE SET
 			observed_at = excluded.observed_at,
 			account_display_label = excluded.account_display_label,
@@ -36,12 +43,18 @@ func (s *Store) UpsertSubscriptionUsageSnapshot(ctx context.Context, m metadata.
 			secondary_reset_at = excluded.secondary_reset_at,
 			source = excluded.source,
 			error_class = excluded.error_class,
-			stale = excluded.stale
+			stale = excluded.stale,
+			banked_reset_available_count = excluded.banked_reset_available_count,
+			banked_reset_details_available = excluded.banked_reset_details_available,
+			banked_reset_detail_error_class = excluded.banked_reset_detail_error_class,
+			banked_reset_details_json = excluded.banked_reset_details_json
 	`, m.ObservedAt.UTC().Format(time.RFC3339Nano), m.ProviderInstanceID, nullableInt64(m.CredentialID),
 		m.AccountDisplayLabel, m.PlanLabel, m.LimitID, m.LimitName, m.PlanType, m.ReachedType,
 		m.PrimaryUsedPercent, m.PrimaryWindowMinutes, nullableTime(m.PrimaryResetAt),
 		m.SecondaryUsedPercent, m.SecondaryWindowMinutes, nullableTime(m.SecondaryResetAt),
-		m.Source, m.ErrorClass, boolToInt(m.Stale))
+		m.Source, m.ErrorClass, boolToInt(m.Stale), nullableIntPtr(m.BankedResetInventory.AvailableCount),
+		boolToInt(m.BankedResetInventory.DetailsAvailable), m.BankedResetInventory.DetailErrorClass,
+		string(detailsJSON))
 	if err == nil && s.Logger != nil {
 		s.Logger.LogAttrs(ctx, slog.LevelInfo, "subscription usage snapshot recorded",
 			slog.String("event", "subscription_usage_recorded"),
@@ -60,7 +73,9 @@ func (s *Store) LatestSubscriptionUsageSnapshots(ctx context.Context) ([]metadat
 			account_display_label, plan_label, limit_id, limit_name, plan_type,
 			reached_type, primary_used_percent, primary_window_minutes,
 			primary_reset_at, secondary_used_percent, secondary_window_minutes,
-			secondary_reset_at, source, error_class, stale
+			secondary_reset_at, source, error_class, stale,
+			banked_reset_available_count, banked_reset_details_available,
+			banked_reset_detail_error_class, banked_reset_details_json
 		FROM subscription_usage_snapshots
 		ORDER BY provider_instance_id ASC, COALESCE(credential_id, 0) ASC, limit_id ASC
 	`)
@@ -73,13 +88,17 @@ func (s *Store) LatestSubscriptionUsageSnapshots(ctx context.Context) ([]metadat
 		var row metadata.SubscriptionUsageSnapshot
 		var observed string
 		var primaryReset, secondaryReset sql.NullString
+		var bankedAvailable sql.NullInt64
+		var bankedDetailsJSON string
 		var stale int
+		var bankedDetailsAvailable int
 		if err := rows.Scan(&observed, &row.ProviderInstanceID, &row.CredentialID,
 			&row.AccountDisplayLabel, &row.PlanLabel, &row.LimitID, &row.LimitName,
 			&row.PlanType, &row.ReachedType, &row.PrimaryUsedPercent,
 			&row.PrimaryWindowMinutes, &primaryReset, &row.SecondaryUsedPercent,
 			&row.SecondaryWindowMinutes, &secondaryReset, &row.Source,
-			&row.ErrorClass, &stale); err != nil {
+			&row.ErrorClass, &stale, &bankedAvailable, &bankedDetailsAvailable,
+			&row.BankedResetInventory.DetailErrorClass, &bankedDetailsJSON); err != nil {
 			return nil, err
 		}
 		observedAt, err := parseSQLiteTime(observed)
@@ -102,7 +121,44 @@ func (s *Store) LatestSubscriptionUsageSnapshots(ctx context.Context) ([]metadat
 			row.SecondaryResetAt = &parsed
 		}
 		row.Stale = stale != 0
+		if bankedAvailable.Valid {
+			available := int(bankedAvailable.Int64)
+			row.BankedResetInventory.AvailableCount = &available
+		}
+		row.BankedResetInventory.DetailsAvailable = bankedDetailsAvailable != 0
+		if bankedDetailsJSON != "" {
+			details, err := decodeBankedResetDetails([]byte(bankedDetailsJSON))
+			if err != nil {
+				return nil, err
+			}
+			row.BankedResetInventory.Details = details
+		}
 		out = append(out, row)
 	}
 	return out, rows.Err()
+}
+
+func nullableIntPtr(v *int) any {
+	if v == nil {
+		return nil
+	}
+	return *v
+}
+
+func encodeBankedResetDetails(details []metadata.BankedResetDetail) ([]byte, error) {
+	if details == nil {
+		details = []metadata.BankedResetDetail{}
+	}
+	return json.Marshal(details)
+}
+
+func decodeBankedResetDetails(body []byte) ([]metadata.BankedResetDetail, error) {
+	var details []metadata.BankedResetDetail
+	if err := json.Unmarshal(body, &details); err != nil {
+		return nil, err
+	}
+	if details == nil {
+		details = []metadata.BankedResetDetail{}
+	}
+	return details, nil
 }

@@ -140,6 +140,10 @@ func (s Service) refreshCredentialUsage(ctx context.Context, instance ProviderIn
 		if limitID == "" || limitID == "details_redacted" {
 			limitID = "codex"
 		}
+		var bankedResetInventory metadata.BankedResetInventory
+		if limitID == "codex" {
+			bankedResetInventory = subscriptionUsageBankedResetInventory(result.BankedResetInventory)
+		}
 		if err := s.SubscriptionUsage.UpsertSubscriptionUsageSnapshot(ctx, metadata.SubscriptionUsageSnapshot{
 			ObservedAt:             now,
 			ProviderInstanceID:     instance.ID,
@@ -157,6 +161,7 @@ func (s Service) refreshCredentialUsage(ctx context.Context, instance ProviderIn
 			SecondaryWindowMinutes: windowMinutes(snapshot.Secondary),
 			SecondaryResetAt:       windowReset(snapshot.Secondary),
 			Source:                 "codex_usage",
+			BankedResetInventory:   bankedResetInventory,
 		}); err != nil {
 			return count, err
 		}
@@ -187,4 +192,33 @@ func subscriptionUsageFetchRequest(instance ProviderInstance, bearer credentials
 			ChatGPTAccountIsFedRAMP: bearer.ChatGPTAccountIsFedRAMP,
 		},
 	}
+}
+
+func subscriptionUsageBankedResetInventory(in SubscriptionUsageFetchBankedResetInventory) metadata.BankedResetInventory {
+	out := metadata.BankedResetInventory{
+		AvailableCount:   in.AvailableCount,
+		DetailsAvailable: in.DetailsAvailable,
+		DetailErrorClass: safeErrorToken(in.DetailErrorClass),
+	}
+	if out.DetailErrorClass == "details_redacted" {
+		out.DetailErrorClass = ""
+	}
+	out.Details = make([]metadata.BankedResetDetail, 0, len(in.Details))
+	for _, detail := range in.Details {
+		resetType := safeErrorToken(detail.ResetType)
+		if resetType == "details_redacted" || resetType == "" {
+			resetType = "unknown"
+		}
+		status := safeErrorToken(detail.Status)
+		if status == "details_redacted" || status == "" {
+			status = "unknown"
+		}
+		out.Details = append(out.Details, metadata.BankedResetDetail{
+			ResetType: resetType,
+			Status:    status,
+			GrantedAt: detail.GrantedAt.UTC(),
+			ExpiresAt: cloneTime(detail.ExpiresAt),
+		})
+	}
+	return out
 }

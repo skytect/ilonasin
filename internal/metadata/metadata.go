@@ -267,6 +267,21 @@ type SubscriptionUsageSnapshot struct {
 	Source                 string
 	ErrorClass             string
 	Stale                  bool
+	BankedResetInventory   BankedResetInventory
+}
+
+type BankedResetInventory struct {
+	AvailableCount   *int
+	DetailsAvailable bool
+	DetailErrorClass string
+	Details          []BankedResetDetail
+}
+
+type BankedResetDetail struct {
+	ResetType string     `json:"reset_type"`
+	Status    string     `json:"status"`
+	GrantedAt time.Time  `json:"granted_at"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }
 
 type PruneResult struct {

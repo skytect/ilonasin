@@ -38,6 +38,10 @@ func subscriptionUsageRow(row metadata.SubscriptionUsageSnapshot) SubscriptionUs
 		Stale:               row.Stale,
 	}
 	out.Windows = subscriptionUsageWindows(row)
+	if row.LimitID == "codex" {
+		inventory := subscriptionUsageBankedResetInventoryRow(row.BankedResetInventory)
+		out.BankedResetInventory = &inventory
+	}
 	return out
 }
 
@@ -52,6 +56,7 @@ func subscriptionUsageAggregates(rows []SubscriptionUsageRow, now time.Time) []S
 		secondaryLabel       string
 		primaryReset         *time.Time
 		secondaryReset       *time.Time
+		banked               SubscriptionUsagePoolBankedResetInventory
 	}
 	buckets := map[string]*bucket{}
 	for _, row := range rows {
@@ -68,6 +73,9 @@ func subscriptionUsageAggregates(rows []SubscriptionUsageRow, now time.Time) []S
 		b.agg.AccountCount++
 		if row.Stale || row.ErrorClass != "" {
 			b.agg.StaleCount++
+		}
+		if row.LimitID == "codex" && row.BankedResetInventory != nil {
+			addBankedResetInventoryToPool(&b.banked, *row.BankedResetInventory, now)
 		}
 		for _, window := range row.Windows {
 			switch window.Kind {
@@ -96,6 +104,10 @@ func subscriptionUsageAggregates(rows []SubscriptionUsageRow, now time.Time) []S
 	for _, b := range buckets {
 		if b.agg.AccountCount > 0 {
 			b.agg.Windows = subscriptionUsagePoolWindows(b.agg, b.primarySum, b.secondarySum, b.primaryWindowCount, b.secondaryWindowCount, b.primaryLabel, b.secondaryLabel, b.primaryReset, b.secondaryReset)
+			if b.agg.LimitID == "codex" {
+				banked := b.banked
+				b.agg.BankedResetInventory = &banked
+			}
 		}
 		out = append(out, b.agg)
 	}
@@ -106,6 +118,42 @@ func subscriptionUsageAggregates(rows []SubscriptionUsageRow, now time.Time) []S
 		return out[i].LimitID < out[j].LimitID
 	})
 	return out
+}
+
+func subscriptionUsageBankedResetInventoryRow(in metadata.BankedResetInventory) SubscriptionUsageBankedResetInventory {
+	out := SubscriptionUsageBankedResetInventory{
+		AvailableCount:   cloneInt(in.AvailableCount),
+		DetailsAvailable: in.DetailsAvailable,
+		DetailErrorClass: in.DetailErrorClass,
+	}
+	out.Details = make([]SubscriptionUsageBankedResetDetail, 0, len(in.Details))
+	for _, detail := range in.Details {
+		out.Details = append(out.Details, SubscriptionUsageBankedResetDetail{
+			ResetType: detail.ResetType,
+			Status:    detail.Status,
+			GrantedAt: detail.GrantedAt.UTC(),
+			ExpiresAt: cloneTime(detail.ExpiresAt),
+		})
+	}
+	return out
+}
+
+func addBankedResetInventoryToPool(out *SubscriptionUsagePoolBankedResetInventory, in SubscriptionUsageBankedResetInventory, now time.Time) {
+	if in.AvailableCount == nil {
+		out.UnknownAccountCount++
+		return
+	}
+	out.KnownAccountCount++
+	out.AvailableCount += *in.AvailableCount
+	if *in.AvailableCount > 0 && !in.DetailsAvailable {
+		out.DetailsUnavailableCount++
+	}
+	for _, detail := range in.Details {
+		if detail.Status != "available" {
+			continue
+		}
+		out.EarliestExpiresAt = earliestFutureTime(out.EarliestExpiresAt, detail.ExpiresAt, now)
+	}
 }
 
 func subscriptionUsageWindows(row metadata.SubscriptionUsageSnapshot) []SubscriptionUsageWindow {
@@ -248,5 +296,13 @@ func cloneTime(value *time.Time) *time.Time {
 		return nil
 	}
 	clone := value.UTC()
+	return &clone
+}
+
+func cloneInt(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	clone := *value
 	return &clone
 }

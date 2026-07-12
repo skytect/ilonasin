@@ -379,6 +379,12 @@ var migrations = []migration{
 	{version: 12, name: "provider_credential_pool_group_column", steps: []migrationStep{
 		renameColumnIfOnlyOldExists("provider_credentials", "fallback_group", "pool_group"),
 	}},
+	{version: 13, name: "subscription_usage_banked_resets", steps: []migrationStep{
+		addColumnIfMissing("subscription_usage_snapshots", "banked_reset_available_count", `banked_reset_available_count INTEGER`),
+		addColumnIfMissing("subscription_usage_snapshots", "banked_reset_details_available", `banked_reset_details_available INTEGER NOT NULL DEFAULT 0`),
+		addColumnIfMissing("subscription_usage_snapshots", "banked_reset_detail_error_class", `banked_reset_detail_error_class TEXT NOT NULL DEFAULT ''`),
+		addColumnIfMissing("subscription_usage_snapshots", "banked_reset_details_json", `banked_reset_details_json TEXT NOT NULL DEFAULT '[]'`),
+	}},
 }
 
 func sqlSteps(stmts []string) []migrationStep {

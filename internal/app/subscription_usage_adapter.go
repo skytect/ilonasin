@@ -53,8 +53,9 @@ func providerBearerCredentialFromSubscriptionUsage(row management.SubscriptionUs
 
 func subscriptionUsageResultFromProvider(result provider.CodexSubscriptionUsageResult) management.SubscriptionUsageFetchResult {
 	out := management.SubscriptionUsageFetchResult{
-		ErrorClass: result.ErrorClass,
-		StatusCode: result.StatusCode,
+		BankedResetInventory: subscriptionUsageBankedResetInventoryFromProvider(result.BankedResetInventory),
+		ErrorClass:           result.ErrorClass,
+		StatusCode:           result.StatusCode,
 	}
 	out.Snapshots = make([]management.SubscriptionUsageFetchSnapshot, 0, len(result.Snapshots))
 	for _, snapshot := range result.Snapshots {
@@ -65,6 +66,24 @@ func subscriptionUsageResultFromProvider(result provider.CodexSubscriptionUsageR
 			ReachedType: snapshot.ReachedType,
 			Primary:     subscriptionUsageWindowFromProvider(snapshot.Primary),
 			Secondary:   subscriptionUsageWindowFromProvider(snapshot.Secondary),
+		})
+	}
+	return out
+}
+
+func subscriptionUsageBankedResetInventoryFromProvider(in provider.CodexBankedResetInventory) management.SubscriptionUsageFetchBankedResetInventory {
+	out := management.SubscriptionUsageFetchBankedResetInventory{
+		AvailableCount:   in.AvailableCount,
+		DetailsAvailable: in.DetailsAvailable,
+		DetailErrorClass: in.DetailErrorClass,
+	}
+	out.Details = make([]management.SubscriptionUsageFetchBankedResetDetail, 0, len(in.Details))
+	for _, detail := range in.Details {
+		out.Details = append(out.Details, management.SubscriptionUsageFetchBankedResetDetail{
+			ResetType: detail.ResetType,
+			Status:    detail.Status,
+			GrantedAt: detail.GrantedAt,
+			ExpiresAt: detail.ExpiresAt,
 		})
 	}
 	return out

@@ -16,6 +16,9 @@ func sanitizeSubscriptionUsageResponse(out *SubscriptionUsageResponse) {
 			row.Windows[j].Kind = safeSnapshotString(row.Windows[j].Kind)
 			row.Windows[j].Label = safeSnapshotString(row.Windows[j].Label)
 		}
+		if row.BankedResetInventory != nil {
+			sanitizeSubscriptionUsageBankedResetInventory(row.BankedResetInventory)
+		}
 	}
 	for i := range out.Pools {
 		row := &out.Pools[i]
@@ -30,5 +33,13 @@ func sanitizeSubscriptionUsageResponse(out *SubscriptionUsageResponse) {
 	out.Keepalive.Status = safeSnapshotString(out.Keepalive.Status)
 	for i := range out.Keepalive.ScheduleTimes {
 		out.Keepalive.ScheduleTimes[i] = safeSnapshotString(out.Keepalive.ScheduleTimes[i])
+	}
+}
+
+func sanitizeSubscriptionUsageBankedResetInventory(out *SubscriptionUsageBankedResetInventory) {
+	out.DetailErrorClass = safeSnapshotString(out.DetailErrorClass)
+	for i := range out.Details {
+		out.Details[i].ResetType = safeSnapshotString(out.Details[i].ResetType)
+		out.Details[i].Status = safeSnapshotString(out.Details[i].Status)
 	}
 }

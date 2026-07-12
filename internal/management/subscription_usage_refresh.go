@@ -36,9 +36,10 @@ type SubscriptionUsageBearerCredential struct {
 }
 
 type SubscriptionUsageFetchResult struct {
-	Snapshots  []SubscriptionUsageFetchSnapshot
-	ErrorClass string
-	StatusCode int
+	Snapshots            []SubscriptionUsageFetchSnapshot
+	BankedResetInventory SubscriptionUsageFetchBankedResetInventory
+	ErrorClass           string
+	StatusCode           int
 }
 
 type SubscriptionUsageFetchSnapshot struct {
@@ -54,4 +55,18 @@ type SubscriptionUsageFetchWindow struct {
 	UsedPercent   float64
 	WindowMinutes int
 	ResetsAt      *time.Time
+}
+
+type SubscriptionUsageFetchBankedResetInventory struct {
+	AvailableCount   *int
+	DetailsAvailable bool
+	DetailErrorClass string
+	Details          []SubscriptionUsageFetchBankedResetDetail
+}
+
+type SubscriptionUsageFetchBankedResetDetail struct {
+	ResetType string
+	Status    string
+	GrantedAt time.Time
+	ExpiresAt *time.Time
 }

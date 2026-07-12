@@ -41,7 +41,23 @@ func Serve(opts Options) error {
 	captureUpstreamIO := rt.IOLogger != nil
 	secretRefresh := ioSecretRefreshHook(ctx, rt.IOLogger, rt.Store)
 	keepalive := subscriptionKeepaliveSettingsFromConfig(rt.Config.SubscriptionKeepalive)
-	mgmt, err := startManagementServer(ctx, rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database, rt.Config.Server.Bind, ioRetentionStatusFromConfig(rt.Config.Logging), rt.Registry, rt.Store, keepalive, rt.IOLogger, captureUpstreamIO, secretRefresh, rt.Logger)
+	auth := credentials.Service{Repo: rt.Store}
+	if rt.IOLogger != nil {
+		auth.EphemeralSecretAdded = rt.IOLogger.AddEphemeralSecret
+	}
+	refresher := provider.NewHTTPOAuthRefresher(nil)
+	refresher.Logger = rt.Logger
+	login := provider.NewHTTPOAuthDeviceLogin(nil)
+	login.Logger = rt.Logger
+	upstreams := &credentials.UpstreamService{
+		Registry:       credentialsProviderRegistry(rt.Registry),
+		Repo:           rt.Store,
+		OAuthRefresher: credentialsOAuthRefresher(refresher),
+		OAuthLogin:     credentialsOAuthDeviceLogin(login),
+		Logger:         rt.Logger,
+		SecretsChanged: secretRefresh,
+	}
+	mgmt, err := startManagementServer(ctx, rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database, rt.Config.Server.Bind, ioRetentionStatusFromConfig(rt.Config.Logging), rt.Registry, rt.Store, upstreams, keepalive, rt.IOLogger, captureUpstreamIO, rt.Logger)
 	if err != nil {
 		return err
 	}
@@ -64,20 +80,6 @@ func Serve(opts Options) error {
 		slog.String("bind", rt.Config.Server.Bind),
 	)
 
-	auth := credentials.Service{Repo: rt.Store}
-	if rt.IOLogger != nil {
-		auth.EphemeralSecretAdded = rt.IOLogger.AddEphemeralSecret
-	}
-	upstreams := &credentials.UpstreamService{
-		Registry:       credentialsProviderRegistry(rt.Registry),
-		Repo:           rt.Store,
-		OAuthRefresher: credentialsOAuthRefresher(provider.NewHTTPOAuthRefresher(nil)),
-		Logger:         rt.Logger,
-		SecretsChanged: secretRefresh,
-	}
-	refresher := provider.NewHTTPOAuthRefresher(nil)
-	refresher.Logger = rt.Logger
-	upstreams.OAuthRefresher = credentialsOAuthRefresher(refresher)
 	codexVersionResolver := provider.NewCachedCodexClientVersionResolver(nil)
 	codexAdapter := provider.NewHTTPChatAdapter(nil)
 	codexAdapter.Logger = rt.Logger

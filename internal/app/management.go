@@ -25,24 +25,12 @@ type ioRetentionStatus struct {
 	maxFiles int
 }
 
-func startManagementServer(ctx context.Context, homeDir, configPath, databasePath, bind string, ioRetention ioRetentionStatus, registry provider.Registry, store *sqlite.Store, keepalive subscriptionKeepaliveSettings, ioLogger *logging.IOLogger, captureUpstreamIO bool, secretRefresh func(context.Context, ...string), loggers ...*slog.Logger) (managementRuntime, error) {
+func startManagementServer(ctx context.Context, homeDir, configPath, databasePath, bind string, ioRetention ioRetentionStatus, registry provider.Registry, store *sqlite.Store, upstreams *credentials.UpstreamService, keepalive subscriptionKeepaliveSettings, ioLogger *logging.IOLogger, captureUpstreamIO bool, loggers ...*slog.Logger) (managementRuntime, error) {
 	logger := firstSlogLogger(loggers)
-	refresher := provider.NewHTTPOAuthRefresher(nil)
-	refresher.Logger = logger
-	login := provider.NewHTTPOAuthDeviceLogin(nil)
-	login.Logger = logger
 	usageClient := provider.NewHTTPChatAdapter(nil)
 	usageClient.Logger = logger
 	usageClient.IOLogger = ioLogger
 	usageClient.CaptureUpstreamIO = captureUpstreamIO
-	upstreams := &credentials.UpstreamService{
-		Registry:       credentialsProviderRegistry(registry),
-		Repo:           store,
-		OAuthRefresher: credentialsOAuthRefresher(refresher),
-		OAuthLogin:     credentialsOAuthDeviceLogin(login),
-		Logger:         logger,
-		SecretsChanged: secretRefresh,
-	}
 	tokens := credentials.Service{Repo: store}
 	if ioLogger != nil {
 		tokens.EphemeralSecretAdded = ioLogger.AddEphemeralSecret

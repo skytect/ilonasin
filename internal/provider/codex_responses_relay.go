@@ -463,8 +463,9 @@ func (a HTTPChatAdapter) handleCodexNativeResponsesEvent(ctx context.Context, li
 	data := bytes.Join(dataParts, []byte("\n"))
 	capture.eventIndex++
 	capture.id = a.recordUpstreamSSE(capture.instance, capture.credentialID, capture.endpoint, capture.status, block, capture.id, capture.eventIndex)
-	if err := handleCodexNativeResponsesData(data, summary, state, start); err != nil {
-		return err
+	eventErr := handleCodexNativeResponsesData(data, summary, state, start)
+	if eventErr != nil && summary.CompletionStatus != "upstream_error" {
+		return eventErr
 	}
 	if err := sink.WriteEvent(ctx, block); err != nil {
 		summary.ErrorClass = "client_disconnected"
@@ -479,7 +480,7 @@ func (a HTTPChatAdapter) handleCodexNativeResponsesEvent(ctx context.Context, li
 	if bytes.Equal(bytes.TrimSpace(data), []byte("[DONE]")) {
 		return nil
 	}
-	return nil
+	return eventErr
 }
 
 func handleCodexNativeResponsesData(data []byte, summary *ChatStreamSummary, state *codexNativeResponsesState, start time.Time) error {

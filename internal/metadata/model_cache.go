@@ -1,7 +1,6 @@
 package metadata
 
 import (
-	"sort"
 	"strings"
 	"time"
 )
@@ -76,16 +75,17 @@ func NormalizeModelServiceTiers(values []ModelServiceTier) []ModelServiceTier {
 	seen := map[string]bool{}
 	out := make([]ModelServiceTier, 0, len(values))
 	for _, value := range values {
-		tier, ok := canonicalModelServiceTier(value.ID)
-		if !ok || seen[tier.ID] {
+		id := normalizeModelServiceTierID(value.ID)
+		if id == "" || seen[id] {
 			continue
 		}
-		seen[tier.ID] = true
-		out = append(out, tier)
+		seen[id] = true
+		out = append(out, ModelServiceTier{
+			ID:          id,
+			Name:        boundedModelText(value.Name, 256),
+			Description: boundedModelText(value.Description, 1024),
+		})
 	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].ID < out[j].ID
-	})
 	return out
 }
 
@@ -109,29 +109,13 @@ func NormalizeModelInputModalities(values []string) []string {
 }
 
 func normalizeModelServiceTierID(value string) string {
-	tier, ok := canonicalModelServiceTier(value)
-	if !ok {
-		return ""
-	}
-	return tier.ID
-}
-
-func canonicalModelServiceTier(value string) (ModelServiceTier, bool) {
 	switch strings.TrimSpace(value) {
 	case "priority":
-		return ModelServiceTier{
-			ID:          "priority",
-			Name:        "Fast",
-			Description: "1.5x speed, increased usage",
-		}, true
+		return "priority"
 	case "flex":
-		return ModelServiceTier{
-			ID:          "flex",
-			Name:        "flex",
-			Description: "Flexible inference tier",
-		}, true
+		return "flex"
 	default:
-		return ModelServiceTier{}, false
+		return ""
 	}
 }
 

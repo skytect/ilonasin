@@ -41,32 +41,32 @@ type ModelListItem struct {
 type CodexModelInfo struct {
 	Slug                       string             `json:"slug"`
 	DisplayName                string             `json:"display_name"`
-	Description                string             `json:"description"`
+	Description                string             `json:"description,omitempty"`
 	DefaultReasoningLevel      string             `json:"default_reasoning_level,omitempty"`
 	SupportedReasoningLevels   []CodexReasoning   `json:"supported_reasoning_levels,omitempty"`
-	ShellType                  string             `json:"shell_type"`
-	Visibility                 string             `json:"visibility"`
-	SupportedInAPI             bool               `json:"supported_in_api"`
-	Priority                   int                `json:"priority"`
+	ShellType                  string             `json:"shell_type,omitempty"`
+	Visibility                 string             `json:"visibility,omitempty"`
+	SupportedInAPI             bool               `json:"supported_in_api,omitempty"`
+	Priority                   int                `json:"priority,omitempty"`
 	AdditionalSpeedTiers       []string           `json:"additional_speed_tiers,omitempty"`
 	ServiceTiers               []ModelServiceTier `json:"service_tiers,omitempty"`
 	DefaultServiceTier         string             `json:"default_service_tier,omitempty"`
-	AvailabilityNUX            any                `json:"availability_nux"`
-	Upgrade                    any                `json:"upgrade"`
-	BaseInstructions           string             `json:"base_instructions"`
-	SupportsReasoningSummaries bool               `json:"supports_reasoning_summaries"`
-	SupportVerbosity           bool               `json:"support_verbosity"`
+	AvailabilityNUX            any                `json:"availability_nux,omitempty"`
+	Upgrade                    any                `json:"upgrade,omitempty"`
+	BaseInstructions           string             `json:"base_instructions,omitempty"`
+	SupportsReasoningSummaries bool               `json:"supports_reasoning_summaries,omitempty"`
+	SupportVerbosity           bool               `json:"support_verbosity,omitempty"`
 	DefaultVerbosity           string             `json:"default_verbosity,omitempty"`
 	ApplyPatchToolType         string             `json:"apply_patch_tool_type,omitempty"`
-	WebSearchToolType          string             `json:"web_search_tool_type"`
-	TruncationPolicy           map[string]any     `json:"truncation_policy"`
-	SupportsParallelToolCalls  bool               `json:"supports_parallel_tool_calls"`
-	SupportsImageDetailOrig    bool               `json:"supports_image_detail_original"`
+	WebSearchToolType          string             `json:"web_search_tool_type,omitempty"`
+	TruncationPolicy           map[string]any     `json:"truncation_policy,omitempty"`
+	SupportsParallelToolCalls  bool               `json:"supports_parallel_tool_calls,omitempty"`
+	SupportsImageDetailOrig    bool               `json:"supports_image_detail_original,omitempty"`
 	ContextWindow              int                `json:"context_window,omitempty"`
 	MaxContextWindow           *int               `json:"max_context_window,omitempty"`
-	ExperimentalSupportedTools []string           `json:"experimental_supported_tools"`
-	InputModalities            []string           `json:"input_modalities"`
-	SupportsSearchTool         bool               `json:"supports_search_tool"`
+	ExperimentalSupportedTools []string           `json:"experimental_supported_tools,omitempty"`
+	InputModalities            []string           `json:"input_modalities,omitempty"`
+	SupportsSearchTool         bool               `json:"supports_search_tool,omitempty"`
 }
 
 type CodexReasoning struct {
@@ -122,62 +122,23 @@ func codexModelInfoFromMetadata(row ModelMetadata, namespacedID string) (CodexMo
 		return CodexModelInfo{}, false
 	}
 	serviceTiers := row.ServiceTiers
-	if len(serviceTiers) == 0 && metadata.HasModelCapability(row.CapabilityFlags, metadata.ModelCapabilityServiceTier) {
-		serviceTiers = []ModelServiceTier{codexFastServiceTier()}
-	}
-	inputModalities := row.InputModalities
-	if len(inputModalities) == 0 && row.ProviderInstanceID != "" && metadata.HasModelCapability(row.CapabilityFlags, metadata.ModelCapabilityVision) {
-		inputModalities = []string{"text", "image"}
-	}
-	inputModalities = orderedModelInputModalities(inputModalities)
-	if len(inputModalities) == 0 {
-		inputModalities = []string{"text"}
-	}
-	hasReasoning := metadata.HasModelCapability(row.CapabilityFlags, metadata.ModelCapabilityReasoning)
+	inputModalities := orderedModelInputModalities(row.InputModalities)
 	hasParallelToolCalls := metadata.HasModelCapability(row.CapabilityFlags, metadata.ModelCapabilityParallelToolCalls)
 	hasVision := metadata.HasModelCapability(row.CapabilityFlags, metadata.ModelCapabilityVision)
-	additionalSpeedTiers := []string(nil)
-	if len(serviceTiers) > 0 {
-		additionalSpeedTiers = []string{"fast"}
-	}
 	return CodexModelInfo{
-		Slug:                       namespacedID,
-		DisplayName:                displayNameOrID(row.DisplayName, namespacedID),
-		Description:                "",
-		DefaultReasoningLevel:      row.DefaultReasoningLevel,
-		SupportedReasoningLevels:   row.SupportedReasoningLevels,
-		ShellType:                  "shell_command",
-		Visibility:                 "list",
-		SupportedInAPI:             true,
-		Priority:                   9,
-		AdditionalSpeedTiers:       additionalSpeedTiers,
-		ServiceTiers:               serviceTiers,
-		DefaultServiceTier:         row.DefaultServiceTier,
-		AvailabilityNUX:            nil,
-		Upgrade:                    nil,
-		BaseInstructions:           "",
-		SupportsReasoningSummaries: hasReasoning,
-		SupportVerbosity:           true,
-		DefaultVerbosity:           "low",
-		ApplyPatchToolType:         "freeform",
-		WebSearchToolType:          "text_and_image",
-		TruncationPolicy:           map[string]any{"mode": "tokens", "limit": 10000},
-		SupportsParallelToolCalls:  hasParallelToolCalls,
-		SupportsImageDetailOrig:    hasVision,
-		ContextWindow:              row.ContextLength,
-		MaxContextWindow:           row.MaxContextWindow,
-		ExperimentalSupportedTools: []string{},
-		InputModalities:            inputModalities,
-		SupportsSearchTool:         true,
+		Slug:                      namespacedID,
+		DisplayName:               displayNameOrID(row.DisplayName, namespacedID),
+		Description:               "",
+		DefaultReasoningLevel:     row.DefaultReasoningLevel,
+		SupportedReasoningLevels:  row.SupportedReasoningLevels,
+		ServiceTiers:              serviceTiers,
+		DefaultServiceTier:        row.DefaultServiceTier,
+		SupportsParallelToolCalls: hasParallelToolCalls,
+		SupportsImageDetailOrig:   hasVision,
+		ContextWindow:             row.ContextLength,
+		MaxContextWindow:          row.MaxContextWindow,
+		InputModalities:           inputModalities,
 	}, true
-}
-
-func codexFastServiceTier() ModelServiceTier {
-	return ModelServiceTier{
-		ID:          "priority",
-		Name:        "Fast",
-		Description: "1.5x speed, increased usage",
-	}
 }
 
 func orderedModelInputModalities(values []string) []string {

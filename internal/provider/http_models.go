@@ -324,24 +324,12 @@ func codexServiceTiers(item map[string]any) []ModelServiceTier {
 			continue
 		}
 		seen[id] = true
-		switch id {
-		case "priority":
-			out = append(out, ModelServiceTier{
-				ID:          "priority",
-				Name:        "Fast",
-				Description: "1.5x speed, increased usage",
-			})
-		case "flex":
-			out = append(out, ModelServiceTier{
-				ID:          "flex",
-				Name:        "flex",
-				Description: "Flexible inference tier",
-			})
-		}
+		out = append(out, ModelServiceTier{
+			ID:          id,
+			Name:        safeBoundedText(codexStringField(tier, "name"), 256),
+			Description: safeBoundedText(codexStringField(tier, "description"), 1024),
+		})
 	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].ID < out[j].ID
-	})
 	return out
 }
 
@@ -355,9 +343,6 @@ func safeCodexServiceTierID(value string) string {
 }
 
 func codexInputModalities(item map[string]any) []string {
-	if _, ok := item["input_modalities"]; !ok {
-		return []string{"text", "image"}
-	}
 	seen := map[string]bool{}
 	for _, raw := range codexArrayField(item, "input_modalities") {
 		value, ok := raw.(string)

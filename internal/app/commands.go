@@ -2,9 +2,13 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"ilonasin/internal/credentials"
@@ -14,25 +18,47 @@ import (
 	"ilonasin/internal/tui"
 )
 
+const (
+	gracefulShutdownTimeout = 20 * time.Second
+	publicReadHeaderTimeout = 5 * time.Second
+	publicIdleTimeout       = 120 * time.Second
+	publicMaxHeaderBytes    = 1 << 20
+)
+
 func Serve(opts Options) error {
-	rt, err := bootstrap(context.Background(), opts)
+	ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+
+	rt, err := bootstrap(ctx, opts)
 	if err != nil {
 		return err
 	}
 	defer rt.cleanup()
 	defer rt.Store.Close()
-	if err := refreshIOConfiguredSecrets(context.Background(), rt.IOLogger, rt.Store); err != nil {
+	if err := refreshIOConfiguredSecrets(ctx, rt.IOLogger, rt.Store); err != nil {
 		return err
 	}
 	captureUpstreamIO := rt.IOLogger != nil
-	secretRefresh := ioSecretRefreshHook(context.Background(), rt.IOLogger, rt.Store)
+	secretRefresh := ioSecretRefreshHook(ctx, rt.IOLogger, rt.Store)
 	keepalive := subscriptionKeepaliveSettingsFromConfig(rt.Config.SubscriptionKeepalive)
-	mgmt, err := startManagementServer(context.Background(), rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database, rt.Config.Server.Bind, ioRetentionStatusFromConfig(rt.Config.Logging), rt.Registry, rt.Store, keepalive, rt.IOLogger, captureUpstreamIO, secretRefresh, rt.Logger)
+	mgmt, err := startManagementServer(ctx, rt.HomeDir, rt.ConfigPath, rt.Config.Paths.Database, rt.Config.Server.Bind, ioRetentionStatusFromConfig(rt.Config.Logging), rt.Registry, rt.Store, keepalive, rt.IOLogger, captureUpstreamIO, secretRefresh, rt.Logger)
 	if err != nil {
 		return err
 	}
-	defer mgmt.Close(context.Background())
-	rt.Logger.InfoContext(context.Background(), "serve starting",
+	mgmtClosed := false
+	closeManagement := func(ctx context.Context) {
+		if mgmtClosed {
+			return
+		}
+		mgmt.Close(ctx)
+		mgmtClosed = true
+	}
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), gracefulShutdownTimeout)
+		defer cancel()
+		closeManagement(closeCtx)
+	}()
+	rt.Logger.InfoContext(ctx, "serve starting",
 		slog.String("event", "app_command_start"),
 		slog.String("command", "serve"),
 		slog.String("bind", rt.Config.Server.Bind),
@@ -64,8 +90,16 @@ func Serve(opts Options) error {
 	modelAdapters["codex"] = codexAdapter
 	responseAdapters := responsesAdapters(nil, rt.IOLogger, captureUpstreamIO, rt.Logger)
 	responseAdapters["codex"] = codexAdapter
-	stopKeepalive := startSubscriptionKeepalive(context.Background(), keepalive, keepaliveProviderRegistryFromProvider(rt.Registry), upstreams, keepaliveUsageClientFromProvider(codexAdapter), keepaliveChatClientFromProvider(codexAdapter), rt.Logger)
-	defer stopKeepalive()
+	stopKeepalive := startSubscriptionKeepalive(ctx, keepalive, keepaliveProviderRegistryFromProvider(rt.Registry), upstreams, keepaliveUsageClientFromProvider(codexAdapter), keepaliveChatClientFromProvider(codexAdapter), rt.Logger)
+	keepaliveStopped := false
+	stopKeepaliveOnce := func() {
+		if keepaliveStopped {
+			return
+		}
+		stopKeepalive()
+		keepaliveStopped = true
+	}
+	defer stopKeepaliveOnce()
 	srvHandler := server.New(rt.Registry, auth, upstreams, upstreams, adapters, modelAdapters, rt.Store, rt.Store).
 		WithLogger(rt.Logger).
 		WithIOLogger(rt.IOLogger).
@@ -74,10 +108,40 @@ func Serve(opts Options) error {
 	srv := &http.Server{
 		Addr:              rt.Config.Server.Bind,
 		Handler:           srvHandler,
-		ReadHeaderTimeout: 5 * time.Second,
+		ReadHeaderTimeout: publicReadHeaderTimeout,
+		IdleTimeout:       publicIdleTimeout,
+		MaxHeaderBytes:    publicMaxHeaderBytes,
 	}
 	fmt.Fprintf(opts.Stdout, "ilonasin serving on %s\n", rt.Config.Server.Bind)
-	return srv.ListenAndServe()
+	errc := make(chan error, 1)
+	go func() {
+		errc <- srv.ListenAndServe()
+	}()
+	select {
+	case err := <-errc:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	case <-ctx.Done():
+		stopSignals()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), gracefulShutdownTimeout)
+		defer cancel()
+		shutdownErrc := make(chan error, 1)
+		go func() {
+			shutdownErrc <- srv.Shutdown(shutdownCtx)
+		}()
+		stopKeepaliveOnce()
+		closeManagement(shutdownCtx)
+		shutdownErr := <-shutdownErrc
+		if shutdownErr != nil && !errors.Is(shutdownErr, http.ErrServerClosed) {
+			return shutdownErr
+		}
+		if err := <-errc; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
+	}
 }
 
 func Manage(opts Options) error {

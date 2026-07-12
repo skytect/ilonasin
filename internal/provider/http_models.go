@@ -247,6 +247,9 @@ func normalizeCodexModels(instance Instance, body []byte) ([]ModelMetadata, erro
 			meta.DisplayName = safeDisplayName(name)
 		}
 		meta.ContextLength = safeInt(item["context_window"])
+		meta.MaxContextWindow = safeOptionalInt(item, "max_context_window")
+		meta.DefaultReasoningLevel = safeReasoningEffort(codexStringField(item, "default_reasoning_level"))
+		meta.SupportedReasoningLevels = codexReasoningLevels(item)
 		meta.DefaultServiceTier = safeCodexServiceTierID(codexStringField(item, "default_service_tier"))
 		meta.ServiceTiers = codexServiceTiers(item)
 		meta.InputModalities = codexInputModalities(item)
@@ -268,7 +271,7 @@ func codexCapabilityFlags(item map[string]any) string {
 		metadata.ModelCapabilityStream,
 		metadata.ModelCapabilityTools,
 	}
-	if codexStringField(item, "default_reasoning_level") != "" || len(codexArrayField(item, "supported_reasoning_levels")) > 0 {
+	if safeReasoningEffort(codexStringField(item, "default_reasoning_level")) != "" || len(codexReasoningLevels(item)) > 0 {
 		flags = append(flags, metadata.ModelCapabilityReasoning)
 	}
 	if codexBoolField(item, "supports_parallel_tool_calls") {
@@ -281,6 +284,27 @@ func codexCapabilityFlags(item map[string]any) string {
 		flags = append(flags, metadata.ModelCapabilityVision)
 	}
 	return metadata.FormatModelCapabilities(flags...)
+}
+
+func codexReasoningLevels(item map[string]any) []ModelReasoningLevel {
+	out := make([]ModelReasoningLevel, 0, len(codexArrayField(item, "supported_reasoning_levels")))
+	seen := map[string]bool{}
+	for _, raw := range codexArrayField(item, "supported_reasoning_levels") {
+		level, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		effort := safeReasoningEffort(codexStringField(level, "effort"))
+		if effort == "" || seen[effort] {
+			continue
+		}
+		seen[effort] = true
+		out = append(out, ModelReasoningLevel{
+			Effort:      effort,
+			Description: safeReasoningDescription(codexStringField(level, "description")),
+		})
+	}
+	return out
 }
 
 func hasCodexServiceTier(item map[string]any) bool {
@@ -401,6 +425,26 @@ func safeDisplayName(name string) string {
 	return name
 }
 
+func safeReasoningEffort(value string) string {
+	return safeBoundedText(value, 64)
+}
+
+func safeReasoningDescription(value string) string {
+	return safeBoundedText(value, 1024)
+}
+
+func safeBoundedText(value string, maxLen int) string {
+	if value == "" || len(value) > maxLen {
+		return ""
+	}
+	for _, r := range value {
+		if r < 0x20 || r == 0x7f {
+			return ""
+		}
+	}
+	return value
+}
+
 func safeInt(value any) int {
 	switch v := value.(type) {
 	case json.Number:
@@ -414,6 +458,33 @@ func safeInt(value any) int {
 		}
 	}
 	return 0
+}
+
+func safeOptionalInt(item map[string]any, key string) *int {
+	value, ok := item[key]
+	if !ok {
+		return nil
+	}
+	i, ok := safeNonNegativeInt(value)
+	if !ok {
+		return nil
+	}
+	return &i
+}
+
+func safeNonNegativeInt(value any) (int, bool) {
+	switch v := value.(type) {
+	case json.Number:
+		i, err := v.Int64()
+		if err == nil && i >= 0 && i <= int64(^uint(0)>>1) {
+			return int(i), true
+		}
+	case float64:
+		if v >= 0 && v == float64(int(v)) {
+			return int(v), true
+		}
+	}
+	return 0, false
 }
 
 func (a HTTPChatAdapter) modelTimeout() time.Duration {

@@ -13,14 +13,28 @@ func openAIModelMetadataFromProvider(rows []provider.ModelMetadata) []openai.Mod
 	out := make([]openai.ModelMetadata, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, openai.ModelMetadata{
-			ProviderInstanceID: row.ProviderInstanceID,
-			ModelID:            row.ModelID,
-			DisplayName:        row.DisplayName,
-			CapabilityFlags:    row.CapabilityFlags,
-			ContextLength:      row.ContextLength,
-			DefaultServiceTier: row.DefaultServiceTier,
-			ServiceTiers:       openAIModelServiceTiersFromProvider(row.ServiceTiers),
-			InputModalities:    row.InputModalities,
+			ProviderInstanceID:       row.ProviderInstanceID,
+			ModelID:                  row.ModelID,
+			DisplayName:              row.DisplayName,
+			CapabilityFlags:          row.CapabilityFlags,
+			ContextLength:            row.ContextLength,
+			MaxContextWindow:         row.MaxContextWindow,
+			DefaultReasoningLevel:    row.DefaultReasoningLevel,
+			SupportedReasoningLevels: openAIModelReasoningLevelsFromProvider(row.SupportedReasoningLevels),
+			DefaultServiceTier:       row.DefaultServiceTier,
+			ServiceTiers:             openAIModelServiceTiersFromProvider(row.ServiceTiers),
+			InputModalities:          row.InputModalities,
+		})
+	}
+	return out
+}
+
+func openAIModelReasoningLevelsFromProvider(rows []provider.ModelReasoningLevel) []openai.CodexReasoning {
+	out := make([]openai.CodexReasoning, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, openai.CodexReasoning{
+			Effort:      row.Effort,
+			Description: row.Description,
 		})
 	}
 	return out

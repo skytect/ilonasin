@@ -410,6 +410,11 @@ var migrations = []migration{
 		addColumnIfMissing("subscription_usage_snapshots", "banked_reset_detail_error_class", `banked_reset_detail_error_class TEXT NOT NULL DEFAULT ''`),
 		addColumnIfMissing("subscription_usage_snapshots", "banked_reset_details_json", `banked_reset_details_json TEXT NOT NULL DEFAULT '[]'`),
 	}},
+	{version: 14, name: "model_cache_codex_reasoning_context", steps: []migrationStep{
+		addColumnIfMissing("model_cache", "max_context_window", `max_context_window INTEGER`),
+		addColumnIfMissing("model_cache", "default_reasoning_level", `default_reasoning_level TEXT NOT NULL DEFAULT ''`),
+		addColumnIfMissing("model_cache", "supported_reasoning_levels_json", `supported_reasoning_levels_json TEXT NOT NULL DEFAULT '[]'`),
+	}},
 }
 
 func sqlSteps(stmts []string) []migrationStep {

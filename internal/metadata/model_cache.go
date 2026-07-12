@@ -7,15 +7,23 @@ import (
 )
 
 type ModelCacheRow struct {
-	ProviderInstanceID string
-	ModelID            string
-	DisplayName        string
-	CapabilityFlags    string
-	ContextLength      int
-	DefaultServiceTier string
-	ServiceTiers       []ModelServiceTier
-	InputModalities    []string
-	UpdatedAt          time.Time
+	ProviderInstanceID       string
+	ModelID                  string
+	DisplayName              string
+	CapabilityFlags          string
+	ContextLength            int
+	MaxContextWindow         *int
+	DefaultReasoningLevel    string
+	SupportedReasoningLevels []ModelReasoningLevel
+	DefaultServiceTier       string
+	ServiceTiers             []ModelServiceTier
+	InputModalities          []string
+	UpdatedAt                time.Time
+}
+
+type ModelReasoningLevel struct {
+	Effort      string `json:"effort"`
+	Description string `json:"description"`
 }
 
 type ModelServiceTier struct {
@@ -32,6 +40,11 @@ func NormalizeModelCacheRow(row ModelCacheRow) ModelCacheRow {
 	if row.ContextLength < 0 {
 		row.ContextLength = 0
 	}
+	if row.MaxContextWindow != nil && *row.MaxContextWindow < 0 {
+		row.MaxContextWindow = nil
+	}
+	row.DefaultReasoningLevel = normalizeModelReasoningEffort(row.DefaultReasoningLevel)
+	row.SupportedReasoningLevels = NormalizeModelReasoningLevels(row.SupportedReasoningLevels)
 	row.DefaultServiceTier = normalizeModelServiceTierID(row.DefaultServiceTier)
 	row.ServiceTiers = NormalizeModelServiceTiers(row.ServiceTiers)
 	row.InputModalities = NormalizeModelInputModalities(row.InputModalities)
@@ -39,6 +52,24 @@ func NormalizeModelCacheRow(row ModelCacheRow) ModelCacheRow {
 		row.UpdatedAt = row.UpdatedAt.UTC()
 	}
 	return row
+}
+
+func NormalizeModelReasoningLevels(values []ModelReasoningLevel) []ModelReasoningLevel {
+	seen := map[string]bool{}
+	out := make([]ModelReasoningLevel, 0, len(values))
+	for _, value := range values {
+		effort := normalizeModelReasoningEffort(value.Effort)
+		if effort == "" || seen[effort] {
+			continue
+		}
+		description := boundedModelText(value.Description, 1024)
+		seen[effort] = true
+		out = append(out, ModelReasoningLevel{
+			Effort:      effort,
+			Description: description,
+		})
+	}
+	return out
 }
 
 func NormalizeModelServiceTiers(values []ModelServiceTier) []ModelServiceTier {
@@ -102,4 +133,20 @@ func canonicalModelServiceTier(value string) (ModelServiceTier, bool) {
 	default:
 		return ModelServiceTier{}, false
 	}
+}
+
+func normalizeModelReasoningEffort(value string) string {
+	return boundedModelText(value, 64)
+}
+
+func boundedModelText(value string, maxLen int) string {
+	if value == "" || len(value) > maxLen {
+		return ""
+	}
+	for _, r := range value {
+		if r < 0x20 || r == 0x7f {
+			return ""
+		}
+	}
+	return value
 }

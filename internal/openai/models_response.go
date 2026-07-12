@@ -7,14 +7,17 @@ import (
 )
 
 type ModelMetadata struct {
-	ProviderInstanceID string
-	ModelID            string
-	DisplayName        string
-	CapabilityFlags    string
-	ContextLength      int
-	DefaultServiceTier string
-	ServiceTiers       []ModelServiceTier
-	InputModalities    []string
+	ProviderInstanceID       string
+	ModelID                  string
+	DisplayName              string
+	CapabilityFlags          string
+	ContextLength            int
+	MaxContextWindow         *int
+	DefaultReasoningLevel    string
+	SupportedReasoningLevels []CodexReasoning
+	DefaultServiceTier       string
+	ServiceTiers             []ModelServiceTier
+	InputModalities          []string
 }
 
 type ModelServiceTier struct {
@@ -40,7 +43,7 @@ type CodexModelInfo struct {
 	DisplayName                string             `json:"display_name"`
 	Description                string             `json:"description"`
 	DefaultReasoningLevel      string             `json:"default_reasoning_level,omitempty"`
-	SupportedReasoningLevels   []CodexReasoning   `json:"supported_reasoning_levels"`
+	SupportedReasoningLevels   []CodexReasoning   `json:"supported_reasoning_levels,omitempty"`
 	ShellType                  string             `json:"shell_type"`
 	Visibility                 string             `json:"visibility"`
 	SupportedInAPI             bool               `json:"supported_in_api"`
@@ -60,7 +63,7 @@ type CodexModelInfo struct {
 	SupportsParallelToolCalls  bool               `json:"supports_parallel_tool_calls"`
 	SupportsImageDetailOrig    bool               `json:"supports_image_detail_original"`
 	ContextWindow              int                `json:"context_window,omitempty"`
-	MaxContextWindow           int                `json:"max_context_window,omitempty"`
+	MaxContextWindow           *int               `json:"max_context_window,omitempty"`
 	ExperimentalSupportedTools []string           `json:"experimental_supported_tools"`
 	InputModalities            []string           `json:"input_modalities"`
 	SupportsSearchTool         bool               `json:"supports_search_tool"`
@@ -130,13 +133,7 @@ func codexModelInfoFromMetadata(row ModelMetadata, namespacedID string) (CodexMo
 	if len(inputModalities) == 0 {
 		inputModalities = []string{"text"}
 	}
-	reasoningEfforts := []CodexReasoning{}
-	defaultReasoningEffort := ""
 	hasReasoning := metadata.HasModelCapability(row.CapabilityFlags, metadata.ModelCapabilityReasoning)
-	if hasReasoning {
-		reasoningEfforts = defaultCodexReasoningEfforts()
-		defaultReasoningEffort = "medium"
-	}
 	hasParallelToolCalls := metadata.HasModelCapability(row.CapabilityFlags, metadata.ModelCapabilityParallelToolCalls)
 	hasVision := metadata.HasModelCapability(row.CapabilityFlags, metadata.ModelCapabilityVision)
 	additionalSpeedTiers := []string(nil)
@@ -147,8 +144,8 @@ func codexModelInfoFromMetadata(row ModelMetadata, namespacedID string) (CodexMo
 		Slug:                       namespacedID,
 		DisplayName:                displayNameOrID(row.DisplayName, namespacedID),
 		Description:                "",
-		DefaultReasoningLevel:      defaultReasoningEffort,
-		SupportedReasoningLevels:   reasoningEfforts,
+		DefaultReasoningLevel:      row.DefaultReasoningLevel,
+		SupportedReasoningLevels:   row.SupportedReasoningLevels,
 		ShellType:                  "shell_command",
 		Visibility:                 "list",
 		SupportedInAPI:             true,
@@ -168,7 +165,7 @@ func codexModelInfoFromMetadata(row ModelMetadata, namespacedID string) (CodexMo
 		SupportsParallelToolCalls:  hasParallelToolCalls,
 		SupportsImageDetailOrig:    hasVision,
 		ContextWindow:              row.ContextLength,
-		MaxContextWindow:           row.ContextLength,
+		MaxContextWindow:           row.MaxContextWindow,
 		ExperimentalSupportedTools: []string{},
 		InputModalities:            inputModalities,
 		SupportsSearchTool:         true,
@@ -195,15 +192,6 @@ func orderedModelInputModalities(values []string) []string {
 		}
 	}
 	return out
-}
-
-func defaultCodexReasoningEfforts() []CodexReasoning {
-	return []CodexReasoning{
-		{Effort: "low", Description: "Fast responses with lighter reasoning"},
-		{Effort: "medium", Description: "Balances speed and reasoning depth for everyday tasks"},
-		{Effort: "high", Description: "Greater reasoning depth for complex problems"},
-		{Effort: "xhigh", Description: "Extra high reasoning depth for complex problems"},
-	}
 }
 
 func displayNameOrID(displayName, id string) string {

@@ -62,15 +62,23 @@ type ModelResult struct {
 }
 
 type ModelMetadata struct {
-	ProviderInstanceID string
-	ModelID            string
-	DisplayName        string
-	CapabilityFlags    string
-	ContextLength      int
-	DefaultServiceTier string
-	ServiceTiers       []ModelServiceTier
-	InputModalities    []string
-	UpdatedAt          time.Time
+	ProviderInstanceID       string
+	ModelID                  string
+	DisplayName              string
+	CapabilityFlags          string
+	ContextLength            int
+	MaxContextWindow         *int
+	DefaultReasoningLevel    string
+	SupportedReasoningLevels []ModelReasoningLevel
+	DefaultServiceTier       string
+	ServiceTiers             []ModelServiceTier
+	InputModalities          []string
+	UpdatedAt                time.Time
+}
+
+type ModelReasoningLevel struct {
+	Effort      string `json:"effort"`
+	Description string `json:"description"`
 }
 
 type ModelServiceTier struct {

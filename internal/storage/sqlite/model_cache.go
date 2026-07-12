@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -30,6 +31,10 @@ func (s *Store) ReplaceModelCache(ctx context.Context, providerInstanceID string
 		if err != nil {
 			return err
 		}
+		reasoningLevels, err := encodeModelCacheReasoningLevels(model.SupportedReasoningLevels)
+		if err != nil {
+			return err
+		}
 		inputModalities, err := encodeModelCacheInputModalities(model.InputModalities)
 		if err != nil {
 			return err
@@ -37,11 +42,13 @@ func (s *Store) ReplaceModelCache(ctx context.Context, providerInstanceID string
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO model_cache(
 				provider_instance_id, model_id, display_name, capability_flags,
-				context_length, default_service_tier, service_tiers_json,
+				context_length, max_context_window, default_reasoning_level,
+				supported_reasoning_levels_json, default_service_tier, service_tiers_json,
 				input_modalities_json, updated_at
-			) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+			) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`, model.ProviderInstanceID, model.ModelID, model.DisplayName, model.CapabilityFlags,
-			nullableInt(model.ContextLength), model.DefaultServiceTier, serviceTiers,
+			nullableInt(model.ContextLength), nullableIntPtr(model.MaxContextWindow),
+			model.DefaultReasoningLevel, reasoningLevels, model.DefaultServiceTier, serviceTiers,
 			inputModalities, model.UpdatedAt.UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
@@ -52,7 +59,8 @@ func (s *Store) ReplaceModelCache(ctx context.Context, providerInstanceID string
 func (s *Store) ListModelCache(ctx context.Context) ([]metadata.ModelCacheRow, error) {
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT provider_instance_id, model_id, display_name, capability_flags,
-			COALESCE(context_length, 0), default_service_tier, service_tiers_json,
+			COALESCE(context_length, 0), max_context_window, default_reasoning_level,
+			supported_reasoning_levels_json, default_service_tier, service_tiers_json,
 			input_modalities_json, updated_at
 		FROM model_cache
 		ORDER BY provider_instance_id ASC, model_id ASC
@@ -64,17 +72,23 @@ func (s *Store) ListModelCache(ctx context.Context) ([]metadata.ModelCacheRow, e
 	var out []metadata.ModelCacheRow
 	for rows.Next() {
 		var model metadata.ModelCacheRow
-		var updated, serviceTiersJSON, inputModalitiesJSON string
+		var updated, reasoningLevelsJSON, serviceTiersJSON, inputModalitiesJSON string
+		var maxContextWindow sql.NullInt64
 		if err := rows.Scan(&model.ProviderInstanceID, &model.ModelID, &model.DisplayName,
-			&model.CapabilityFlags, &model.ContextLength, &model.DefaultServiceTier,
-			&serviceTiersJSON, &inputModalitiesJSON, &updated); err != nil {
+			&model.CapabilityFlags, &model.ContextLength, &maxContextWindow, &model.DefaultReasoningLevel,
+			&reasoningLevelsJSON, &model.DefaultServiceTier, &serviceTiersJSON, &inputModalitiesJSON, &updated); err != nil {
 			return nil, err
+		}
+		if maxContextWindow.Valid && maxContextWindow.Int64 >= 0 && maxContextWindow.Int64 <= int64(^uint(0)>>1) {
+			value := int(maxContextWindow.Int64)
+			model.MaxContextWindow = &value
 		}
 		updatedAt, err := parseSQLiteTime(updated)
 		if err != nil {
 			return nil, err
 		}
 		model.UpdatedAt = updatedAt
+		model.SupportedReasoningLevels = decodeModelCacheReasoningLevels(reasoningLevelsJSON)
 		model.ServiceTiers = decodeModelCacheServiceTiers(serviceTiersJSON)
 		model.InputModalities = decodeModelCacheInputModalities(inputModalitiesJSON)
 		out = append(out, metadata.NormalizeModelCacheRow(model))
@@ -84,6 +98,18 @@ func (s *Store) ListModelCache(ctx context.Context) ([]metadata.ModelCacheRow, e
 
 func encodeModelCacheServiceTiers(values []metadata.ModelServiceTier) (string, error) {
 	values = metadata.NormalizeModelServiceTiers(values)
+	if len(values) == 0 {
+		return "[]", nil
+	}
+	data, err := json.Marshal(values)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func encodeModelCacheReasoningLevels(values []metadata.ModelReasoningLevel) (string, error) {
+	values = metadata.NormalizeModelReasoningLevels(values)
 	if len(values) == 0 {
 		return "[]", nil
 	}
@@ -112,6 +138,14 @@ func decodeModelCacheServiceTiers(value string) []metadata.ModelServiceTier {
 		return nil
 	}
 	return metadata.NormalizeModelServiceTiers(out)
+}
+
+func decodeModelCacheReasoningLevels(value string) []metadata.ModelReasoningLevel {
+	var out []metadata.ModelReasoningLevel
+	if err := json.Unmarshal([]byte(value), &out); err != nil {
+		return nil
+	}
+	return metadata.NormalizeModelReasoningLevels(out)
 }
 
 func decodeModelCacheInputModalities(value string) []string {

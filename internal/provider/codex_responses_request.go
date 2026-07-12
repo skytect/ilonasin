@@ -108,6 +108,12 @@ type codexContentItem struct {
 }
 
 func marshalCodexResponsesRequest(req openai.ChatCompletionRequest, upstreamModel string, ids codexRequestIDs, model codexResponsesModel) ([]byte, string, error) {
+	if req.HasField("max_tokens") {
+		return nil, "", errors.New("max_tokens is unsupported for Codex chat translation; omit it because no equivalent Codex output cap is verified")
+	}
+	if req.HasField("max_completion_tokens") {
+		return nil, "", errors.New("max_completion_tokens is unsupported for Codex chat translation; omit it because no equivalent Codex output cap is verified")
+	}
 	out := codexResponsesRequest{
 		Model:             upstreamModel,
 		Input:             []codexResponseItem{},

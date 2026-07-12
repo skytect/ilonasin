@@ -60,6 +60,8 @@ func validKeepaliveClock(hour, minute string) string {
 	return hour + ":" + minute
 }
 
-func SubscriptionKeepaliveOutputCapVerified(cfg SubscriptionKeepaliveConfig) bool {
-	return cfg.MaxOutputTokens > 0
+func SubscriptionKeepaliveOutputCapVerified(SubscriptionKeepaliveConfig) bool {
+	// Codex Chat translation has no source-backed output-cap field. Keepalive
+	// remains unavailable until a bounded upstream request shape is verified.
+	return false
 }

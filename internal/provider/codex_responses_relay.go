@@ -78,6 +78,7 @@ func (a HTTPChatAdapter) StreamResponses(ctx context.Context, req ResponsesReque
 	}
 	capture := upstreamStreamCapture{instance: req.Instance, credentialID: req.Credential.ID, endpoint: "responses_native", status: resp.StatusCode, id: ioID}
 	err = a.readCodexNativeResponses(streamCtx, resp.Body, sink, &summary, &state, start, capture)
+	summary.ResolvedModel = resolvedCodexModel(req.UpstreamModel, state.servedModel)
 	if err != nil {
 		if summary.ErrorClass == "" {
 			summary.ErrorClass = classifyCodexReadError(streamCtx, err)
@@ -355,6 +356,7 @@ func (a HTTPChatAdapter) codexNativeResponsesHTTPError(ctx context.Context, req 
 	return withStreamLatency(start, ChatStreamSummary{
 		StatusCode:         resp.StatusCode,
 		UpstreamStatusCode: upstreamStatus,
+		ResolvedModel:      resolvedCodexModel(req.UpstreamModel, codexHTTPHeaderModel(resp.Header)),
 		ErrorClass:         errorClass,
 		CompletionStatus:   "upstream_error",
 		RetryAfter:         retryAfterFromHeader(resp.Header, time.Now()),

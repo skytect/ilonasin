@@ -109,6 +109,7 @@ func (a HTTPChatAdapter) streamCodexChat(ctx context.Context, req ChatRequest, s
 		return withStreamLatency(start, ChatStreamSummary{
 			StatusCode:         resp.StatusCode,
 			UpstreamStatusCode: upstreamStatus,
+			ResolvedModel:      resolvedCodexModel(req.UpstreamModel, codexHTTPHeaderModel(resp.Header)),
 			ErrorClass:         errorClass,
 			CompletionStatus:   "upstream_error",
 			RetryAfter:         retryAfterFromHeader(resp.Header, time.Now()),
@@ -131,7 +132,9 @@ func (a HTTPChatAdapter) streamCodexChat(ctx context.Context, req ChatRequest, s
 		includeUsage:   includeStreamUsage(req.Request),
 	}
 	streamCapture := upstreamStreamCapture{instance: req.Instance, credentialID: req.Credential.ID, endpoint: "responses_stream", status: resp.StatusCode, id: ioID}
-	if err := a.readCodexStream(streamCtx, resp.Body, sink, &summary, &state, start, streamCapture); err != nil {
+	err = a.readCodexStream(streamCtx, resp.Body, sink, &summary, &state, start, streamCapture)
+	summary.ResolvedModel = resolvedCodexModel(req.UpstreamModel, state.servedModel)
+	if err != nil {
 		if summary.ErrorClass == "" {
 			summary.ErrorClass = classifyCodexReadError(streamCtx, err)
 		}

@@ -85,7 +85,7 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 				slog.Int64("duration_ms", durationMS(start)),
 				slog.String("error_class", "upstream_body_too_large"),
 			)
-			return ChatResult{StatusCode: http.StatusBadGateway, UpstreamStatusCode: resp.StatusCode, ContentType: "application/json", ErrorClass: "upstream_body_too_large", Latency: time.Since(start), RetryAfter: retryAfter, BodyTruncated: true}, fmt.Errorf("codex responses body exceeded limit")
+			return ChatResult{StatusCode: http.StatusBadGateway, UpstreamStatusCode: resp.StatusCode, ContentType: "application/json", ResolvedModel: resolvedCodexModel(req.UpstreamModel, codexHTTPHeaderModel(resp.Header)), ErrorClass: "upstream_body_too_large", Latency: time.Since(start), RetryAfter: retryAfter, BodyTruncated: true}, fmt.Errorf("codex responses body exceeded limit")
 		}
 		if readErr != nil {
 			logProviderHTTP(ctx, a.Logger, slog.LevelError, "provider_http",
@@ -98,7 +98,7 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 				slog.Int64("duration_ms", durationMS(start)),
 				slog.String("error_class", "upstream_network_error"),
 			)
-			return ChatResult{StatusCode: http.StatusBadGateway, UpstreamStatusCode: resp.StatusCode, ContentType: "application/json", ErrorClass: "upstream_network_error", Latency: time.Since(start), RetryAfter: retryAfter}, readErr
+			return ChatResult{StatusCode: http.StatusBadGateway, UpstreamStatusCode: resp.StatusCode, ContentType: "application/json", ResolvedModel: resolvedCodexModel(req.UpstreamModel, codexHTTPHeaderModel(resp.Header)), ErrorClass: "upstream_network_error", Latency: time.Since(start), RetryAfter: retryAfter}, readErr
 		}
 		if resp.StatusCode == http.StatusUnauthorized {
 			logProviderHTTP(ctx, a.Logger, statusLevel(resp.StatusCode, "upstream_auth_failed"), "provider_http",
@@ -112,7 +112,7 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 				slog.Int("response_bytes", len(respBody)),
 				slog.String("error_class", "upstream_auth_failed"),
 			)
-			return ChatResult{StatusCode: http.StatusUnauthorized, UpstreamStatusCode: resp.StatusCode, ContentType: "application/json", ErrorClass: "upstream_auth_failed", Latency: time.Since(start), RetryAfter: retryAfter}, fmt.Errorf("codex responses status %d", resp.StatusCode)
+			return ChatResult{StatusCode: http.StatusUnauthorized, UpstreamStatusCode: resp.StatusCode, ContentType: "application/json", ResolvedModel: resolvedCodexModel(req.UpstreamModel, codexHTTPHeaderModel(resp.Header)), ErrorClass: "upstream_auth_failed", Latency: time.Since(start), RetryAfter: retryAfter}, fmt.Errorf("codex responses status %d", resp.StatusCode)
 		}
 		errorClass := "upstream_http_error"
 		if resp.StatusCode == http.StatusTooManyRequests {
@@ -133,7 +133,7 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 			attrs = append(attrs, codexResponsesRequestShapeAttrs(req.Request)...)
 		}
 		logProviderHTTP(ctx, a.Logger, statusLevel(resp.StatusCode, errorClass), "provider_http", attrs...)
-		return ChatResult{StatusCode: http.StatusBadGateway, UpstreamStatusCode: resp.StatusCode, ContentType: "application/json", ErrorClass: errorClass, Latency: time.Since(start), RetryAfter: retryAfter}, fmt.Errorf("codex responses status %d", resp.StatusCode)
+		return ChatResult{StatusCode: http.StatusBadGateway, UpstreamStatusCode: resp.StatusCode, ContentType: "application/json", ResolvedModel: resolvedCodexModel(req.UpstreamModel, codexHTTPHeaderModel(resp.Header)), ErrorClass: errorClass, Latency: time.Since(start), RetryAfter: retryAfter}, fmt.Errorf("codex responses status %d", resp.StatusCode)
 	}
 	capture := upstreamStreamCapture{instance: req.Instance, credentialID: req.Credential.ID, endpoint: "responses", status: resp.StatusCode, id: ioID}
 	allowNativeOutputItems := len(req.Request.CodexResponsesInput) > 0
@@ -162,7 +162,7 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 			attrs = append(attrs, slog.String("error_reason", reason))
 		}
 		logProviderHTTP(ctx, a.Logger, statusLevel(status, errorClass), "provider_http", attrs...)
-		return ChatResult{StatusCode: status, ContentType: "application/json", ErrorClass: errorClass, Latency: time.Since(start), HealthEventClasses: codexResultHealthEvents(req.UpstreamModel, parsed.ServedModel, parsed.HealthEventClasses)}, err
+		return ChatResult{StatusCode: status, ContentType: "application/json", ResolvedModel: resolvedCodexModel(req.UpstreamModel, parsed.ServedModel), ErrorClass: errorClass, Latency: time.Since(start), HealthEventClasses: codexResultHealthEvents(req.UpstreamModel, parsed.ServedModel, parsed.HealthEventClasses)}, err
 	}
 	var out []byte
 	if len(parsed.ToolCalls) > 0 {
@@ -182,7 +182,7 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 			slog.String("error_class", "upstream_invalid_response"),
 			slog.String("error_reason", "codex response marshal failed"),
 		)
-		return ChatResult{StatusCode: http.StatusBadGateway, ContentType: "application/json", ErrorClass: "upstream_invalid_response", Latency: time.Since(start)}, err
+		return ChatResult{StatusCode: http.StatusBadGateway, ContentType: "application/json", ResolvedModel: resolvedCodexModel(req.UpstreamModel, parsed.ServedModel), ErrorClass: "upstream_invalid_response", Latency: time.Since(start)}, err
 	}
 	logProviderHTTP(ctx, a.Logger, slog.LevelInfo, "provider_http",
 		slog.String("endpoint", "responses"),
@@ -202,12 +202,20 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 		ContentType:          "application/json",
 		Body:                 out,
 		Usage:                parsed.Usage,
-		ResolvedModel:        req.UpstreamModel,
+		ResolvedModel:        resolvedCodexModel(req.UpstreamModel, parsed.ServedModel),
 		ResponsesOutputItems: outputItems,
 		Latency:              time.Since(start),
 		EffectiveServiceTier: effectiveServiceTier,
 		HealthEventClasses:   codexResultHealthEvents(req.UpstreamModel, parsed.ServedModel, parsed.HealthEventClasses),
 	}, nil
+}
+
+func resolvedCodexModel(requestedModel, servedModel string) string {
+	servedModel = strings.TrimSpace(servedModel)
+	if validProviderModelID(servedModel) {
+		return servedModel
+	}
+	return requestedModel
 }
 
 func codexResultHealthEvents(requestedModel, servedModel string, classes []string) []string {

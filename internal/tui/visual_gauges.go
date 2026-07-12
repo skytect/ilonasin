@@ -114,7 +114,7 @@ func usageGaugeBlock(label string, used, remaining float64, resetLabel string, b
 	return wrapTargetedLines(lineWidth, line)
 }
 
-func poolGaugeBlock(label string, usedPoints, remainingPoints, capacityPoints float64, accountCount, staleCount int, resetLabel string, barWidth, lineWidth int) string {
+func poolGaugeBlock(label string, usedPoints, remainingPoints, capacityPoints float64, freshAccountCount, staleCount int, resetLabel string, barWidth, lineWidth int) string {
 	label = safeFullWrappedDisplay(label)
 	if label == "" {
 		label = "window"
@@ -139,7 +139,7 @@ func poolGaugeBlock(label string, usedPoints, remainingPoints, capacityPoints fl
 			valueStyle.Render(fmt.Sprintf("sum used %.0fpp", usedPoints)) + " " +
 			mutedStyle.Render(fmt.Sprintf("sum left %.0fpp", remainingPoints)) + " " +
 			mutedStyle.Render(fmt.Sprintf("capacity %.0fpp", capacityPoints)) + " " +
-			mutedStyle.Render(fmt.Sprintf("acct %d stale %d", accountCount, staleCount))
+			mutedStyle.Render(fmt.Sprintf("fresh %d stale %d", freshAccountCount, staleCount))
 		if resetLabel != "" {
 			line += "  " + mutedStyle.Render(compactResetTimeOnly(resetLabel))
 		}
@@ -151,7 +151,7 @@ func poolGaugeBlock(label string, usedPoints, remainingPoints, capacityPoints fl
 			valueStyle.Render(fmt.Sprintf("sum used %.0fpp", usedPoints)) + " " +
 			mutedStyle.Render(fmt.Sprintf("sum left %.0fpp", remainingPoints)) + " " +
 			mutedStyle.Render(fmt.Sprintf("capacity %.0fpp", capacityPoints)) + " " +
-			mutedStyle.Render(fmt.Sprintf("acct %d stale %d", accountCount, staleCount)) + " " +
+			mutedStyle.Render(fmt.Sprintf("fresh %d stale %d", freshAccountCount, staleCount)) + " " +
 			statusBadge(remainingRiskLabel(remainingPercent))
 		if resetLabel != "" {
 			line += "  " + mutedStyle.Render(compactResetTimeOnly(resetLabel))
@@ -163,7 +163,7 @@ func poolGaugeBlock(label string, usedPoints, remainingPoints, capacityPoints fl
 		valueStyle.Render(fmt.Sprintf("sum used %.1fpp", usedPoints)) + " " +
 		mutedStyle.Render(fmt.Sprintf("sum left %.1fpp", remainingPoints)) + " " +
 		mutedStyle.Render(fmt.Sprintf("capacity %.1fpp", capacityPoints)) + " " +
-		mutedStyle.Render(fmt.Sprintf("accounts %d stale %d", accountCount, staleCount)) + " " +
+		mutedStyle.Render(fmt.Sprintf("fresh %d stale %d", freshAccountCount, staleCount)) + " " +
 		statusBadge(remainingRiskLabel(remainingPercent))
 	if resetLabel != "" {
 		line += "  " + mutedStyle.Render(resetLabel)

@@ -24,7 +24,7 @@ func (m Model) writeSubscriptionUsage(b *strings.Builder, view subscriptionQuota
 	now := m.nowTime()
 	rows := filterSubscriptionRows(m.subscriptionRows, view)
 	pools := sortedSubscriptionPools(filterSubscriptionPools(m.subscriptionPools, view))
-	b.WriteString(subscriptionUsageSummary(width, rows, pools, view))
+	b.WriteString(subscriptionUsageSummary(width, rows, pools, view, now))
 	b.WriteByte('\n')
 	if summary := subscriptionPoolSummaryLine(width, pools, now); summary != "" {
 		b.WriteString(summary)
@@ -116,11 +116,15 @@ func subscriptionPoolRow(row management.SubscriptionUsageAggregate, width int, n
 			cardTitleStyle.Render(safeFullWrappedDisplay(row.ProviderInstanceID)),
 			statusBadge("pooled"),
 			metricChip("accounts", fmt.Sprintf("%d", row.AccountCount)),
+			metricChip("fresh", fmt.Sprintf("%d", subscriptionPoolFreshAccountCount(row))),
 			metricChip("stale", fmt.Sprintf("%d", row.StaleCount)),
 		)),
 		wrappedDisplayField("limit", limit, width),
 	}
 	lines = append(lines, subscriptionPoolWindowLines(row, width, now)...)
+	if resetLine := subscriptionPoolBankedResetLine(row.BankedResetInventory, width, now); resetLine != "" {
+		lines = append(lines, resetLine)
+	}
 	return strings.Join(lines, "\n")
 }
 
@@ -320,6 +324,9 @@ func subscriptionAccountRow(row management.SubscriptionUsageRow, width int, now 
 	} else {
 		lines = append(lines, subscriptionAccountWindowLines(row, width, now)...)
 	}
+	if resetLine := subscriptionAccountBankedResetLine(row.BankedResetInventory, row.Stale, width, now); resetLine != "" {
+		lines = append(lines, resetLine)
+	}
 	return renderMetricAccentCard(width, subscriptionAccountAccent(state), lines...)
 }
 
@@ -398,7 +405,7 @@ func subscriptionAccountAccent(state string) lipgloss.Color {
 	}
 }
 
-func subscriptionUsageSummary(width int, rows []management.SubscriptionUsageRow, pools []management.SubscriptionUsageAggregate, view subscriptionQuotaView) string {
+func subscriptionUsageSummary(width int, rows []management.SubscriptionUsageRow, pools []management.SubscriptionUsageAggregate, view subscriptionQuotaView, now time.Time) string {
 	fresh := 0
 	stale := 0
 	errored := 0
@@ -426,6 +433,12 @@ func subscriptionUsageSummary(width int, rows []management.SubscriptionUsageRow,
 			"sum left "+compactPercentPoints(remaining),
 			"capacity "+compactPercentPoints(capacity),
 		)
+	}
+	if available, expiry, known := subscriptionPoolBankedResetSummary(pools); known {
+		chips = append(chips, fmt.Sprintf("banked %d", available))
+		if expiry != nil {
+			chips = append(chips, "expires "+compactResetTimeOnly(resetLocalText("expires", expiry, now)))
+		}
 	}
 	parts := []string{heroStyle.Render(subscriptionQuotaTitle(view))}
 	for _, chip := range chips {
@@ -474,6 +487,12 @@ func subscriptionPoolSummaryLine(width int, pools []management.SubscriptionUsage
 	}
 	if resetLabel != "" {
 		trailing = append(trailing, mutedStyle.Render("reset "+resetLabel))
+	}
+	if available, expiry, known := subscriptionPoolBankedResetSummary(pools); known {
+		trailing = append(trailing, metricChip("banked", fmt.Sprintf("%d", available)))
+		if expiry != nil {
+			trailing = append(trailing, mutedStyle.Render(compactResetTimeOnly(resetLocalText("expires", expiry, now))))
+		}
 	}
 	parts := []string{
 		statusBadge("pooled"),
@@ -539,6 +558,107 @@ func subscriptionPoolWindowKey(window management.SubscriptionUsagePoolWindow) st
 	return safeFullWrappedDisplay(window.Kind)
 }
 
+func subscriptionPoolFreshAccountCount(row management.SubscriptionUsageAggregate) int {
+	fresh := row.AccountCount - row.StaleCount
+	if fresh < 0 {
+		fresh = 0
+	}
+	for _, window := range row.Windows {
+		if window.FreshAccountCount > fresh {
+			fresh = window.FreshAccountCount
+		}
+	}
+	return fresh
+}
+
+func subscriptionPoolBankedResetSummary(pools []management.SubscriptionUsageAggregate) (int, *time.Time, bool) {
+	available := 0
+	known := false
+	var earliest *time.Time
+	for _, pool := range pools {
+		inventory := pool.BankedResetInventory
+		if inventory == nil || inventory.KnownAccountCount == 0 {
+			continue
+		}
+		known = true
+		available += inventory.AvailableCount
+		if inventory.EarliestExpiresAt != nil && (earliest == nil || inventory.EarliestExpiresAt.Before(*earliest)) {
+			value := inventory.EarliestExpiresAt.UTC()
+			earliest = &value
+		}
+	}
+	return available, earliest, known
+}
+
+func subscriptionPoolBankedResetLine(inventory *management.SubscriptionUsagePoolBankedResetInventory, width int, now time.Time) string {
+	if inventory == nil {
+		return ""
+	}
+	parts := []string{statusBadge("banked resets")}
+	if inventory.KnownAccountCount == 0 && inventory.UnknownAccountCount == 0 {
+		parts = append(parts, statusBadge("unavailable"))
+		return wrappedMetricLine(width, parts...)
+	}
+	parts = append(parts,
+		metricChip("available", fmt.Sprintf("%d", inventory.AvailableCount)),
+		metricChip("known", fmt.Sprintf("%d", inventory.KnownAccountCount)),
+		metricChip("unknown", fmt.Sprintf("%d", inventory.UnknownAccountCount)),
+	)
+	if inventory.DetailsUnavailableCount > 0 {
+		parts = append(parts, metricChip("details unavailable", fmt.Sprintf("%d", inventory.DetailsUnavailableCount)))
+	}
+	if inventory.EarliestExpiresAt != nil {
+		parts = append(parts, mutedStyle.Render(resetLocalText("earliest expiry", inventory.EarliestExpiresAt, now)))
+	}
+	if inventory.AvailableCount > 0 {
+		parts = append(parts, mutedStyle.Render("redeem via Codex /usage"))
+	}
+	return wrappedMetricLine(width, parts...)
+}
+
+func subscriptionAccountBankedResetLine(inventory *management.SubscriptionUsageBankedResetInventory, stale bool, width int, now time.Time) string {
+	if inventory == nil {
+		return ""
+	}
+	parts := []string{statusBadge("banked resets")}
+	if stale {
+		parts = append(parts, statusBadge("stale"))
+	}
+	if inventory.AvailableCount == nil {
+		parts = append(parts, metricChip("available", "unknown"))
+	} else {
+		parts = append(parts, metricChip("available", fmt.Sprintf("%d", *inventory.AvailableCount)))
+	}
+	if inventory.DetailErrorClass != "" {
+		parts = append(parts, wrappedMetricChip("details", inventory.DetailErrorClass))
+	} else if inventory.DetailsAvailable {
+		parts = append(parts, metricChip("details", "available"))
+	} else {
+		parts = append(parts, metricChip("details", "unavailable"))
+	}
+	if expiry := earliestAvailableBankedResetExpiry(inventory.Details); expiry != nil {
+		parts = append(parts, mutedStyle.Render(resetLocalText("expires", expiry, now)))
+	}
+	if inventory.AvailableCount != nil && *inventory.AvailableCount > 0 {
+		parts = append(parts, mutedStyle.Render("redeem via Codex /usage"))
+	}
+	return wrappedMetricLine(width, parts...)
+}
+
+func earliestAvailableBankedResetExpiry(details []management.SubscriptionUsageBankedResetDetail) *time.Time {
+	var earliest *time.Time
+	for _, detail := range details {
+		if detail.Status != "available" || detail.ExpiresAt == nil {
+			continue
+		}
+		value := detail.ExpiresAt.UTC()
+		if earliest == nil || value.Before(*earliest) {
+			earliest = &value
+		}
+	}
+	return earliest
+}
+
 func compactPercentPoints(value float64) string {
 	return fmt.Sprintf("%.0fpp", value)
 }
@@ -561,7 +681,7 @@ func subscriptionPoolWindowLines(row management.SubscriptionUsageAggregate, widt
 			window.TotalUsedPercentPoints,
 			window.TotalRemainingPercentPoints,
 			window.TotalCapacityPercentPoints,
-			window.AccountCount,
+			window.FreshAccountCount,
 			window.StaleCount,
 			resetLocalText("earliest reset", window.EarliestResetAt, now),
 			poolGaugeBarWidth(width),

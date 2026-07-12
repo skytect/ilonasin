@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 
 	"ilonasin/internal/metadata"
@@ -18,7 +19,12 @@ func (s *Server) recordQuota(ctx context.Context, m metadata.QuotaObservation) {
 		reset := m.RetryAfter.UTC()
 		m.ResetAt = &reset
 	}
-	_ = s.meta.RecordQuotaObservation(ctx, m)
+	err := s.meta.RecordQuotaObservation(ctx, m)
+	s.logTelemetryPersistenceFailure(ctx, "quota_observation", err,
+		slog.Int64("metadata_id", m.RequestMetadataID),
+		slog.Int64("credential_id", m.CredentialID),
+		slog.Int("status", m.HTTPStatus),
+	)
 }
 
 func (s *Server) recordQuotaObservations(ctx context.Context, requestID int64, observations []metadata.QuotaObservation) {

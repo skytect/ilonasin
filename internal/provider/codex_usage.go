@@ -60,7 +60,7 @@ func (a HTTPChatAdapter) FetchCodexSubscriptionUsage(ctx context.Context, req Co
 	if err != nil {
 		return CodexSubscriptionUsageResult{ErrorClass: "upstream_request_error"}, err
 	}
-	addCodexRequestHeaders(httpReq, req.Credential.BearerToken, req.Credential.ChatGPTAccountID, req.Credential.ChatGPTAccountIsFedRAMP)
+	a.addCodexRequestHeaders(ctx, httpReq, req.Credential.BearerToken, req.Credential.ChatGPTAccountID, req.Credential.ChatGPTAccountIsFedRAMP)
 	httpReq.Header.Set("Accept", "application/json")
 	client := a.Client
 	if client == nil {

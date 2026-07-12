@@ -48,7 +48,7 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 	if err != nil {
 		return ChatResult{ErrorClass: "upstream_request_error", Latency: time.Since(start)}, err
 	}
-	addCodexRequestHeaders(httpReq, req.Credential.BearerToken, req.Credential.ChatGPTAccountID, req.Credential.ChatGPTAccountIsFedRAMP)
+	a.addCodexRequestHeaders(ctx, httpReq, req.Credential.BearerToken, req.Credential.ChatGPTAccountID, req.Credential.ChatGPTAccountIsFedRAMP)
 	addCodexResponsesHeaders(httpReq, ids)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")

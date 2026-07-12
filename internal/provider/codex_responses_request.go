@@ -496,7 +496,7 @@ func (a HTTPChatAdapter) resolveCodexResponsesModel(ctx context.Context, req Cha
 			ChatGPTAccountIsFedRAMP: req.Credential.ChatGPTAccountIsFedRAMP,
 		}
 	}
-	addCodexRequestHeaders(httpReq, credential.BearerToken, credential.ChatGPTAccountID, credential.ChatGPTAccountIsFedRAMP)
+	a.addCodexRequestHeaders(ctx, httpReq, credential.BearerToken, credential.ChatGPTAccountID, credential.ChatGPTAccountIsFedRAMP)
 	httpReq.Header.Set("Accept", "application/json")
 	resp, err := a.Client.Do(httpReq)
 	if err != nil {

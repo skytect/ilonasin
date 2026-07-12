@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"net/http"
 	"runtime"
 )
@@ -11,10 +12,11 @@ const (
 	CodexOriginator = "codex_cli_rs"
 )
 
-func addCodexRequestHeaders(req *http.Request, token, accountID string, fedRAMP bool) {
+func (a HTTPChatAdapter) addCodexRequestHeaders(ctx context.Context, req *http.Request, token, accountID string, fedRAMP bool) {
+	version := a.codexClientVersion(ctx)
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("originator", CodexOriginator)
-	req.Header.Set("User-Agent", codexUserAgent())
+	req.Header.Set("User-Agent", codexUserAgent(version))
 	if accountID != "" {
 		req.Header.Set("ChatGPT-Account-ID", accountID)
 	}
@@ -23,8 +25,8 @@ func addCodexRequestHeaders(req *http.Request, token, accountID string, fedRAMP 
 	}
 }
 
-func codexUserAgent() string {
-	// Mirrors the stable prefix from OpenAI Codex rust-v0.135.0
+func codexUserAgent(version string) string {
+	// Mirrors the stable prefix from OpenAI Codex
 	// codex-rs/login/src/auth/default_client.rs get_codex_user_agent.
-	return CodexOriginator + "/" + CodexClientVersion + " (" + runtime.GOOS + "; " + runtime.GOARCH + ")"
+	return CodexOriginator + "/" + version + " (" + runtime.GOOS + "; " + runtime.GOARCH + ")"
 }

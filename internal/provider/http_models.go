@@ -29,7 +29,7 @@ func (a HTTPChatAdapter) ListModels(ctx context.Context, req ModelRequest) (Mode
 		return ModelResult{ErrorClass: "upstream_request_error"}, err
 	}
 	if req.Instance.Type == "codex" {
-		addCodexRequestHeaders(httpReq, req.Credential.BearerToken, req.Credential.ChatGPTAccountID, req.Credential.ChatGPTAccountIsFedRAMP)
+		a.addCodexRequestHeaders(ctx, httpReq, req.Credential.BearerToken, req.Credential.ChatGPTAccountID, req.Credential.ChatGPTAccountIsFedRAMP)
 	} else {
 		httpReq.Header.Set("Authorization", "Bearer "+req.Credential.BearerToken)
 	}
@@ -149,11 +149,7 @@ func (a HTTPChatAdapter) modelsURL(ctx context.Context, instance Instance) (stri
 		return "", err
 	}
 	q := u.Query()
-	version := CodexClientVersion
-	if a.CodexVersionResolver != nil {
-		version = a.CodexVersionResolver.Version(ctx)
-	}
-	q.Set("client_version", version)
+	q.Set("client_version", a.codexClientVersion(ctx))
 	u.RawQuery = q.Encode()
 	return u.String(), nil
 }

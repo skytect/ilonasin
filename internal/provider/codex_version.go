@@ -31,6 +31,17 @@ type CodexClientVersionResolver interface {
 	Version(ctx context.Context) string
 }
 
+func (a HTTPChatAdapter) codexClientVersion(ctx context.Context) string {
+	version := CodexClientVersion
+	if a.CodexVersionResolver != nil {
+		version = a.CodexVersionResolver.Version(ctx)
+	}
+	if !validStableCodexClientVersion(version) {
+		return CodexClientVersion
+	}
+	return version
+}
+
 type CachedCodexClientVersionResolver struct {
 	Client          *http.Client
 	RegistryURL     string

@@ -61,7 +61,7 @@ func validKeepaliveClock(hour, minute string) string {
 }
 
 func SubscriptionKeepaliveOutputCapVerified(SubscriptionKeepaliveConfig) bool {
-	// Codex Chat translation has no source-backed output-cap field. Keepalive
-	// remains unavailable until a bounded upstream request shape is verified.
+	// Codex Chat translation has no source-backed output-cap field. An enabled
+	// keepalive therefore runs uncapped and reports that state explicitly.
 	return false
 }

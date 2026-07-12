@@ -31,7 +31,6 @@ type subscriptionKeepaliveSettings struct {
 	Enabled           bool
 	ScheduleTimes     []string
 	Model             string
-	MaxOutputTokens   int
 	OutputCapVerified bool
 }
 
@@ -39,12 +38,11 @@ func startSubscriptionKeepalive(ctx context.Context, settings subscriptionKeepal
 	if !settings.Enabled {
 		return func() {}
 	}
-	if !settings.OutputCapVerified {
-		logKeepaliveUnavailable(ctx, logger)
-		return func() {}
-	}
 	if resolver == nil || adapter == nil {
 		return func() {}
+	}
+	if !settings.OutputCapVerified {
+		logKeepaliveEnabledUncapped(ctx, logger)
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	runner := &keepaliveRunner{
@@ -76,9 +74,6 @@ func (r *keepaliveRunner) loop(ctx context.Context) {
 }
 
 func (r *keepaliveRunner) runDue(ctx context.Context) {
-	if !r.settings.OutputCapVerified {
-		return
-	}
 	now := r.now()
 	slot := keepaliveSlot(now, r.settings.ScheduleTimes)
 	if slot == "" {
@@ -111,7 +106,7 @@ func (r *keepaliveRunner) runCredential(ctx context.Context, now time.Time, slot
 	}
 	r.mu.Unlock()
 
-	req := keepaliveRequest(r.settings.Model, r.settings.MaxOutputTokens)
+	req := keepaliveRequest(r.settings.Model)
 	result, err := r.adapter.CompleteKeepaliveChat(ctx, keepaliveChatRequest{
 		Provider:      instance,
 		UpstreamModel: req.Model,
@@ -145,22 +140,14 @@ func (r *keepaliveRunner) runCredential(ctx context.Context, now time.Time, slot
 	r.refreshUsage(ctx, instance, bearer)
 }
 
-func keepaliveRequest(model string, maxOutputTokens int) openai.ChatCompletionRequest {
+func keepaliveRequest(model string) openai.ChatCompletionRequest {
 	model = strings.TrimSpace(model)
 	if model == "" {
 		model = "gpt-5.5"
 	}
-	if maxOutputTokens <= 0 {
-		maxOutputTokens = 1
-	}
 	content, _ := json.Marshal(keepalivePrompt)
 	return openai.ChatCompletionRequest{
-		Model:     model,
-		MaxTokens: &maxOutputTokens,
-		PresentFields: map[string]bool{
-			"max_tokens":       true,
-			"provider_options": true,
-		},
+		Model: model,
 		Messages: []openai.Message{{
 			Role:    "user",
 			Content: content,
@@ -170,6 +157,9 @@ func keepaliveRequest(model string, maxOutputTokens int) openai.ChatCompletionRe
 				"reasoning": map[string]any{"effort": "minimal"},
 				"verbosity": "low",
 			},
+		},
+		PresentFields: map[string]bool{
+			"provider_options": true,
 		},
 	}
 }
@@ -209,13 +199,13 @@ func (r *keepaliveRunner) log(ctx context.Context, level slog.Level, event strin
 	r.logger.LogAttrs(ctx, level, event, attrs...)
 }
 
-func logKeepaliveUnavailable(ctx context.Context, logger *slog.Logger) {
+func logKeepaliveEnabledUncapped(ctx context.Context, logger *slog.Logger) {
 	if logger == nil {
 		return
 	}
-	logger.LogAttrs(ctx, slog.LevelWarn, "subscription_keepalive_unavailable",
-		slog.String("event", "subscription_keepalive_unavailable"),
-		slog.String("status", "unavailable_output_cap_unverified"),
+	logger.LogAttrs(ctx, slog.LevelWarn, "subscription_keepalive_enabled_uncapped",
+		slog.String("event", "subscription_keepalive_enabled_uncapped"),
+		slog.String("status", "enabled_uncapped"),
 	)
 }
 

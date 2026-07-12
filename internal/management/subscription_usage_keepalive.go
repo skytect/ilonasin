@@ -9,7 +9,7 @@ type SubscriptionKeepaliveSettings struct {
 func (s Service) keepaliveStatus() KeepaliveStatus {
 	status := "disabled"
 	if s.Keepalive.Enabled && !s.Keepalive.OutputCapVerified {
-		status = "unavailable_output_cap_unverified"
+		status = "enabled_uncapped"
 	} else if s.Keepalive.Enabled {
 		status = "enabled"
 	}

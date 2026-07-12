@@ -323,7 +323,10 @@ That is unrelated to banked reset collection. Public issue reports suggest
 window anchoring can depend on first use or even opening a client, but OpenAI's
 official documentation does not establish that behavior as a stable contract.
 Do not send synthetic keepalives merely to manipulate quota timing without
-fresh direct evidence and an explicit operator decision.
+fresh direct evidence and an explicit operator decision. The current operator
+configuration explicitly enables them. Because translated Codex Chat still has
+no verified output-cap field, Ilonasin sends the established minimal request
+uncapped and reports the runtime state honestly as `enabled_uncapped`.
 
 ## Current Ilonasin behavior and live evidence
 

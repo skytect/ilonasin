@@ -143,7 +143,6 @@ func subscriptionKeepaliveSettingsFromConfig(cfg config.SubscriptionKeepaliveCon
 		Enabled:           cfg.Enabled,
 		ScheduleTimes:     config.SubscriptionKeepaliveScheduleTimes(cfg.ScheduleTimes),
 		Model:             cfg.Model,
-		MaxOutputTokens:   cfg.MaxOutputTokens,
 		OutputCapVerified: config.SubscriptionKeepaliveOutputCapVerified(cfg),
 	}
 }

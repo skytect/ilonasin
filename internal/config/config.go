@@ -40,11 +40,10 @@ type LoggingConfig struct {
 }
 
 type SubscriptionKeepaliveConfig struct {
-	Enabled         bool     `toml:"enabled"`
-	Timezone        string   `toml:"timezone"`
-	ScheduleTimes   []string `toml:"schedule_times"`
-	Model           string   `toml:"model"`
-	MaxOutputTokens int      `toml:"max_output_tokens"`
+	Enabled       bool     `toml:"enabled"`
+	Timezone      string   `toml:"timezone"`
+	ScheduleTimes []string `toml:"schedule_times"`
+	Model         string   `toml:"model"`
 }
 
 type ProviderConfig struct {
@@ -70,9 +69,8 @@ func Default(homeDir string) Config {
 			IOMaxFiles: 3,
 		},
 		SubscriptionKeepalive: SubscriptionKeepaliveConfig{
-			Timezone:        "local",
-			ScheduleTimes:   DefaultSubscriptionKeepaliveScheduleTimes(),
-			MaxOutputTokens: 1,
+			Timezone:      "local",
+			ScheduleTimes: DefaultSubscriptionKeepaliveScheduleTimes(),
 		},
 		Providers: map[string]ProviderConfig{
 			"deepseek":   {Type: "deepseek"},
@@ -162,9 +160,7 @@ func (c *Config) applyDefaults(homeDir string) {
 		c.SubscriptionKeepalive.Timezone = def.SubscriptionKeepalive.Timezone
 	}
 	c.SubscriptionKeepalive.ScheduleTimes = SubscriptionKeepaliveScheduleTimes(c.SubscriptionKeepalive.ScheduleTimes)
-	if c.SubscriptionKeepalive.MaxOutputTokens == 0 {
-		c.SubscriptionKeepalive.MaxOutputTokens = def.SubscriptionKeepalive.MaxOutputTokens
-	}
+
 	if c.Providers == nil {
 		c.Providers = map[string]ProviderConfig{}
 	}

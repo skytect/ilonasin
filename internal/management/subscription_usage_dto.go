@@ -42,6 +42,7 @@ type SubscriptionUsagePoolWindow struct {
 	Kind                        string     `json:"kind"`
 	Label                       string     `json:"label"`
 	AccountCount                int        `json:"account_count"`
+	FreshAccountCount           int        `json:"fresh_account_count"`
 	StaleCount                  int        `json:"stale_count"`
 	TotalUsedPercentPoints      float64    `json:"total_used_percent_points"`
 	TotalRemainingPercentPoints float64    `json:"total_remaining_percent_points"`

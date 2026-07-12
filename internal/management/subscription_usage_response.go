@@ -8,11 +8,13 @@ import (
 	"ilonasin/internal/metadata"
 )
 
+const SubscriptionUsageFreshnessThreshold = time.Minute
+
 func subscriptionUsageResponse(rows []metadata.SubscriptionUsageSnapshot, keepalive KeepaliveStatus) SubscriptionUsageResponse {
 	now := time.Now().UTC()
 	accountRows := make([]SubscriptionUsageRow, 0, len(rows))
 	for _, row := range rows {
-		accountRows = append(accountRows, subscriptionUsageRow(row))
+		accountRows = append(accountRows, subscriptionUsageRow(row, now))
 	}
 	return SubscriptionUsageResponse{
 		ObservedAt: latestSubscriptionObserved(accountRows),
@@ -22,7 +24,8 @@ func subscriptionUsageResponse(rows []metadata.SubscriptionUsageSnapshot, keepal
 	}
 }
 
-func subscriptionUsageRow(row metadata.SubscriptionUsageSnapshot) SubscriptionUsageRow {
+func subscriptionUsageRow(row metadata.SubscriptionUsageSnapshot, now time.Time) SubscriptionUsageRow {
+	stale := row.Stale || row.ErrorClass != "" || row.ObservedAt.IsZero() || now.Sub(row.ObservedAt) > SubscriptionUsageFreshnessThreshold
 	out := SubscriptionUsageRow{
 		ObservedAt:          row.ObservedAt,
 		ProviderInstanceID:  row.ProviderInstanceID,
@@ -35,7 +38,7 @@ func subscriptionUsageRow(row metadata.SubscriptionUsageSnapshot) SubscriptionUs
 		ReachedType:         row.ReachedType,
 		Source:              row.Source,
 		ErrorClass:          row.ErrorClass,
-		Stale:               row.Stale,
+		Stale:               stale,
 	}
 	out.Windows = subscriptionUsageWindows(row)
 	if row.LimitID == "codex" {
@@ -52,6 +55,7 @@ func subscriptionUsageAggregates(rows []SubscriptionUsageRow, now time.Time) []S
 		secondarySum         float64
 		primaryWindowCount   int
 		secondaryWindowCount int
+		freshAccountCount    int
 		primaryLabel         string
 		secondaryLabel       string
 		primaryReset         *time.Time
@@ -73,9 +77,14 @@ func subscriptionUsageAggregates(rows []SubscriptionUsageRow, now time.Time) []S
 		b.agg.AccountCount++
 		if row.Stale || row.ErrorClass != "" {
 			b.agg.StaleCount++
+		} else {
+			b.freshAccountCount++
 		}
-		if row.LimitID == "codex" && row.BankedResetInventory != nil {
+		if row.LimitID == "codex" && row.BankedResetInventory != nil && !row.Stale && row.ErrorClass == "" {
 			addBankedResetInventoryToPool(&b.banked, *row.BankedResetInventory, now)
+		}
+		if row.Stale || row.ErrorClass != "" {
+			continue
 		}
 		for _, window := range row.Windows {
 			switch window.Kind {
@@ -103,7 +112,7 @@ func subscriptionUsageAggregates(rows []SubscriptionUsageRow, now time.Time) []S
 	out := make([]SubscriptionUsageAggregate, 0, len(buckets))
 	for _, b := range buckets {
 		if b.agg.AccountCount > 0 {
-			b.agg.Windows = subscriptionUsagePoolWindows(b.agg, b.primarySum, b.secondarySum, b.primaryWindowCount, b.secondaryWindowCount, b.primaryLabel, b.secondaryLabel, b.primaryReset, b.secondaryReset)
+			b.agg.Windows = subscriptionUsagePoolWindows(b.agg, b.freshAccountCount, b.primarySum, b.secondarySum, b.primaryWindowCount, b.secondaryWindowCount, b.primaryLabel, b.secondaryLabel, b.primaryReset, b.secondaryReset)
 			if b.agg.LimitID == "codex" {
 				banked := b.banked
 				b.agg.BankedResetInventory = &banked
@@ -181,7 +190,7 @@ func subscriptionUsageWindows(row metadata.SubscriptionUsageSnapshot) []Subscrip
 	return out
 }
 
-func subscriptionUsagePoolWindows(row SubscriptionUsageAggregate, primarySum, secondarySum float64, primaryWindowCount, secondaryWindowCount int, primaryLabel, secondaryLabel string, primaryReset, secondaryReset *time.Time) []SubscriptionUsagePoolWindow {
+func subscriptionUsagePoolWindows(row SubscriptionUsageAggregate, freshAccountCount int, primarySum, secondarySum float64, primaryWindowCount, secondaryWindowCount int, primaryLabel, secondaryLabel string, primaryReset, secondaryReset *time.Time) []SubscriptionUsagePoolWindow {
 	out := make([]SubscriptionUsagePoolWindow, 0, 2)
 	if row.AccountCount == 0 {
 		return out
@@ -191,6 +200,7 @@ func subscriptionUsagePoolWindows(row SubscriptionUsageAggregate, primarySum, se
 			"primary",
 			primaryLabel,
 			row.AccountCount,
+			freshAccountCount,
 			row.StaleCount,
 			primarySum,
 			primaryReset,
@@ -201,6 +211,7 @@ func subscriptionUsagePoolWindows(row SubscriptionUsageAggregate, primarySum, se
 			"secondary",
 			secondaryLabel,
 			row.AccountCount,
+			freshAccountCount,
 			row.StaleCount,
 			secondarySum,
 			secondaryReset,
@@ -209,13 +220,14 @@ func subscriptionUsagePoolWindows(row SubscriptionUsageAggregate, primarySum, se
 	return out
 }
 
-func subscriptionUsagePoolWindow(kind, label string, accountCount, staleCount int, totalUsed float64, earliestReset *time.Time) SubscriptionUsagePoolWindow {
-	totalCapacity := float64(accountCount) * 100
+func subscriptionUsagePoolWindow(kind, label string, accountCount, freshAccountCount, staleCount int, totalUsed float64, earliestReset *time.Time) SubscriptionUsagePoolWindow {
+	totalCapacity := float64(freshAccountCount) * 100
 	totalUsed = boundedPercentPoints(totalUsed, totalCapacity)
 	return SubscriptionUsagePoolWindow{
 		Kind:                        kind,
 		Label:                       label,
 		AccountCount:                accountCount,
+		FreshAccountCount:           freshAccountCount,
 		StaleCount:                  staleCount,
 		TotalUsedPercentPoints:      totalUsed,
 		TotalRemainingPercentPoints: totalCapacity - totalUsed,

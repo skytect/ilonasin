@@ -45,9 +45,10 @@ func Serve(opts Options) error {
 	if rt.IOLogger != nil {
 		auth.EphemeralSecretAdded = rt.IOLogger.AddEphemeralSecret
 	}
-	refresher := provider.NewHTTPOAuthRefresher(nil)
+	oauthClient := provider.NewOutboundHTTPClient(30 * time.Second)
+	refresher := provider.NewHTTPOAuthRefresher(oauthClient)
 	refresher.Logger = rt.Logger
-	login := provider.NewHTTPOAuthDeviceLogin(nil)
+	login := provider.NewHTTPOAuthDeviceLogin(oauthClient)
 	login.Logger = rt.Logger
 	upstreams := &credentials.UpstreamService{
 		Registry:       credentialsProviderRegistry(rt.Registry),
@@ -80,17 +81,19 @@ func Serve(opts Options) error {
 		slog.String("bind", rt.Config.Server.Bind),
 	)
 
-	codexVersionResolver := provider.NewCachedCodexClientVersionResolver(nil)
-	codexAdapter := provider.NewHTTPChatAdapter(nil)
+	providerClient := provider.NewOutboundHTTPClient(90 * time.Second)
+	codexVersionClient := provider.NewOutboundHTTPClient(provider.DefaultCodexVersionFetchTimeout)
+	codexVersionResolver := provider.NewCachedCodexClientVersionResolver(codexVersionClient)
+	codexAdapter := provider.NewHTTPChatAdapter(providerClient)
 	codexAdapter.Logger = rt.Logger
 	codexAdapter.IOLogger = rt.IOLogger
 	codexAdapter.CaptureUpstreamIO = captureUpstreamIO
 	codexAdapter.CodexVersionResolver = codexVersionResolver
-	adapters := chatAdapters(nil, rt.IOLogger, captureUpstreamIO, rt.Logger)
+	adapters := chatAdapters(providerClient, rt.IOLogger, captureUpstreamIO, rt.Logger)
 	adapters["codex"] = codexAdapter
-	modelAdapters := modelDiscoverers(nil, rt.IOLogger, captureUpstreamIO, rt.Logger)
+	modelAdapters := modelDiscoverers(providerClient, rt.IOLogger, captureUpstreamIO, rt.Logger)
 	modelAdapters["codex"] = codexAdapter
-	responseAdapters := responsesAdapters(nil, rt.IOLogger, captureUpstreamIO, rt.Logger)
+	responseAdapters := responsesAdapters(providerClient, rt.IOLogger, captureUpstreamIO, rt.Logger)
 	responseAdapters["codex"] = codexAdapter
 	stopKeepalive := startSubscriptionKeepalive(ctx, keepalive, keepaliveProviderRegistryFromProvider(rt.Registry), upstreams, keepaliveUsageClientFromProvider(codexAdapter), keepaliveChatClientFromProvider(codexAdapter), rt.Logger)
 	keepaliveStopped := false

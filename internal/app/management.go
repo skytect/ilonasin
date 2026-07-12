@@ -27,7 +27,7 @@ type ioRetentionStatus struct {
 
 func startManagementServer(ctx context.Context, homeDir, configPath, databasePath, bind string, ioRetention ioRetentionStatus, registry provider.Registry, store *sqlite.Store, upstreams *credentials.UpstreamService, keepalive subscriptionKeepaliveSettings, ioLogger *logging.IOLogger, captureUpstreamIO bool, loggers ...*slog.Logger) (managementRuntime, error) {
 	logger := firstSlogLogger(loggers)
-	usageClient := provider.NewHTTPChatAdapter(nil)
+	usageClient := provider.NewHTTPChatAdapter(provider.NewOutboundHTTPClient(90 * time.Second))
 	usageClient.Logger = logger
 	usageClient.IOLogger = ioLogger
 	usageClient.CaptureUpstreamIO = captureUpstreamIO

@@ -151,10 +151,7 @@ func (a HTTPChatAdapter) StreamChat(ctx context.Context, req ChatRequest, sink C
 }
 
 func (a HTTPChatAdapter) streamingClient() *http.Client {
-	client := a.Client
-	if client == nil {
-		client = &http.Client{}
-	}
+	client := outboundHTTPClientWithDefaults(a.Client, 0)
 	clone := *client
 	clone.Timeout = 0
 	return &clone

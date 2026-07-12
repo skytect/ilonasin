@@ -60,13 +60,7 @@ type CachedCodexClientVersionResolver struct {
 }
 
 func NewCachedCodexClientVersionResolver(client *http.Client) *CachedCodexClientVersionResolver {
-	if client == nil {
-		client = &http.Client{Timeout: DefaultCodexVersionFetchTimeout}
-	} else if client.Timeout == 0 {
-		clone := *client
-		clone.Timeout = DefaultCodexVersionFetchTimeout
-		client = &clone
-	}
+	client = outboundHTTPClientWithDefaults(client, DefaultCodexVersionFetchTimeout)
 	return &CachedCodexClientVersionResolver{
 		Client:          client,
 		RegistryURL:     DefaultCodexVersionRegistryURL,
@@ -147,7 +141,7 @@ func (r *CachedCodexClientVersionResolver) fetch(ctx context.Context) (string, e
 	}
 	client := r.Client
 	if client == nil {
-		client = http.DefaultClient
+		client = NewOutboundHTTPClient(r.fetchTimeout())
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

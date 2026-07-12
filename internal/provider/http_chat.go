@@ -49,13 +49,7 @@ type HTTPChatAdapter struct {
 }
 
 func NewHTTPChatAdapter(client *http.Client) HTTPChatAdapter {
-	if client == nil {
-		client = &http.Client{Timeout: 90 * time.Second}
-	} else if client.Timeout == 0 {
-		clone := *client
-		clone.Timeout = 90 * time.Second
-		client = &clone
-	}
+	client = outboundHTTPClientWithDefaults(client, 90*time.Second)
 	versionClient := *client
 	versionClient.Timeout = 5 * time.Second
 	return HTTPChatAdapter{Client: client, CodexVersionResolver: NewCachedCodexClientVersionResolver(&versionClient)}

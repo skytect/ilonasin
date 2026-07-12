@@ -79,10 +79,7 @@ func (a HTTPChatAdapter) FetchCodexSubscriptionUsage(ctx context.Context, req Co
 	}
 	a.addCodexRequestHeaders(ctx, httpReq, req.Credential.BearerToken, req.Credential.ChatGPTAccountID, req.Credential.ChatGPTAccountIsFedRAMP)
 	httpReq.Header.Set("Accept", "application/json")
-	client := a.Client
-	if client == nil {
-		client = http.DefaultClient
-	}
+	client := outboundHTTPClientWithDefaults(a.Client, 0)
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		class := classifyTransportError(err)
@@ -253,10 +250,7 @@ func (a HTTPChatAdapter) fetchCodexBankedResetInventory(ctx context.Context, req
 	}
 	a.addCodexRequestHeaders(detailCtx, httpReq, req.Credential.BearerToken, req.Credential.ChatGPTAccountID, req.Credential.ChatGPTAccountIsFedRAMP)
 	httpReq.Header.Set("Accept", "application/json")
-	client := a.Client
-	if client == nil {
-		client = http.DefaultClient
-	}
+	client := outboundHTTPClientWithDefaults(a.Client, 0)
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		class := classifyTransportError(err)

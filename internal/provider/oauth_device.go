@@ -78,7 +78,9 @@ type HTTPOAuthDeviceLogin struct {
 
 func NewHTTPOAuthDeviceLogin(client *http.Client) HTTPOAuthDeviceLogin {
 	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
+		client = NewOutboundHTTPClient(30 * time.Second)
+	} else {
+		client = outboundHTTPClientWithDefaults(client, 0)
 	}
 	return HTTPOAuthDeviceLogin{
 		Client:          client,
@@ -641,10 +643,7 @@ func oauthDeviceTransportClass(err error) string {
 }
 
 func (l HTTPOAuthDeviceLogin) httpClient() *http.Client {
-	client := l.Client
-	if client == nil {
-		client = &http.Client{}
-	}
+	client := outboundHTTPClientWithDefaults(l.Client, 0)
 	clone := *client
 	if clone.Timeout == 0 {
 		clone.Timeout = l.timeout()

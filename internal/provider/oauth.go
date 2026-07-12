@@ -65,13 +65,7 @@ type HTTPOAuthRefresher struct {
 }
 
 func NewHTTPOAuthRefresher(client *http.Client) HTTPOAuthRefresher {
-	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
-	} else if client.Timeout == 0 {
-		clone := *client
-		clone.Timeout = 30 * time.Second
-		client = &clone
-	}
+	client = outboundHTTPClientWithDefaults(client, 30*time.Second)
 	return HTTPOAuthRefresher{Client: client, Timeout: 30 * time.Second}
 }
 

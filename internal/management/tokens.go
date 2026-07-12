@@ -60,6 +60,7 @@ type Service struct {
 	ModelCache        ModelCacheReader
 	Observability     ObservabilityReader
 	Pruner            TelemetryPruner
+	Now               func() time.Time
 }
 
 type UpstreamMetadataReader interface {
@@ -85,6 +86,7 @@ type ObservabilityReader interface {
 	LatestHealth(ctx context.Context) ([]metadata.HealthSummary, error)
 	RecentFallbacks(ctx context.Context, limit int) ([]metadata.FallbackSummary, error)
 	QuotaByProvider(ctx context.Context) ([]metadata.QuotaSummary, error)
+	ActiveQuotaBlockSnapshot(ctx context.Context, now time.Time) ([]metadata.ActiveQuotaBlockSummary, error)
 }
 
 type SubscriptionUsageStore interface {

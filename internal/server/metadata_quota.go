@@ -15,10 +15,6 @@ func (s *Server) recordQuota(ctx context.Context, m metadata.QuotaObservation) {
 	if m.ObservedAt.IsZero() {
 		m.ObservedAt = s.now()
 	}
-	if m.ResetAt == nil && m.RetryAfter != nil {
-		reset := m.RetryAfter.UTC()
-		m.ResetAt = &reset
-	}
 	err := s.meta.RecordQuotaObservation(ctx, m)
 	s.logTelemetryPersistenceFailure(ctx, "quota_observation", err,
 		slog.Int64("metadata_id", m.RequestMetadataID),

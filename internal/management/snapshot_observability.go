@@ -1,8 +1,9 @@
 package management
 
 import "context"
+import "time"
 
-func loadObservabilitySnapshot(ctx context.Context, reader ObservabilityReader, out *ManagementSnapshotResponse) error {
+func loadObservabilitySnapshot(ctx context.Context, reader ObservabilityReader, now time.Time, out *ManagementSnapshotResponse) error {
 	requests, err := reader.RecentRequests(ctx, 5)
 	if err != nil {
 		return err
@@ -38,6 +39,11 @@ func loadObservabilitySnapshot(ctx context.Context, reader ObservabilityReader, 
 		return err
 	}
 	out.Fallbacks = fallbackSummariesFromMetadata(fallbacks)
+	activeQuotaBlocks, err := reader.ActiveQuotaBlockSnapshot(ctx, now)
+	if err != nil {
+		return err
+	}
+	out.ActiveQuotaBlocks = activeQuotaBlocksFromMetadata(activeQuotaBlocks)
 	quotas, err := reader.QuotaByProvider(ctx)
 	if err != nil {
 		return err

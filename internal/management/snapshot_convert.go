@@ -278,3 +278,33 @@ func quotaSummariesFromMetadata(rows []metadata.QuotaSummary) []QuotaSummary {
 	}
 	return out
 }
+
+func activeQuotaBlocksFromMetadata(rows []metadata.ActiveQuotaBlockSummary) []ActiveQuotaBlock {
+	out := make([]ActiveQuotaBlock, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, ActiveQuotaBlock{
+			ObservedAt:         row.ObservedAt,
+			ProviderInstanceID: row.ProviderInstanceID,
+			ModelID:            row.ModelID,
+			CredentialID:       row.CredentialID,
+			CredentialLabel:    row.CredentialLabel,
+			Source:             activeQuotaBlockSource(row),
+			HTTPStatus:         row.HTTPStatus,
+			ErrorClass:         row.ErrorClass,
+			RetryAfter:         row.RetryAfter,
+			ResetAt:            row.ResetAt,
+			ActiveUntil:        row.ActiveUntil,
+		})
+	}
+	return out
+}
+
+func activeQuotaBlockSource(row metadata.ActiveQuotaBlockSummary) string {
+	if row.ResetAt != nil {
+		return "provider reset"
+	}
+	if row.RetryAfter != nil {
+		return "provider retry"
+	}
+	return "local fallback"
+}

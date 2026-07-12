@@ -35,6 +35,7 @@ type Model struct {
 	streamRows                  []management.StreamSummary
 	healthRows                  []management.HealthSummary
 	fallbackRows                []management.FallbackSummary
+	activeQuotaBlocks           []management.ActiveQuotaBlock
 	quotaRows                   []management.QuotaSummary
 	subscriptionRows            []management.SubscriptionUsageRow
 	subscriptionPools           []management.SubscriptionUsageAggregate

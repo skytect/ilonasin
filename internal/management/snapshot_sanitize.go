@@ -95,6 +95,13 @@ func sanitizeSnapshot(out *ManagementSnapshotResponse) {
 		out.Fallbacks[i].ToCredentialLabel = safeSnapshotString(out.Fallbacks[i].ToCredentialLabel)
 		out.Fallbacks[i].Reason = safeSnapshotString(out.Fallbacks[i].Reason)
 	}
+	for i := range out.ActiveQuotaBlocks {
+		out.ActiveQuotaBlocks[i].ProviderInstanceID = safeMachineString(out.ActiveQuotaBlocks[i].ProviderInstanceID)
+		out.ActiveQuotaBlocks[i].ModelID = safeSnapshotString(out.ActiveQuotaBlocks[i].ModelID)
+		out.ActiveQuotaBlocks[i].CredentialLabel = safeSnapshotString(out.ActiveQuotaBlocks[i].CredentialLabel)
+		out.ActiveQuotaBlocks[i].Source = safeSnapshotString(out.ActiveQuotaBlocks[i].Source)
+		out.ActiveQuotaBlocks[i].ErrorClass = safeSnapshotString(out.ActiveQuotaBlocks[i].ErrorClass)
+	}
 	for i := range out.Quotas {
 		out.Quotas[i].ProviderInstanceID = safeMachineString(out.Quotas[i].ProviderInstanceID)
 		out.Quotas[i].ModelID = safeSnapshotString(out.Quotas[i].ModelID)

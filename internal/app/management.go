@@ -55,6 +55,7 @@ func startManagementServer(ctx context.Context, homeDir, configPath, databasePat
 		ModelCache:        store,
 		Observability:     store,
 		Pruner:            store,
+		Now:               time.Now,
 	})
 }
 

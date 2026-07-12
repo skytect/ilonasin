@@ -2,6 +2,7 @@ package management
 
 import (
 	"context"
+	"time"
 )
 
 const PathSnapshot = "/_ilonasin/manage/snapshot"
@@ -11,6 +12,7 @@ type SnapshotClient interface {
 }
 
 func (s Service) LoadManagementSnapshot(ctx context.Context) (ManagementSnapshotResponse, error) {
+	now := s.now().UTC()
 	out := ManagementSnapshotResponse{Runtime: s.Runtime, RoutingPolicy: routingPolicyStatus()}
 	out.Providers = snapshotProviderInstances(s.Providers)
 	if s.Tokens != nil {
@@ -56,7 +58,7 @@ func (s Service) LoadManagementSnapshot(ctx context.Context) (ManagementSnapshot
 		out.ModelCache = modelMetadataFromMetadata(rows)
 	}
 	if s.Observability != nil {
-		if err := loadObservabilitySnapshot(ctx, s.Observability, &out); err != nil {
+		if err := loadObservabilitySnapshot(ctx, s.Observability, now, &out); err != nil {
 			return ManagementSnapshotResponse{}, err
 		}
 	}
@@ -70,6 +72,13 @@ func (s Service) LoadManagementSnapshot(ctx context.Context) (ManagementSnapshot
 	out.PruningAvailable = s.Pruner != nil
 	sanitizeSnapshot(&out)
 	return out, nil
+}
+
+func (s Service) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
 }
 
 func routingPolicyStatus() RoutingPolicyStatus {

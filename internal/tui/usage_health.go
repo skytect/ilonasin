@@ -30,12 +30,30 @@ func (m Model) writeHealthAndQuota(b *strings.Builder) {
 		b.WriteByte('\n')
 	}
 	b.WriteString("\n")
-	b.WriteString(renderPaneSubhead(width, "Quota", fmt.Sprintf("blocks %d", len(m.quotaRows))))
+	b.WriteString(renderPaneSubhead(width, "Active routing cooldowns", fmt.Sprintf("active %d", len(m.activeQuotaBlocks))))
+	b.WriteByte('\n')
+	if len(m.activeQuotaBlocks) == 0 {
+		b.WriteString(renderCompactEmptyState(width, "clear", "routing cooldowns",
+			metricChip("active", "0"),
+			metricChip("scope", "model"),
+			metricChip("source", "routing"),
+			metricChip("visibility", "metadata-only"),
+		))
+		b.WriteByte('\n')
+	}
+	for index, row := range m.activeQuotaBlocks {
+		if index > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(activeQuotaBlockRow(row, now, width))
+		b.WriteByte('\n')
+	}
+	b.WriteString("\n")
+	b.WriteString(renderPaneSubhead(width, "Quota history", fmt.Sprintf("observations %d", len(m.quotaRows))))
 	b.WriteByte('\n')
 	if len(m.quotaRows) == 0 {
 		b.WriteString(renderCompactEmptyState(width, "disabled", "quota ledger",
-			metricChip("blocks", "0"),
-			metricChip("cooldowns", "0"),
+			metricChip("observations", "0"),
 			metricChip("reset", "none"),
 			metricChip("visibility", "metadata-only"),
 		))
@@ -118,6 +136,30 @@ func quotaSummaryRow(row management.QuotaSummary, now time.Time, width int) stri
 	tail := []string{
 		mutedStyle.Render(wrappedCredentialDisplay(row.CredentialID, row.CredentialLabel)),
 		timeChip("at", now, row.ObservedAt),
+	}
+	if row.ErrorClass != "" {
+		head = append(head, wrappedMetricChip("error", row.ErrorClass))
+	}
+	if row.RetryAfter != nil {
+		tail = append(tail, optionalTimeChip("retry", now, row.RetryAfter))
+	}
+	if row.ResetAt != nil {
+		tail = append(tail, optionalTimeChip("reset", now, row.ResetAt))
+	}
+	route := wrappedDisplayField("route", healthRouteDisplay(row.ProviderInstanceID, row.ModelID), width)
+	return wrapTargetedLines(width, wrappedMetricLine(width, head...), route, wrappedMetricLine(width, tail...))
+}
+
+func activeQuotaBlockRow(row management.ActiveQuotaBlock, now time.Time, width int) string {
+	state := statusState(row.HTTPStatus, row.ErrorClass)
+	head := []string{
+		statusBadge(state),
+		metricChip("source", row.Source),
+		metricChip("status", fmt.Sprintf("%d", row.HTTPStatus)),
+	}
+	tail := []string{
+		mutedStyle.Render(wrappedCredentialDisplay(row.CredentialID, row.CredentialLabel)),
+		optionalTimeChip("active-until", now, &row.ActiveUntil),
 	}
 	if row.ErrorClass != "" {
 		head = append(head, wrappedMetricChip("error", row.ErrorClass))

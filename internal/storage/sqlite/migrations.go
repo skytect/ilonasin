@@ -419,6 +419,11 @@ var migrations = []migration{
 		addColumnIfMissing("oauth_tokens", "consecutive_refresh_failure_count", `consecutive_refresh_failure_count INTEGER NOT NULL DEFAULT 0`),
 		addColumnIfMissing("oauth_tokens", "next_refresh_retry_after", `next_refresh_retry_after TEXT`),
 	}},
+	{version: 16, name: "quota_events_active_latest_index", steps: []migrationStep{
+		sqlStep(`CREATE INDEX IF NOT EXISTS idx_quota_events_active_latest
+			ON quota_events(provider_instance_id, model_id, credential_id, observed_at DESC, id DESC)
+			WHERE credential_id IS NOT NULL`),
+	}},
 }
 
 func sqlSteps(stmts []string) []migrationStep {

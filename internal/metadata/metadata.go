@@ -248,6 +248,19 @@ type ActiveQuotaBlock struct {
 	ActiveUntil  time.Time
 }
 
+type ActiveQuotaBlockSummary struct {
+	ObservedAt         time.Time
+	ProviderInstanceID string
+	ModelID            string
+	CredentialID       int64
+	CredentialLabel    string
+	HTTPStatus         int
+	ErrorClass         string
+	RetryAfter         *time.Time
+	ResetAt            *time.Time
+	ActiveUntil        time.Time
+}
+
 type SubscriptionUsageSnapshot struct {
 	ObservedAt             time.Time
 	ProviderInstanceID     string

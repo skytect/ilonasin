@@ -49,6 +49,7 @@ func (m *Model) applySnapshot(snapshot management.ManagementSnapshotResponse, op
 	m.streamRows = append([]management.StreamSummary(nil), snapshot.Streams...)
 	m.healthRows = append([]management.HealthSummary(nil), snapshot.Health...)
 	m.fallbackRows = append([]management.FallbackSummary(nil), snapshot.Fallbacks...)
+	m.activeQuotaBlocks = append([]management.ActiveQuotaBlock(nil), snapshot.ActiveQuotaBlocks...)
 	m.quotaRows = append([]management.QuotaSummary(nil), snapshot.Quotas...)
 	if options.applySubscriptionUsage {
 		m.applySubscriptionUsage(snapshot.SubscriptionUsage)

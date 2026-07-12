@@ -23,6 +23,7 @@ type ManagementSnapshotResponse struct {
 	Streams              []StreamSummary           `json:"streams"`
 	Health               []HealthSummary           `json:"health"`
 	Fallbacks            []FallbackSummary         `json:"fallbacks"`
+	ActiveQuotaBlocks    []ActiveQuotaBlock        `json:"active_quota_blocks"`
 	Quotas               []QuotaSummary            `json:"quotas"`
 	SubscriptionUsage    SubscriptionUsageResponse `json:"subscription_usage"`
 	PruningAvailable     bool                      `json:"pruning_available"`
@@ -265,4 +266,18 @@ type QuotaSummary struct {
 	RetryAfter         *time.Time `json:"retry_after,omitempty"`
 	ResetAt            *time.Time `json:"reset_at,omitempty"`
 	Count              int        `json:"count"`
+}
+
+type ActiveQuotaBlock struct {
+	ObservedAt         time.Time  `json:"observed_at"`
+	ProviderInstanceID string     `json:"provider_instance_id"`
+	ModelID            string     `json:"model_id"`
+	CredentialID       int64      `json:"credential_id"`
+	CredentialLabel    string     `json:"credential_label"`
+	Source             string     `json:"source"`
+	HTTPStatus         int        `json:"http_status"`
+	ErrorClass         string     `json:"error_class"`
+	RetryAfter         *time.Time `json:"retry_after,omitempty"`
+	ResetAt            *time.Time `json:"reset_at,omitempty"`
+	ActiveUntil        time.Time  `json:"active_until"`
 }

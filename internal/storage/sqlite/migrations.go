@@ -108,6 +108,31 @@ func validateMigrationIdentifier(value string) (string, error) {
 	return value, nil
 }
 
+func rejectNewerMigrationVersion(ctx context.Context, tx *sql.Tx) error {
+	var databaseVersion sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `SELECT MAX(version) FROM migrations`).Scan(&databaseVersion); err != nil {
+		return err
+	}
+	if !databaseVersion.Valid {
+		return nil
+	}
+	supportedVersion := highestSupportedMigrationVersion()
+	if databaseVersion.Int64 > int64(supportedVersion) {
+		return fmt.Errorf("sqlite database migration version %d is newer than supported version %d", databaseVersion.Int64, supportedVersion)
+	}
+	return nil
+}
+
+func highestSupportedMigrationVersion() int {
+	highest := 0
+	for _, m := range migrations {
+		if m.version > highest {
+			highest = m.version
+		}
+	}
+	return highest
+}
+
 // migration001 is the historical base schema. Later migration entries preserve
 // upgrade compatibility for older databases; new schema changes must use new
 // migration versions.

@@ -75,6 +75,9 @@ func (s *Store) Migrate(ctx context.Context) error {
 			return err
 		}
 	}
+	if err := rejectNewerMigrationVersion(ctx, tx); err != nil {
+		return err
+	}
 	for _, m := range migrations {
 		applied, err := migrationApplied(ctx, tx, m.version)
 		if err != nil {

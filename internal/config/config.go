@@ -183,8 +183,7 @@ func writeDefault(path string, cfg Config) error {
 	if err := enc.Encode(cfg); err != nil {
 		return err
 	}
-	home.SecureFile(path)
-	return nil
+	return home.SecureFile(path)
 }
 
 func canonicalPath(path string) string {

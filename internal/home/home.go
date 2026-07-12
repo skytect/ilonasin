@@ -20,7 +20,10 @@ func Resolve(envHome string) (string, error) {
 }
 
 func Ensure(dir string) error {
-	return os.MkdirAll(dir, 0o700)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	return os.Chmod(dir, 0o700)
 }
 
 func ExpandPath(path, homeDir string) string {
@@ -44,8 +47,8 @@ func ExpandPath(path, homeDir string) string {
 	}
 }
 
-func SecureFile(path string) {
-	_ = os.Chmod(path, 0o600)
+func SecureFile(path string) error {
+	return os.Chmod(path, 0o600)
 }
 
 func expand(path string) string {

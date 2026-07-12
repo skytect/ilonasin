@@ -69,7 +69,10 @@ func Setup(opts Options, stderr io.Writer) (*slog.Logger, io.Closer, error) {
 				closeAll(closers)
 				return nil, nil, err
 			}
-			home.SecureFile(f.Name())
+			if err := home.SecureFile(f.Name()); err != nil {
+				_ = f.Close()
+				return nil, nil, err
+			}
 			writers = append(writers, f)
 			closers = append(closers, f)
 		case "stderr":

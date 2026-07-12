@@ -33,6 +33,7 @@ func bootstrapClient(ctx context.Context, opts Options) (*coreRuntime, error) {
 }
 
 func bootstrapCore(ctx context.Context, opts Options, createDefaultConfig bool) (*coreRuntime, error) {
+	home.SetRestrictiveUmask()
 	if opts.Stdout == nil {
 		opts.Stdout = io.Discard
 	}
@@ -56,7 +57,7 @@ func bootstrapCore(ctx context.Context, opts Options, createDefaultConfig bool) 
 		return nil, err
 	}
 	for _, dir := range []string{cfg.Paths.DataDir, cfg.Paths.LogDir, cfg.Paths.CacheDir} {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
+		if err := home.Ensure(dir); err != nil {
 			cleanup()
 			return nil, err
 		}

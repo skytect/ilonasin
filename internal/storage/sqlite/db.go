@@ -38,11 +38,20 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	home.SecureFile(path)
+	if err := home.SecureFile(path); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	store := &Store{DB: db}
 	if err := store.Migrate(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
+	}
+	for _, sidecar := range []string{path, path + "-wal", path + "-shm"} {
+		if err := home.SecureFile(sidecar); err != nil && !os.IsNotExist(err) {
+			_ = db.Close()
+			return nil, err
+		}
 	}
 	return store, nil
 }

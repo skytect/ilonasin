@@ -31,7 +31,11 @@ var (
 
 const DefaultPoolGroup = "default"
 
-const oauthBearerRefreshLeadTime = 10 * time.Minute
+const (
+	oauthBearerRefreshLeadTime = 10 * time.Minute
+	oauthRefreshBackoffBase    = 30 * time.Second
+	oauthRefreshBackoffCap     = 15 * time.Minute
+)
 
 const (
 	CredentialKindAPIKey = "api_key"
@@ -67,8 +71,8 @@ type UpstreamCredentialRepository interface {
 	ResolveAPIKeyCredentials(ctx context.Context, providerInstanceID string) ([]ResolvedAPIKeyCredential, error)
 	ResolveOAuthBearerCredentials(ctx context.Context, providerInstanceID string, now time.Time) ([]ResolvedOAuthBearerCredential, error)
 	ResolveOAuthBearerCredentialByID(ctx context.Context, credentialID int64, now time.Time) (ResolvedOAuthBearerCredential, error)
-	ResolveOAuthRefreshCredential(ctx context.Context, credentialID int64) (ResolvedOAuthRefreshCredential, error)
-	ResolveOAuthRefreshCredentialForProvider(ctx context.Context, providerInstanceID string) (ResolvedOAuthRefreshCredential, error)
+	ResolveOAuthRefreshCredential(ctx context.Context, credentialID int64, now time.Time) (ResolvedOAuthRefreshCredential, error)
+	ResolveOAuthRefreshCredentialForProvider(ctx context.Context, providerInstanceID string, now time.Time) (ResolvedOAuthRefreshCredential, error)
 	ResolveOAuthRefreshToken(ctx context.Context, credentialID, refreshSecretID int64) (string, error)
 	UpdateOAuthTokens(ctx context.Context, credentialID int64, update OAuthTokenUpdate) error
 	UpdateOAuthAccountMetadata(ctx context.Context, credentialID int64, displayLabel, planLabel string, updatedAt time.Time) error
@@ -76,7 +80,8 @@ type UpstreamCredentialRepository interface {
 	UpsertOAuthCredentialForAccountHash(ctx context.Context, meta NewOAuthCredential, accessToken, refreshToken string) (OAuthCredentialMetadata, error)
 	ListOAuthCredentials(ctx context.Context) ([]OAuthCredentialMetadata, error)
 	ListProviderAccounts(ctx context.Context) ([]ProviderAccountMetadata, error)
-	MarkOAuthRefreshFailure(ctx context.Context, credentialID int64, failureClass, failureDescription string, now time.Time) error
+	OAuthRefreshFailureState(ctx context.Context, credentialID int64) (OAuthRefreshFailureState, error)
+	MarkOAuthRefreshFailureCAS(ctx context.Context, credentialID int64, expected OAuthRefreshFailureState, failureClass, failureDescription string, consecutiveFailureCount int, nextRetryAfter *time.Time, now time.Time) (bool, error)
 }
 
 type OAuthCredentialManager interface {
@@ -190,19 +195,26 @@ type NewOAuthCredential struct {
 }
 
 type OAuthCredentialMetadata struct {
-	ID                        int64
-	ProviderInstanceID        string
-	Label                     string
-	AccountDisplayLabel       string
-	PlanLabel                 string
-	Scopes                    string
-	ExpiresAt                 *time.Time
-	LastRefreshAt             *time.Time
-	RefreshFailureClass       string
-	RefreshFailureDescription string
-	CreatedAt                 time.Time
-	DisabledAt                *time.Time
-	Disabled                  bool
+	ID                         int64
+	ProviderInstanceID         string
+	Label                      string
+	AccountDisplayLabel        string
+	PlanLabel                  string
+	Scopes                     string
+	ExpiresAt                  *time.Time
+	LastRefreshAt              *time.Time
+	RefreshFailureClass        string
+	RefreshFailureDescription  string
+	ConsecutiveRefreshFailures int
+	NextRefreshRetryAfter      *time.Time
+	CreatedAt                  time.Time
+	DisabledAt                 *time.Time
+	Disabled                   bool
+}
+
+type OAuthRefreshFailureState struct {
+	RefreshFailureClass        string
+	ConsecutiveRefreshFailures int
 }
 
 type ProviderAccountMetadata struct {
@@ -376,7 +388,7 @@ func (s *UpstreamService) Disable(ctx context.Context, id int64) error {
 }
 
 func (s *UpstreamService) MarkOAuthRefreshFailure(ctx context.Context, credentialID int64, failureClass string) error {
-	return s.Repo.MarkOAuthRefreshFailure(ctx, credentialID, normalizeRefreshFailureClass(failureClass), "", s.now())
+	return s.recordOAuthRefreshFailure(ctx, credentialID, failureClass, "")
 }
 
 func (s *UpstreamService) ResolveAPIKeys(ctx context.Context, providerInstanceID string) ([]ResolvedAPIKeyCredential, error) {
@@ -423,6 +435,9 @@ func (s *UpstreamService) refreshStaleOAuthBearers(ctx context.Context, provider
 	refreshBefore := now.Add(oauthBearerRefreshLeadTime)
 	for _, row := range rows {
 		if row.ProviderInstanceID != providerInstanceID || row.Disabled || terminalOAuthRefreshFailureClass(row.RefreshFailureClass) {
+			continue
+		}
+		if row.NextRefreshRetryAfter != nil && row.NextRefreshRetryAfter.After(now.UTC()) {
 			continue
 		}
 		if row.ExpiresAt == nil || row.ExpiresAt.After(refreshBefore) {
@@ -603,7 +618,7 @@ func (s *UpstreamService) RefreshOAuthProviderCredential(ctx context.Context, pr
 		if _, err := s.ResolveOAuthBearers(ctx, providerInstanceID, s.now()); err == nil {
 			return nil
 		}
-		credential, err := s.Repo.ResolveOAuthRefreshCredentialForProvider(ctx, providerInstanceID)
+		credential, err := s.Repo.ResolveOAuthRefreshCredentialForProvider(ctx, providerInstanceID, s.now())
 		if err != nil {
 			return err
 		}
@@ -612,7 +627,7 @@ func (s *UpstreamService) RefreshOAuthProviderCredential(ctx context.Context, pr
 }
 
 func (s *UpstreamService) refreshOAuthCredential(ctx context.Context, credentialID int64) error {
-	credential, err := s.Repo.ResolveOAuthRefreshCredential(ctx, credentialID)
+	credential, err := s.Repo.ResolveOAuthRefreshCredential(ctx, credentialID, s.now())
 	if err != nil {
 		return err
 	}
@@ -726,10 +741,49 @@ func (c *OAuthRefreshCalls) do(ctx context.Context, key string, fn func() error)
 }
 
 func (s *UpstreamService) recordOAuthRefreshFailure(ctx context.Context, credentialID int64, failureClass, failureDescription string) error {
-	if err := s.Repo.MarkOAuthRefreshFailure(ctx, credentialID, normalizeRefreshFailureClass(failureClass), safeRefreshFailureDescription(failureDescription), s.now()); err != nil {
-		return err
+	class := normalizeRefreshFailureClass(failureClass)
+	for attempt := 0; attempt < 8; attempt++ {
+		now := s.now()
+		state, err := s.Repo.OAuthRefreshFailureState(ctx, credentialID)
+		if err != nil {
+			return err
+		}
+		if terminalOAuthRefreshFailureClass(state.RefreshFailureClass) {
+			return ErrNoEligibleCredential
+		}
+		count := 0
+		var nextRetryAfter *time.Time
+		if !terminalOAuthRefreshFailureClass(class) {
+			count = state.ConsecutiveRefreshFailures + 1
+			next := now.Add(oauthRefreshBackoffDelay(count))
+			nextRetryAfter = &next
+		}
+		updated, err := s.Repo.MarkOAuthRefreshFailureCAS(ctx, credentialID, state, class, safeRefreshFailureDescription(failureDescription), count, nextRetryAfter, now)
+		if err != nil {
+			return err
+		}
+		if updated {
+			return fmt.Errorf("%w: %s", ErrOAuthRefreshFailed, class)
+		}
 	}
-	return fmt.Errorf("%w: %s", ErrOAuthRefreshFailed, normalizeRefreshFailureClass(failureClass))
+	return fmt.Errorf("%w: refresh_failure_update_conflict", ErrOAuthRefreshFailed)
+}
+
+func oauthRefreshBackoffDelay(consecutiveFailures int) time.Duration {
+	if consecutiveFailures <= 0 {
+		return 0
+	}
+	delay := oauthRefreshBackoffBase
+	for i := 1; i < consecutiveFailures; i++ {
+		if delay >= oauthRefreshBackoffCap/2 {
+			return oauthRefreshBackoffCap
+		}
+		delay *= 2
+	}
+	if delay > oauthRefreshBackoffCap {
+		return oauthRefreshBackoffCap
+	}
+	return delay
 }
 
 func (s *OAuthDeviceLoginSessions) checkCapacity(now time.Time) error {

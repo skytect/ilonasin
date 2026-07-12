@@ -34,19 +34,21 @@ func oauthCredentialsFromCredentials(rows []credentials.OAuthCredentialMetadata)
 	out := make([]OAuthCredential, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, OAuthCredential{
-			ID:                        row.ID,
-			ProviderInstanceID:        row.ProviderInstanceID,
-			Label:                     row.Label,
-			AccountDisplayLabel:       row.AccountDisplayLabel,
-			PlanLabel:                 row.PlanLabel,
-			Scopes:                    row.Scopes,
-			ExpiresAt:                 row.ExpiresAt,
-			LastRefreshAt:             row.LastRefreshAt,
-			RefreshFailureClass:       row.RefreshFailureClass,
-			RefreshFailureDescription: row.RefreshFailureDescription,
-			CreatedAt:                 row.CreatedAt,
-			DisabledAt:                row.DisabledAt,
-			Disabled:                  row.Disabled,
+			ID:                         row.ID,
+			ProviderInstanceID:         row.ProviderInstanceID,
+			Label:                      row.Label,
+			AccountDisplayLabel:        row.AccountDisplayLabel,
+			PlanLabel:                  row.PlanLabel,
+			Scopes:                     row.Scopes,
+			ExpiresAt:                  row.ExpiresAt,
+			LastRefreshAt:              row.LastRefreshAt,
+			RefreshFailureClass:        row.RefreshFailureClass,
+			RefreshFailureDescription:  row.RefreshFailureDescription,
+			ConsecutiveRefreshFailures: row.ConsecutiveRefreshFailures,
+			NextRefreshRetryAfter:      row.NextRefreshRetryAfter,
+			CreatedAt:                  row.CreatedAt,
+			DisabledAt:                 row.DisabledAt,
+			Disabled:                   row.Disabled,
 		})
 	}
 	return out

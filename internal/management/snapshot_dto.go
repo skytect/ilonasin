@@ -85,19 +85,21 @@ type RoutingPolicyStatus struct {
 }
 
 type OAuthCredential struct {
-	ID                        int64      `json:"id"`
-	ProviderInstanceID        string     `json:"provider_instance_id"`
-	Label                     string     `json:"label"`
-	AccountDisplayLabel       string     `json:"account_display_label"`
-	PlanLabel                 string     `json:"plan_label"`
-	Scopes                    string     `json:"scopes"`
-	ExpiresAt                 *time.Time `json:"expires_at,omitempty"`
-	LastRefreshAt             *time.Time `json:"last_refresh_at,omitempty"`
-	RefreshFailureClass       string     `json:"refresh_failure_class"`
-	RefreshFailureDescription string     `json:"refresh_failure_description"`
-	CreatedAt                 time.Time  `json:"created_at"`
-	DisabledAt                *time.Time `json:"disabled_at,omitempty"`
-	Disabled                  bool       `json:"disabled"`
+	ID                         int64      `json:"id"`
+	ProviderInstanceID         string     `json:"provider_instance_id"`
+	Label                      string     `json:"label"`
+	AccountDisplayLabel        string     `json:"account_display_label"`
+	PlanLabel                  string     `json:"plan_label"`
+	Scopes                     string     `json:"scopes"`
+	ExpiresAt                  *time.Time `json:"expires_at,omitempty"`
+	LastRefreshAt              *time.Time `json:"last_refresh_at,omitempty"`
+	RefreshFailureClass        string     `json:"refresh_failure_class"`
+	RefreshFailureDescription  string     `json:"refresh_failure_description"`
+	ConsecutiveRefreshFailures int        `json:"consecutive_refresh_failures"`
+	NextRefreshRetryAfter      *time.Time `json:"next_refresh_retry_after,omitempty"`
+	CreatedAt                  time.Time  `json:"created_at"`
+	DisabledAt                 *time.Time `json:"disabled_at,omitempty"`
+	Disabled                   bool       `json:"disabled"`
 }
 
 type ProviderAccount struct {

@@ -292,7 +292,9 @@ func upsertOAuthTokenRow(ctx context.Context, tx *sql.Tx, credentialID, accessID
 			scopes = excluded.scopes,
 			last_refresh_at = NULL,
 			refresh_failure_class = '',
-			refresh_failure_description = ''
+			refresh_failure_description = '',
+			consecutive_refresh_failure_count = 0,
+			next_refresh_retry_after = NULL
 	`, credentialID, accessID, refreshID, nullableTime(meta.ExpiresAt), meta.Scopes)
 	return err
 }
@@ -357,6 +359,7 @@ func (s *Store) ListOAuthCredentials(ctx context.Context) ([]credentials.OAuthCr
 			COALESCE(pa.display_label, ''), COALESCE(pa.plan_label, ''),
 			ot.scopes, ot.expires_at, ot.last_refresh_at,
 			COALESCE(ot.refresh_failure_class, ''), COALESCE(ot.refresh_failure_description, ''),
+			COALESCE(ot.consecutive_refresh_failure_count, 0), ot.next_refresh_retry_after,
 			pc.created_at, pc.disabled_at
 		FROM provider_credentials pc
 		JOIN oauth_tokens ot ON ot.credential_id = pc.id
@@ -372,10 +375,11 @@ func (s *Store) ListOAuthCredentials(ctx context.Context) ([]credentials.OAuthCr
 	for rows.Next() {
 		var row credentials.OAuthCredentialMetadata
 		var created string
-		var expires, lastRefresh, disabled sql.NullString
+		var expires, lastRefresh, nextRetryAfter, disabled sql.NullString
 		if err := rows.Scan(&row.ID, &row.ProviderInstanceID, &row.Label,
 			&row.AccountDisplayLabel, &row.PlanLabel, &row.Scopes, &expires,
-			&lastRefresh, &row.RefreshFailureClass, &row.RefreshFailureDescription, &created, &disabled); err != nil {
+			&lastRefresh, &row.RefreshFailureClass, &row.RefreshFailureDescription,
+			&row.ConsecutiveRefreshFailures, &nextRetryAfter, &created, &disabled); err != nil {
 			return nil, err
 		}
 		createdAt, err := parseSQLiteTime(created)
@@ -396,6 +400,13 @@ func (s *Store) ListOAuthCredentials(ctx context.Context) ([]credentials.OAuthCr
 				return nil, err
 			}
 			row.LastRefreshAt = &refreshAt
+		}
+		if nextRetryAfter.Valid {
+			retryAfter, err := parseSQLiteTime(nextRetryAfter.String)
+			if err != nil {
+				return nil, err
+			}
+			row.NextRefreshRetryAfter = &retryAfter
 		}
 		if disabled.Valid {
 			disabledAt, err := parseSQLiteTime(disabled.String)
@@ -438,21 +449,55 @@ func (s *Store) ListProviderAccounts(ctx context.Context) ([]credentials.Provide
 	return out, rows.Err()
 }
 
-func (s *Store) MarkOAuthRefreshFailure(ctx context.Context, credentialID int64, failureClass, failureDescription string, now time.Time) error {
+func (s *Store) OAuthRefreshFailureState(ctx context.Context, credentialID int64) (credentials.OAuthRefreshFailureState, error) {
+	var state credentials.OAuthRefreshFailureState
+	err := s.DB.QueryRowContext(ctx, `
+		SELECT COALESCE(refresh_failure_class, ''), COALESCE(consecutive_refresh_failure_count, 0)
+		FROM oauth_tokens
+		WHERE credential_id = ?
+	`, credentialID).Scan(&state.RefreshFailureClass, &state.ConsecutiveRefreshFailures)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return credentials.OAuthRefreshFailureState{}, credentials.ErrCredentialNotFound
+		}
+		return credentials.OAuthRefreshFailureState{}, err
+	}
+	return state, nil
+}
+
+func (s *Store) MarkOAuthRefreshFailureCAS(ctx context.Context, credentialID int64, expected credentials.OAuthRefreshFailureState, failureClass, failureDescription string, consecutiveFailureCount int, nextRetryAfter *time.Time, now time.Time) (bool, error) {
 	res, err := s.DB.ExecContext(ctx, `
 		UPDATE oauth_tokens
-		SET refresh_failure_class = ?, refresh_failure_description = ?, last_refresh_at = ?
+		SET refresh_failure_class = ?,
+			refresh_failure_description = ?,
+			last_refresh_at = ?,
+			consecutive_refresh_failure_count = ?,
+			next_refresh_retry_after = ?
 		WHERE credential_id = ?
-	`, failureClass, failureDescription, now.UTC().Format(time.RFC3339Nano), credentialID)
+			AND COALESCE(refresh_failure_class, '') = ?
+			AND COALESCE(consecutive_refresh_failure_count, 0) = ?
+	`, failureClass, failureDescription, now.UTC().Format(time.RFC3339Nano), consecutiveFailureCount, nullableTime(nextRetryAfter), credentialID, expected.RefreshFailureClass, expected.ConsecutiveRefreshFailures)
 	if err != nil {
-		return err
+		return false, err
 	}
 	affected, err := res.RowsAffected()
 	if err != nil {
-		return err
+		return false, err
 	}
-	if affected == 0 {
-		return credentials.ErrCredentialNotFound
+	if affected > 0 {
+		return true, nil
 	}
-	return nil
+	var exists int
+	err = s.DB.QueryRowContext(ctx, `
+		SELECT 1
+		FROM oauth_tokens
+		WHERE credential_id = ?
+	`, credentialID).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, credentials.ErrCredentialNotFound
+	}
+	if err != nil {
+		return false, err
+	}
+	return false, nil
 }

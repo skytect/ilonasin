@@ -68,14 +68,21 @@ func oauthCredentialRow(row management.OAuthCredential, selected bool, now time.
 	if refresh == "" {
 		refresh = "none"
 	}
-	head := metricLine(
+	headParts := []string{
 		statusBadge(state),
-		cardTitleStyle.Render(cursor+" oauth "+fmt.Sprintf("%d", row.ID)),
+		cardTitleStyle.Render(cursor + " oauth " + fmt.Sprintf("%d", row.ID)),
 		metricChip("provider", row.ProviderInstanceID),
 		metricChip("plan", row.PlanLabel),
 		expires,
 		metricChip("refresh", refresh),
-	)
+	}
+	if row.ConsecutiveRefreshFailures > 0 {
+		headParts = append(headParts, metricChip("failures", fmt.Sprintf("%d", row.ConsecutiveRefreshFailures)))
+	}
+	if retry := optionalTimeChip("retry", now, row.NextRefreshRetryAfter); retry != "" {
+		headParts = append(headParts, retry)
+	}
+	head := metricLine(headParts...)
 	head = wrappedMetricLine(width, strings.Split(head, "  ")...)
 	identity := wrappedIdentity(row.AccountDisplayLabel, width)
 	if width >= 118 {

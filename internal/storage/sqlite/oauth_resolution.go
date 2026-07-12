@@ -179,7 +179,7 @@ func (s *Store) ResolveOAuthBearerCredentialByID(ctx context.Context, credential
 	return out, nil
 }
 
-func (s *Store) ResolveOAuthRefreshCredential(ctx context.Context, credentialID int64) (credentials.ResolvedOAuthRefreshCredential, error) {
+func (s *Store) ResolveOAuthRefreshCredential(ctx context.Context, credentialID int64, now time.Time) (credentials.ResolvedOAuthRefreshCredential, error) {
 	var out credentials.ResolvedOAuthRefreshCredential
 	err := s.DB.QueryRowContext(ctx, `
 		SELECT pc.id, pc.provider_instance_id, pa.account_hash, ot.access_token_secret_id, ot.refresh_token_secret_id
@@ -203,7 +203,8 @@ func (s *Store) ResolveOAuthRefreshCredential(ctx context.Context, credentialID 
 				'refresh_token_expired', 'refresh_token_invalidated', 'refresh_token_reused',
 				'refresh_invalid_grant', 'refresh_access_denied'
 			)
-	`, credentialID).Scan(&out.ID, &out.ProviderInstanceID, &out.AccountHash, &out.AccessTokenSecretID, &out.RefreshTokenSecretID)
+			AND (ot.next_refresh_retry_after IS NULL OR ot.next_refresh_retry_after <= ?)
+	`, credentialID, now.UTC().Format(time.RFC3339Nano)).Scan(&out.ID, &out.ProviderInstanceID, &out.AccountHash, &out.AccessTokenSecretID, &out.RefreshTokenSecretID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return credentials.ResolvedOAuthRefreshCredential{}, credentials.ErrNoEligibleCredential
@@ -213,7 +214,7 @@ func (s *Store) ResolveOAuthRefreshCredential(ctx context.Context, credentialID 
 	return out, nil
 }
 
-func (s *Store) ResolveOAuthRefreshCredentialForProvider(ctx context.Context, providerInstanceID string) (credentials.ResolvedOAuthRefreshCredential, error) {
+func (s *Store) ResolveOAuthRefreshCredentialForProvider(ctx context.Context, providerInstanceID string, now time.Time) (credentials.ResolvedOAuthRefreshCredential, error) {
 	var out credentials.ResolvedOAuthRefreshCredential
 	var accessSecretID sql.NullInt64
 	var refreshSecretID sql.NullInt64
@@ -229,9 +230,10 @@ func (s *Store) ResolveOAuthRefreshCredentialForProvider(ctx context.Context, pr
 				'refresh_token_expired', 'refresh_token_invalidated', 'refresh_token_reused',
 				'refresh_invalid_grant', 'refresh_access_denied'
 			)
+			AND (ot.next_refresh_retry_after IS NULL OR ot.next_refresh_retry_after <= ?)
 		ORDER BY pc.id ASC
 		LIMIT 1
-	`, providerInstanceID).Scan(&out.ID, &out.ProviderInstanceID, &out.AccountHash, &accessSecretID, &refreshSecretID)
+	`, providerInstanceID, now.UTC().Format(time.RFC3339Nano)).Scan(&out.ID, &out.ProviderInstanceID, &out.AccountHash, &accessSecretID, &refreshSecretID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return credentials.ResolvedOAuthRefreshCredential{}, credentials.ErrNoEligibleCredential
@@ -323,7 +325,9 @@ func (s *Store) UpdateOAuthTokens(ctx context.Context, credentialID int64, updat
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE oauth_tokens
-		SET expires_at = ?, last_refresh_at = ?, refresh_failure_class = '', refresh_failure_description = ''
+		SET expires_at = ?, last_refresh_at = ?,
+			refresh_failure_class = '', refresh_failure_description = '',
+			consecutive_refresh_failure_count = 0, next_refresh_retry_after = NULL
 		WHERE credential_id = ?
 	`, nullableTime(update.ExpiresAt), ts, credentialID); err != nil {
 		return err

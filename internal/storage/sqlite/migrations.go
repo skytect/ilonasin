@@ -415,6 +415,10 @@ var migrations = []migration{
 		addColumnIfMissing("model_cache", "default_reasoning_level", `default_reasoning_level TEXT NOT NULL DEFAULT ''`),
 		addColumnIfMissing("model_cache", "supported_reasoning_levels_json", `supported_reasoning_levels_json TEXT NOT NULL DEFAULT '[]'`),
 	}},
+	{version: 15, name: "oauth_refresh_retry_backoff", steps: []migrationStep{
+		addColumnIfMissing("oauth_tokens", "consecutive_refresh_failure_count", `consecutive_refresh_failure_count INTEGER NOT NULL DEFAULT 0`),
+		addColumnIfMissing("oauth_tokens", "next_refresh_retry_after", `next_refresh_retry_after TEXT`),
+	}},
 }
 
 func sqlSteps(stmts []string) []migrationStep {

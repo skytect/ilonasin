@@ -21,7 +21,7 @@ func (a HTTPChatAdapter) streamCodexChat(ctx context.Context, req ChatRequest, s
 	if req.Credential.Kind != CredentialKindOAuthAccess {
 		return withStreamLatency(start, ChatStreamSummary{StatusCode: http.StatusUnauthorized, ErrorClass: "credential_unavailable", CompletionStatus: "upstream_error", PreStreamError: true}), fmt.Errorf("codex chat requires oauth access credential")
 	}
-	ids := newCodexRequestIDs()
+	ids := codexRequestIDsForAffinity(req.Request.AffinityKey)
 	modelMeta, err := a.resolveCodexResponsesModel(ctx, req, start)
 	if err != nil {
 		if errors.Is(err, errCodexModelAuthFailed) {

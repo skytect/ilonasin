@@ -33,7 +33,7 @@ func (a HTTPChatAdapter) StreamResponses(ctx context.Context, req ResponsesReque
 	if err != nil {
 		return withStreamLatency(start, ChatStreamSummary{ErrorClass: "provider_config_error", CompletionStatus: "upstream_invalid", PreStreamError: true}), err
 	}
-	ids := newCodexRequestIDs()
+	ids := codexRequestIDsForAffinity(req.AffinityKey)
 	ioID := a.recordUpstreamBody(req.Instance, req.Credential.ID, "responses_native", http.MethodPost, "upstream_input", 0, "application/json", body, "")
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()

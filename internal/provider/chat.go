@@ -73,7 +73,36 @@ type ModelMetadata struct {
 	DefaultServiceTier       string
 	ServiceTiers             []ModelServiceTier
 	InputModalities          []string
+	Codex                    *CodexModelMetadata
 	UpdatedAt                time.Time
+}
+
+// CodexModelMetadata contains the validated, provider-supplied model fields
+// that Codex clients use to select local tools. It is intentionally carried
+// only by live model discovery: BaseInstructions is prompt content and must not
+// be persisted in the metadata-only model cache.
+type CodexModelMetadata struct {
+	ShellType                  string
+	Visibility                 string
+	SupportedInAPI             bool
+	Priority                   int
+	BaseInstructions           string
+	SupportsReasoningSummaries bool
+	SupportVerbosity           bool
+	DefaultVerbosity           string
+	ApplyPatchToolType         string
+	WebSearchToolType          string
+	TruncationPolicy           ModelTruncationPolicy
+	ExperimentalSupportedTools []string
+	SupportsSearchTool         bool
+	UseResponsesLite           bool
+	ToolMode                   string
+	MultiAgentVersion          string
+}
+
+type ModelTruncationPolicy struct {
+	Mode  string
+	Limit int64
 }
 
 type ModelReasoningLevel struct {

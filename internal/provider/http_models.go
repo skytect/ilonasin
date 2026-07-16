@@ -253,6 +253,11 @@ func normalizeCodexModels(instance Instance, body []byte) ([]ModelMetadata, erro
 		meta.DefaultServiceTier = safeCodexServiceTierID(codexStringField(item, "default_service_tier"))
 		meta.ServiceTiers = codexServiceTiers(item)
 		meta.InputModalities = codexInputModalities(item)
+		codexMetadata, ok := codexModelMetadata(item)
+		if !ok {
+			return nil, fmt.Errorf("upstream codex model %q metadata is invalid", id)
+		}
+		meta.Codex = codexMetadata
 		models = append(models, meta)
 	}
 	if len(models) == 0 {
@@ -262,6 +267,163 @@ func normalizeCodexModels(instance Instance, body []byte) ([]ModelMetadata, erro
 		return models[i].ModelID < models[j].ModelID
 	})
 	return models, nil
+}
+
+func codexModelMetadata(item map[string]any) (*CodexModelMetadata, bool) {
+	shellType := codexStringField(item, "shell_type")
+	if !oneOf(shellType, "default", "local", "unified_exec", "disabled", "shell_command") {
+		return nil, false
+	}
+	visibility := codexStringField(item, "visibility")
+	if !oneOf(visibility, "list", "hide", "none") {
+		return nil, false
+	}
+	supportedInAPI, ok := item["supported_in_api"].(bool)
+	if !ok {
+		return nil, false
+	}
+	priority, ok := safeInt32(item["priority"])
+	if !ok {
+		return nil, false
+	}
+	baseInstructions, ok := item["base_instructions"].(string)
+	if !ok || !safeCodexInstructionText(baseInstructions) {
+		return nil, false
+	}
+	supportsReasoningSummaries, ok := item["supports_reasoning_summaries"].(bool)
+	if !ok {
+		return nil, false
+	}
+	supportVerbosity, ok := item["support_verbosity"].(bool)
+	if !ok {
+		return nil, false
+	}
+	if _, ok := item["supports_parallel_tool_calls"].(bool); !ok {
+		return nil, false
+	}
+	if _, ok := item["supported_reasoning_levels"].([]any); !ok {
+		return nil, false
+	}
+	truncation, ok := codexTruncationPolicy(item["truncation_policy"])
+	if !ok {
+		return nil, false
+	}
+	experimentalTools, ok := codexExperimentalSupportedTools(item["experimental_supported_tools"])
+	if !ok {
+		return nil, false
+	}
+	defaultVerbosity := codexStringField(item, "default_verbosity")
+	if defaultVerbosity != "" && !oneOf(defaultVerbosity, "low", "medium", "high") {
+		return nil, false
+	}
+	applyPatchToolType := codexStringField(item, "apply_patch_tool_type")
+	if applyPatchToolType != "" && applyPatchToolType != "freeform" {
+		return nil, false
+	}
+	webSearchToolType := codexStringField(item, "web_search_tool_type")
+	if webSearchToolType != "" && !oneOf(webSearchToolType, "text", "text_and_image") {
+		return nil, false
+	}
+	toolMode := codexStringField(item, "tool_mode")
+	if toolMode != "" && !oneOf(toolMode, "direct", "code_mode", "code_mode_only") {
+		return nil, false
+	}
+	multiAgentVersion := codexStringField(item, "multi_agent_version")
+	if multiAgentVersion != "" && !oneOf(multiAgentVersion, "v1", "v2") {
+		return nil, false
+	}
+	return &CodexModelMetadata{
+		ShellType:                  shellType,
+		Visibility:                 visibility,
+		SupportedInAPI:             supportedInAPI,
+		Priority:                   priority,
+		BaseInstructions:           baseInstructions,
+		SupportsReasoningSummaries: supportsReasoningSummaries,
+		SupportVerbosity:           supportVerbosity,
+		DefaultVerbosity:           defaultVerbosity,
+		ApplyPatchToolType:         applyPatchToolType,
+		WebSearchToolType:          webSearchToolType,
+		TruncationPolicy:           truncation,
+		ExperimentalSupportedTools: experimentalTools,
+		SupportsSearchTool:         codexBoolField(item, "supports_search_tool"),
+		UseResponsesLite:           codexBoolField(item, "use_responses_lite"),
+		ToolMode:                   toolMode,
+		MultiAgentVersion:          multiAgentVersion,
+	}, true
+}
+
+func codexTruncationPolicy(value any) (ModelTruncationPolicy, bool) {
+	policy, ok := value.(map[string]any)
+	if !ok {
+		return ModelTruncationPolicy{}, false
+	}
+	mode := codexStringField(policy, "mode")
+	if !oneOf(mode, "bytes", "tokens") {
+		return ModelTruncationPolicy{}, false
+	}
+	limit, ok := safeInt64(policy["limit"])
+	if !ok || limit <= 0 {
+		return ModelTruncationPolicy{}, false
+	}
+	return ModelTruncationPolicy{Mode: mode, Limit: limit}, true
+}
+
+func codexExperimentalSupportedTools(value any) ([]string, bool) {
+	values, ok := value.([]any)
+	if !ok || len(values) > 128 {
+		return nil, false
+	}
+	out := make([]string, 0, len(values))
+	for _, raw := range values {
+		tool, ok := raw.(string)
+		if !ok || safeBoundedText(tool, 128) == "" {
+			return nil, false
+		}
+		out = append(out, tool)
+	}
+	return out, true
+}
+
+func safeCodexInstructionText(value string) bool {
+	if len(value) > 8<<20 {
+		return false
+	}
+	for _, r := range value {
+		if r == 0 || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+func safeInt32(value any) (int, bool) {
+	i, ok := safeInt64(value)
+	if !ok || i < -1<<31 || i > 1<<31-1 {
+		return 0, false
+	}
+	return int(i), true
+}
+
+func safeInt64(value any) (int64, bool) {
+	switch v := value.(type) {
+	case json.Number:
+		i, err := v.Int64()
+		return i, err == nil
+	case float64:
+		if v == float64(int64(v)) {
+			return int64(v), true
+		}
+	}
+	return 0, false
+}
+
+func oneOf(value string, allowed ...string) bool {
+	for _, candidate := range allowed {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 func codexCapabilityFlags(item map[string]any) string {

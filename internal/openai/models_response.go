@@ -18,6 +18,31 @@ type ModelMetadata struct {
 	DefaultServiceTier       string
 	ServiceTiers             []ModelServiceTier
 	InputModalities          []string
+	Codex                    *CodexModelMetadata
+}
+
+type CodexModelMetadata struct {
+	ShellType                  string
+	Visibility                 string
+	SupportedInAPI             bool
+	Priority                   int
+	BaseInstructions           string
+	SupportsReasoningSummaries bool
+	SupportVerbosity           bool
+	DefaultVerbosity           string
+	ApplyPatchToolType         string
+	WebSearchToolType          string
+	TruncationPolicy           ModelTruncationPolicy
+	ExperimentalSupportedTools []string
+	SupportsSearchTool         bool
+	UseResponsesLite           bool
+	ToolMode                   string
+	MultiAgentVersion          string
+}
+
+type ModelTruncationPolicy struct {
+	Mode  string `json:"mode"`
+	Limit int64  `json:"limit"`
 }
 
 type ModelServiceTier struct {
@@ -39,34 +64,37 @@ type ModelListItem struct {
 }
 
 type CodexModelInfo struct {
-	Slug                       string             `json:"slug"`
-	DisplayName                string             `json:"display_name"`
-	Description                string             `json:"description,omitempty"`
-	DefaultReasoningLevel      string             `json:"default_reasoning_level,omitempty"`
-	SupportedReasoningLevels   []CodexReasoning   `json:"supported_reasoning_levels,omitempty"`
-	ShellType                  string             `json:"shell_type,omitempty"`
-	Visibility                 string             `json:"visibility,omitempty"`
-	SupportedInAPI             bool               `json:"supported_in_api,omitempty"`
-	Priority                   int                `json:"priority,omitempty"`
-	AdditionalSpeedTiers       []string           `json:"additional_speed_tiers,omitempty"`
-	ServiceTiers               []ModelServiceTier `json:"service_tiers,omitempty"`
-	DefaultServiceTier         string             `json:"default_service_tier,omitempty"`
-	AvailabilityNUX            any                `json:"availability_nux,omitempty"`
-	Upgrade                    any                `json:"upgrade,omitempty"`
-	BaseInstructions           string             `json:"base_instructions,omitempty"`
-	SupportsReasoningSummaries bool               `json:"supports_reasoning_summaries,omitempty"`
-	SupportVerbosity           bool               `json:"support_verbosity,omitempty"`
-	DefaultVerbosity           string             `json:"default_verbosity,omitempty"`
-	ApplyPatchToolType         string             `json:"apply_patch_tool_type,omitempty"`
-	WebSearchToolType          string             `json:"web_search_tool_type,omitempty"`
-	TruncationPolicy           map[string]any     `json:"truncation_policy,omitempty"`
-	SupportsParallelToolCalls  bool               `json:"supports_parallel_tool_calls,omitempty"`
-	SupportsImageDetailOrig    bool               `json:"supports_image_detail_original,omitempty"`
-	ContextWindow              int                `json:"context_window,omitempty"`
-	MaxContextWindow           *int               `json:"max_context_window,omitempty"`
-	ExperimentalSupportedTools []string           `json:"experimental_supported_tools,omitempty"`
-	InputModalities            []string           `json:"input_modalities,omitempty"`
-	SupportsSearchTool         bool               `json:"supports_search_tool,omitempty"`
+	Slug                       string                `json:"slug"`
+	DisplayName                string                `json:"display_name"`
+	Description                string                `json:"description,omitempty"`
+	DefaultReasoningLevel      string                `json:"default_reasoning_level,omitempty"`
+	SupportedReasoningLevels   []CodexReasoning      `json:"supported_reasoning_levels"`
+	ShellType                  string                `json:"shell_type"`
+	Visibility                 string                `json:"visibility"`
+	SupportedInAPI             bool                  `json:"supported_in_api"`
+	Priority                   int                   `json:"priority"`
+	AdditionalSpeedTiers       []string              `json:"additional_speed_tiers,omitempty"`
+	ServiceTiers               []ModelServiceTier    `json:"service_tiers,omitempty"`
+	DefaultServiceTier         string                `json:"default_service_tier,omitempty"`
+	AvailabilityNUX            any                   `json:"availability_nux,omitempty"`
+	Upgrade                    any                   `json:"upgrade,omitempty"`
+	BaseInstructions           string                `json:"base_instructions"`
+	SupportsReasoningSummaries bool                  `json:"supports_reasoning_summaries"`
+	SupportVerbosity           bool                  `json:"support_verbosity"`
+	DefaultVerbosity           string                `json:"default_verbosity,omitempty"`
+	ApplyPatchToolType         string                `json:"apply_patch_tool_type,omitempty"`
+	WebSearchToolType          string                `json:"web_search_tool_type,omitempty"`
+	TruncationPolicy           ModelTruncationPolicy `json:"truncation_policy"`
+	SupportsParallelToolCalls  bool                  `json:"supports_parallel_tool_calls"`
+	SupportsImageDetailOrig    bool                  `json:"supports_image_detail_original,omitempty"`
+	ContextWindow              int                   `json:"context_window,omitempty"`
+	MaxContextWindow           *int                  `json:"max_context_window,omitempty"`
+	ExperimentalSupportedTools []string              `json:"experimental_supported_tools"`
+	InputModalities            []string              `json:"input_modalities,omitempty"`
+	SupportsSearchTool         bool                  `json:"supports_search_tool,omitempty"`
+	UseResponsesLite           bool                  `json:"use_responses_lite,omitempty"`
+	ToolMode                   string                `json:"tool_mode,omitempty"`
+	MultiAgentVersion          string                `json:"multi_agent_version,omitempty"`
 }
 
 type CodexReasoning struct {
@@ -121,23 +149,42 @@ func codexModelInfoFromMetadata(row ModelMetadata, namespacedID string) (CodexMo
 	if !metadata.HasModelCapability(row.CapabilityFlags, metadata.ModelCapabilityResponses) {
 		return CodexModelInfo{}, false
 	}
+	if row.Codex == nil {
+		return CodexModelInfo{}, false
+	}
 	serviceTiers := row.ServiceTiers
 	inputModalities := orderedModelInputModalities(row.InputModalities)
 	hasParallelToolCalls := metadata.HasModelCapability(row.CapabilityFlags, metadata.ModelCapabilityParallelToolCalls)
 	hasVision := metadata.HasModelCapability(row.CapabilityFlags, metadata.ModelCapabilityVision)
 	return CodexModelInfo{
-		Slug:                      namespacedID,
-		DisplayName:               displayNameOrID(row.DisplayName, namespacedID),
-		Description:               "",
-		DefaultReasoningLevel:     row.DefaultReasoningLevel,
-		SupportedReasoningLevels:  row.SupportedReasoningLevels,
-		ServiceTiers:              serviceTiers,
-		DefaultServiceTier:        row.DefaultServiceTier,
-		SupportsParallelToolCalls: hasParallelToolCalls,
-		SupportsImageDetailOrig:   hasVision,
-		ContextWindow:             row.ContextLength,
-		MaxContextWindow:          row.MaxContextWindow,
-		InputModalities:           inputModalities,
+		Slug:                       namespacedID,
+		DisplayName:                displayNameOrID(row.DisplayName, namespacedID),
+		Description:                "",
+		DefaultReasoningLevel:      row.DefaultReasoningLevel,
+		SupportedReasoningLevels:   row.SupportedReasoningLevels,
+		ShellType:                  row.Codex.ShellType,
+		Visibility:                 row.Codex.Visibility,
+		SupportedInAPI:             row.Codex.SupportedInAPI,
+		Priority:                   row.Codex.Priority,
+		ServiceTiers:               serviceTiers,
+		DefaultServiceTier:         row.DefaultServiceTier,
+		BaseInstructions:           row.Codex.BaseInstructions,
+		SupportsReasoningSummaries: row.Codex.SupportsReasoningSummaries,
+		SupportVerbosity:           row.Codex.SupportVerbosity,
+		DefaultVerbosity:           row.Codex.DefaultVerbosity,
+		ApplyPatchToolType:         row.Codex.ApplyPatchToolType,
+		WebSearchToolType:          row.Codex.WebSearchToolType,
+		TruncationPolicy:           row.Codex.TruncationPolicy,
+		SupportsParallelToolCalls:  hasParallelToolCalls,
+		SupportsImageDetailOrig:    hasVision,
+		ContextWindow:              row.ContextLength,
+		MaxContextWindow:           row.MaxContextWindow,
+		InputModalities:            inputModalities,
+		ExperimentalSupportedTools: append([]string{}, row.Codex.ExperimentalSupportedTools...),
+		SupportsSearchTool:         row.Codex.SupportsSearchTool,
+		UseResponsesLite:           row.Codex.UseResponsesLite,
+		ToolMode:                   row.Codex.ToolMode,
+		MultiAgentVersion:          row.Codex.MultiAgentVersion,
 	}, true
 }
 

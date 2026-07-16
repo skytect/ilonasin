@@ -24,9 +24,37 @@ func openAIModelMetadataFromProvider(rows []provider.ModelMetadata) []openai.Mod
 			DefaultServiceTier:       row.DefaultServiceTier,
 			ServiceTiers:             openAIModelServiceTiersFromProvider(row.ServiceTiers),
 			InputModalities:          row.InputModalities,
+			Codex:                    openAICodexModelMetadataFromProvider(row.Codex),
 		})
 	}
 	return out
+}
+
+func openAICodexModelMetadataFromProvider(row *provider.CodexModelMetadata) *openai.CodexModelMetadata {
+	if row == nil {
+		return nil
+	}
+	return &openai.CodexModelMetadata{
+		ShellType:                  row.ShellType,
+		Visibility:                 row.Visibility,
+		SupportedInAPI:             row.SupportedInAPI,
+		Priority:                   row.Priority,
+		BaseInstructions:           row.BaseInstructions,
+		SupportsReasoningSummaries: row.SupportsReasoningSummaries,
+		SupportVerbosity:           row.SupportVerbosity,
+		DefaultVerbosity:           row.DefaultVerbosity,
+		ApplyPatchToolType:         row.ApplyPatchToolType,
+		WebSearchToolType:          row.WebSearchToolType,
+		TruncationPolicy: openai.ModelTruncationPolicy{
+			Mode:  row.TruncationPolicy.Mode,
+			Limit: row.TruncationPolicy.Limit,
+		},
+		ExperimentalSupportedTools: append([]string{}, row.ExperimentalSupportedTools...),
+		SupportsSearchTool:         row.SupportsSearchTool,
+		UseResponsesLite:           row.UseResponsesLite,
+		ToolMode:                   row.ToolMode,
+		MultiAgentVersion:          row.MultiAgentVersion,
+	}
 }
 
 func openAIModelReasoningLevelsFromProvider(rows []provider.ModelReasoningLevel) []openai.CodexReasoning {

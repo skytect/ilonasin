@@ -530,6 +530,7 @@ func (m codexWireModelInfo) providerModelMetadata(instanceID string, updatedAt t
 func (m codexWireModelInfo) capabilityFlags() string {
 	flags := []string{
 		metadata.ModelCapabilityChat,
+		metadata.ModelCapabilityJSONObject,
 		metadata.ModelCapabilityResponses,
 		metadata.ModelCapabilityStream,
 		metadata.ModelCapabilityTools,

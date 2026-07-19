@@ -59,7 +59,7 @@ type codexResponsesRequest struct {
 	Instructions      string             `json:"instructions,omitempty"`
 	Input             any                `json:"input"`
 	Tools             any                `json:"tools"`
-	ToolChoice        string             `json:"tool_choice"`
+	ToolChoice        any                `json:"tool_choice"`
 	ParallelToolCalls *bool              `json:"parallel_tool_calls,omitempty"`
 	Reasoning         *codexReasoning    `json:"reasoning,omitempty"`
 	Store             bool               `json:"store"`
@@ -111,9 +111,9 @@ func marshalCodexResponsesRequest(req openai.ChatCompletionRequest, upstreamMode
 	if req.HasField("max_tokens") {
 		return nil, "", errors.New("max_tokens is unsupported for Codex chat translation; omit it because no equivalent Codex output cap is verified")
 	}
-	if req.HasField("max_completion_tokens") {
-		return nil, "", errors.New("max_completion_tokens is unsupported for Codex chat translation; omit it because no equivalent Codex output cap is verified")
-	}
+	// max_completion_tokens is accepted as a Chat compatibility hint after
+	// common request validation, but deliberately omitted because Codex has no
+	// verified equivalent output cap.
 	out := codexResponsesRequest{
 		Model:             upstreamModel,
 		Input:             []codexResponseItem{},
@@ -139,10 +139,10 @@ func marshalCodexResponsesRequest(req openai.ChatCompletionRequest, upstreamMode
 		}
 		out.Tools = tools
 	}
-	if req.HasField("tool_choice") {
-		out.ToolChoice = "auto"
+	if choice, ok := req.ToolChoice.(string); req.HasField("tool_choice") && ok {
+		out.ToolChoice = codexTranslatedToolChoice(choice, req.Tools)
 	}
-	if req.HasField("provider_options") || req.ServiceTier != nil || req.ReasoningEffort != nil {
+	if req.HasField("provider_options") || req.HasField("response_format") || req.ServiceTier != nil || req.ReasoningEffort != nil {
 		reasoning, textControls, serviceTier, err := codexRequestOptions(req, model)
 		if err != nil {
 			return nil, "", err
@@ -406,6 +406,21 @@ func codexResponsesTools(tools []map[string]any) ([]any, error) {
 	return out, nil
 }
 
+func codexTranslatedToolChoice(choice string, tools []map[string]any) any {
+	if choice != "required" || len(tools) != 1 {
+		return choice
+	}
+	function, _ := tools[0]["function"].(map[string]any)
+	name, _ := function["name"].(string)
+	if name == "" {
+		return choice
+	}
+	// Chat required + one function is semantically a named function choice.
+	// Codex honors the named Responses shape reliably after prior tool output,
+	// whereas the generic required string can emit text instead of the sole tool.
+	return map[string]any{"type": "function", "name": name}
+}
+
 func codexFunctionCallItems(calls []map[string]any) ([]codexResponseItem, error) {
 	out := make([]codexResponseItem, 0, len(calls))
 	for _, call := range calls {
@@ -448,8 +463,14 @@ func codexRequestOptions(req openai.ChatCompletionRequest, model codexResponsesM
 		}
 	}
 	var textControls *codexTextControls
+	if req.HasField("response_format") {
+		textControls = &codexTextControls{Format: req.ResponseFormat}
+	}
 	if verbosity, ok := opts["verbosity"].(string); ok {
-		textControls = &codexTextControls{Verbosity: verbosity}
+		if textControls == nil {
+			textControls = &codexTextControls{}
+		}
+		textControls.Verbosity = verbosity
 	}
 	if format, ok := opts["format"].(map[string]any); ok {
 		if textControls == nil {

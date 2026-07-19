@@ -50,6 +50,7 @@ type ResponsesRequest struct {
 	Instance        Instance
 	UpstreamModel   string
 	RawBody         []byte
+	AffinityKey     string
 	Credential      ChatCredential
 	ModelCredential BearerCredential
 }

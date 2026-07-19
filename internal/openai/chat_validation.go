@@ -129,6 +129,7 @@ func validateTopLevelKeys(raw map[string]json.RawMessage) error {
 		"user":                  true,
 		"prompt_cache_key":      true,
 		"service_tier":          true,
+		"reasoning_effort":      true,
 		"session_id":            true,
 		"metadata":              true,
 		"logprobs":              true,
@@ -254,6 +255,22 @@ func validateRawServiceTier(raw map[string]json.RawMessage) error {
 	default:
 		return errors.New("service_tier must be one of auto, default, flex, priority, scale")
 	}
+}
+
+func validateRawReasoningEffort(raw map[string]json.RawMessage) error {
+	value, ok := raw["reasoning_effort"]
+	if !ok {
+		return nil
+	}
+	trimmed := bytes.TrimSpace(value)
+	if len(trimmed) == 0 || isJSONNull(trimmed) {
+		return errors.New("reasoning_effort must be one of none, minimal, low, medium, high, xhigh, max")
+	}
+	var effort string
+	if err := json.Unmarshal(trimmed, &effort); err != nil || SafeOptionReasoningEffort(effort) == "" {
+		return errors.New("reasoning_effort must be one of none, minimal, low, medium, high, xhigh, max")
+	}
+	return nil
 }
 
 func validateRawSessionID(raw map[string]json.RawMessage) error {

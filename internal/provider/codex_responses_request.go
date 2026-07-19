@@ -142,7 +142,7 @@ func marshalCodexResponsesRequest(req openai.ChatCompletionRequest, upstreamMode
 	if req.HasField("tool_choice") {
 		out.ToolChoice = "auto"
 	}
-	if req.HasField("provider_options") || req.ServiceTier != nil {
+	if req.HasField("provider_options") || req.ServiceTier != nil || req.ReasoningEffort != nil {
 		reasoning, textControls, serviceTier, err := codexRequestOptions(req, model)
 		if err != nil {
 			return nil, "", err
@@ -429,8 +429,14 @@ func codexFunctionCallItems(calls []map[string]any) ([]codexResponseItem, error)
 func codexRequestOptions(req openai.ChatCompletionRequest, model codexResponsesModel) (*codexReasoning, *codexTextControls, string, error) {
 	opts, _ := req.ReasoningOptions["codex"].(map[string]any)
 	var reasoning *codexReasoning
+	if req.ReasoningEffort != nil {
+		reasoning = &codexReasoning{Effort: model.reasoningEffort(*req.ReasoningEffort)}
+	}
 	if rawReasoning, ok := opts["reasoning"].(map[string]any); ok {
 		next := &codexReasoning{}
+		if reasoning != nil {
+			*next = *reasoning
+		}
 		if effort, ok := rawReasoning["effort"].(string); ok {
 			next.Effort = model.reasoningEffort(effort)
 		}

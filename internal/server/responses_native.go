@@ -135,6 +135,7 @@ func (s *Server) nativeResponsesAttempt(r *http.Request, nc nativeResponsesConte
 		Instance:        nc.instance,
 		UpstreamModel:   nc.address.ProviderModelID,
 		RawBody:         nc.rawBody,
+		AffinityKey:     nc.affinityKey,
 		Credential:      providerChatCredential(credential),
 		ModelCredential: modelCredential,
 	}, sink)

@@ -72,6 +72,11 @@ func (a HTTPChatAdapter) ValidateChatRequest(instance Instance, req openai.ChatC
 		if err := validateCodexTopLevelServiceTier(req); err != nil {
 			return err
 		}
+		if err := validateCodexTopLevelReasoningEffort(req); err != nil {
+			return err
+		}
+	} else if req.HasField("reasoning_effort") {
+		return fmt.Errorf("reasoning_effort is not supported")
 	}
 	if policy.validateCodexToolChoice && req.HasField("tool_choice") {
 		choice, ok := req.ToolChoice.(string)
@@ -100,6 +105,18 @@ func validateCodexTopLevelServiceTier(req openai.ChatCompletionRequest) error {
 	default:
 		return fmt.Errorf("service_tier is not supported")
 	}
+}
+
+func validateCodexTopLevelReasoningEffort(req openai.ChatCompletionRequest) error {
+	if req.ReasoningEffort == nil || !req.HasField("provider_options") {
+		return nil
+	}
+	opts, _ := req.ReasoningOptions["codex"].(map[string]any)
+	reasoning, _ := opts["reasoning"].(map[string]any)
+	if _, ok := reasoning["effort"]; ok {
+		return fmt.Errorf("reasoning_effort and provider_options.codex.reasoning.effort are mutually exclusive")
+	}
+	return nil
 }
 
 func rejectStrictTools(req openai.ChatCompletionRequest) error {

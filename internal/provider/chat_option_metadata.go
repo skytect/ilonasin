@@ -48,6 +48,9 @@ func applyTopLevelChatServiceTierMetadata(out *ChatOptionMetadata, policy ChatOp
 }
 
 func applyCodexChatOptionMetadata(out *ChatOptionMetadata, req openai.ChatCompletionRequest) {
+	if req.ReasoningEffort != nil {
+		out.ReasoningEffort = openai.SafeOptionReasoningEffort(*req.ReasoningEffort)
+	}
 	opts, _ := req.ReasoningOptions["codex"].(map[string]any)
 	if tier, ok := opts["service_tier"].(string); ok {
 		out.RequestedServiceTier = openai.SafeOptionServiceTier(tier)

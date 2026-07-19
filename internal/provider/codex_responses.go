@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -23,7 +24,7 @@ func (a HTTPChatAdapter) completeCodexChat(ctx context.Context, req ChatRequest,
 	if req.Credential.Kind != CredentialKindOAuthAccess {
 		return ChatResult{StatusCode: http.StatusUnauthorized, ContentType: "application/json", ErrorClass: "credential_unavailable", Latency: time.Since(start)}, fmt.Errorf("codex chat requires oauth access credential")
 	}
-	ids := newCodexRequestIDs()
+	ids := codexRequestIDsForAffinity(req.Request.AffinityKey)
 	modelMeta, err := a.resolveCodexResponsesModel(ctx, req, start)
 	if err != nil {
 		if errors.Is(err, errCodexModelAuthFailed) {
@@ -282,6 +283,7 @@ type codexRequestIDs struct {
 	ThreadID       string
 	WindowID       string
 	InstallationID string
+	RequestID      string
 }
 
 func newCodexRequestIDs() codexRequestIDs {
@@ -291,7 +293,32 @@ func newCodexRequestIDs() codexRequestIDs {
 		ThreadID:       threadID,
 		WindowID:       threadID + ":0",
 		InstallationID: localCodexUUID(),
+		RequestID:      localCodexUUID(),
 	}
+}
+
+func codexRequestIDsForAffinity(affinityKey string) codexRequestIDs {
+	affinityKey = strings.TrimSpace(affinityKey)
+	if affinityKey == "" {
+		return newCodexRequestIDs()
+	}
+	threadID := deterministicCodexUUID("thread", affinityKey)
+	return codexRequestIDs{
+		SessionID:      deterministicCodexUUID("session", affinityKey),
+		ThreadID:       threadID,
+		WindowID:       threadID + ":0",
+		InstallationID: deterministicCodexUUID("installation", affinityKey),
+		RequestID:      localCodexUUID(),
+	}
+}
+
+func deterministicCodexUUID(scope, affinityKey string) string {
+	sum := sha256.Sum256([]byte(scope + "\x00" + affinityKey))
+	var b [16]byte
+	copy(b[:], sum[:16])
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
 func localCodexUUID() string {
@@ -310,7 +337,7 @@ func addCodexResponsesHeaders(req *http.Request, ids codexRequestIDs) {
 	// thread-id, and x-client-request-id; core/src/client.rs adds x-codex-window-id.
 	req.Header.Set("session-id", ids.SessionID)
 	req.Header.Set("thread-id", ids.ThreadID)
-	req.Header.Set("x-client-request-id", ids.ThreadID)
+	req.Header.Set("x-client-request-id", ids.RequestID)
 	req.Header.Set("x-codex-window-id", ids.WindowID)
 }
 

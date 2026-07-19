@@ -66,14 +66,81 @@ type ModelMetadata struct {
 	ModelID                  string
 	DisplayName              string
 	CapabilityFlags          string
-	ContextLength            int
-	MaxContextWindow         *int
-	DefaultReasoningLevel    string
+	ContextLength            *int64
+	MaxContextWindow         *int64
+	DefaultReasoningLevel    *string
 	SupportedReasoningLevels []ModelReasoningLevel
-	DefaultServiceTier       string
+	DefaultServiceTier       *string
 	ServiceTiers             []ModelServiceTier
 	InputModalities          []string
+	Codex                    *CodexModelMetadata
 	UpdatedAt                time.Time
+}
+
+// CodexModelMetadata contains the validated, provider-supplied model fields
+// that Codex clients use to select local tools. It is intentionally carried
+// only by live model discovery: instruction and model-message fields are prompt
+// content and must not be persisted in the metadata-only model cache.
+type CodexModelMetadata struct {
+	ShellType                  string
+	Visibility                 string
+	SupportedInAPI             bool
+	Priority                   int
+	Description                *string
+	AdditionalSpeedTiers       []string
+	AvailabilityNUX            *CodexModelAvailabilityNUX
+	Upgrade                    *CodexModelUpgrade
+	BaseInstructions           string
+	ModelMessages              *CodexModelMessages
+	IncludeSkillsInstructions  bool
+	SupportsReasoningSummaries bool
+	DefaultReasoningSummary    string
+	SupportVerbosity           bool
+	DefaultVerbosity           *string
+	ApplyPatchToolType         *string
+	WebSearchToolType          string
+	TruncationPolicy           ModelTruncationPolicy
+	ExperimentalSupportedTools []string
+	SupportsImageDetailOrig    bool
+	AutoCompactTokenLimit      *int64
+	CompHash                   *string
+	EffectiveContextWindowPct  int64
+	SupportsSearchTool         bool
+	UseResponsesLite           bool
+	AutoReviewModelOverride    *string
+	ToolMode                   *string
+	MultiAgentVersion          *string
+}
+
+type CodexModelAvailabilityNUX struct {
+	Message string
+}
+
+type CodexModelUpgrade struct {
+	Model             string
+	MigrationMarkdown string
+}
+
+type CodexModelMessages struct {
+	InstructionsTemplate  *string
+	InstructionsVariables *CodexModelInstructionVariables
+	Approvals             *CodexModelApprovalMessages
+}
+
+type CodexModelInstructionVariables struct {
+	PersonalityDefault   *string
+	PersonalityFriendly  *string
+	PersonalityPragmatic *string
+}
+
+type CodexModelApprovalMessages struct {
+	OnRequest           *string
+	OnRequestAutoReview *string
+}
+
+type ModelTruncationPolicy struct {
+	Mode  string
+	Limit int64
 }
 
 type ModelReasoningLevel struct {

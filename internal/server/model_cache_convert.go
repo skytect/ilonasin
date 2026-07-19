@@ -15,9 +15,9 @@ func modelCacheRowsFromProvider(rows []provider.ModelMetadata) []metadata.ModelC
 			CapabilityFlags:          row.CapabilityFlags,
 			ContextLength:            row.ContextLength,
 			MaxContextWindow:         row.MaxContextWindow,
-			DefaultReasoningLevel:    row.DefaultReasoningLevel,
+			DefaultReasoningLevel:    stringValue(row.DefaultReasoningLevel),
 			SupportedReasoningLevels: modelReasoningLevelsFromProvider(row.SupportedReasoningLevels),
-			DefaultServiceTier:       row.DefaultServiceTier,
+			DefaultServiceTier:       stringValue(row.DefaultServiceTier),
 			ServiceTiers:             modelServiceTiersFromProvider(row.ServiceTiers),
 			InputModalities:          row.InputModalities,
 			UpdatedAt:                row.UpdatedAt,
@@ -37,15 +37,29 @@ func providerModelsFromCacheRows(rows []metadata.ModelCacheRow) []provider.Model
 			CapabilityFlags:          row.CapabilityFlags,
 			ContextLength:            row.ContextLength,
 			MaxContextWindow:         row.MaxContextWindow,
-			DefaultReasoningLevel:    row.DefaultReasoningLevel,
+			DefaultReasoningLevel:    optionalString(row.DefaultReasoningLevel),
 			SupportedReasoningLevels: providerReasoningLevelsFromMetadata(row.SupportedReasoningLevels),
-			DefaultServiceTier:       row.DefaultServiceTier,
+			DefaultServiceTier:       optionalString(row.DefaultServiceTier),
 			ServiceTiers:             providerServiceTiersFromMetadata(row.ServiceTiers),
 			InputModalities:          row.InputModalities,
 			UpdatedAt:                row.UpdatedAt,
 		})
 	}
 	return out
+}
+
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func optionalString(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 func modelReasoningLevelsFromProvider(rows []provider.ModelReasoningLevel) []metadata.ModelReasoningLevel {

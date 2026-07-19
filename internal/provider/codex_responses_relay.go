@@ -252,14 +252,17 @@ func codexNormalizeNativeInstructions(body map[string]json.RawMessage) {
 	instructionParts := []string{}
 	out := make([]json.RawMessage, 0, len(items))
 	for _, rawItem := range items {
-		role, ok := codexNativeInputRole(rawItem)
+		role, ok := codexNativeInputMessageRole(rawItem)
 		if !ok || (role != "developer" && role != "system") {
 			out = append(out, rawItem)
 			continue
 		}
-		if text := codexNativeInputText(rawItem); text != "" {
-			instructionParts = append(instructionParts, text)
+		text := codexNativeInputText(rawItem)
+		if text == "" {
+			out = append(out, rawItem)
+			continue
 		}
+		instructionParts = append(instructionParts, text)
 	}
 	if len(instructionParts) == 0 {
 		return
@@ -272,11 +275,16 @@ func codexNormalizeNativeInstructions(body map[string]json.RawMessage) {
 	}
 }
 
-func codexNativeInputRole(raw json.RawMessage) (string, bool) {
+func codexNativeInputMessageRole(raw json.RawMessage) (string, bool) {
 	var item struct {
+		Type string `json:"type"`
 		Role string `json:"role"`
 	}
 	if err := json.Unmarshal(raw, &item); err != nil {
+		return "", false
+	}
+	itemType := strings.TrimSpace(item.Type)
+	if itemType != "" && itemType != "message" {
 		return "", false
 	}
 	role := strings.TrimSpace(item.Role)

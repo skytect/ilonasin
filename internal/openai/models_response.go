@@ -11,13 +11,76 @@ type ModelMetadata struct {
 	ModelID                  string
 	DisplayName              string
 	CapabilityFlags          string
-	ContextLength            int
-	MaxContextWindow         *int
-	DefaultReasoningLevel    string
+	ContextLength            *int64
+	MaxContextWindow         *int64
+	DefaultReasoningLevel    *string
 	SupportedReasoningLevels []CodexReasoning
-	DefaultServiceTier       string
+	DefaultServiceTier       *string
 	ServiceTiers             []ModelServiceTier
 	InputModalities          []string
+	Codex                    *CodexModelMetadata
+}
+
+type CodexModelMetadata struct {
+	ShellType                  string
+	Visibility                 string
+	SupportedInAPI             bool
+	Priority                   int
+	Description                *string
+	AdditionalSpeedTiers       []string
+	AvailabilityNUX            *CodexModelAvailabilityNUX
+	Upgrade                    *CodexModelUpgrade
+	BaseInstructions           string
+	ModelMessages              *CodexModelMessages
+	IncludeSkillsInstructions  bool
+	SupportsReasoningSummaries bool
+	DefaultReasoningSummary    string
+	SupportVerbosity           bool
+	DefaultVerbosity           *string
+	ApplyPatchToolType         *string
+	WebSearchToolType          string
+	TruncationPolicy           ModelTruncationPolicy
+	ExperimentalSupportedTools []string
+	SupportsImageDetailOrig    bool
+	AutoCompactTokenLimit      *int64
+	CompHash                   *string
+	EffectiveContextWindowPct  int64
+	SupportsSearchTool         bool
+	UseResponsesLite           bool
+	AutoReviewModelOverride    *string
+	ToolMode                   *string
+	MultiAgentVersion          *string
+}
+
+type CodexModelAvailabilityNUX struct {
+	Message string `json:"message"`
+}
+
+type CodexModelUpgrade struct {
+	Model             string `json:"model"`
+	MigrationMarkdown string `json:"migration_markdown"`
+}
+
+type CodexModelMessages struct {
+	InstructionsTemplate  *string                         `json:"instructions_template"`
+	InstructionsVariables *CodexModelInstructionVariables `json:"instructions_variables"`
+	Approvals             *CodexModelApprovalMessages     `json:"approvals"`
+}
+
+type CodexModelInstructionVariables struct {
+	PersonalityDefault   *string `json:"personality_default"`
+	PersonalityFriendly  *string `json:"personality_friendly"`
+	PersonalityPragmatic *string `json:"personality_pragmatic"`
+}
+
+type CodexModelApprovalMessages struct {
+	OnRequest           *string `json:"on_request"`
+	OnRequestAutoReview *string `json:"on_request_auto_review"`
+}
+
+type ModelTruncationPolicy struct {
+	Mode  string `json:"mode"`
+	Limit int64  `json:"limit"`
 }
 
 type ModelServiceTier struct {
@@ -39,34 +102,44 @@ type ModelListItem struct {
 }
 
 type CodexModelInfo struct {
-	Slug                       string             `json:"slug"`
-	DisplayName                string             `json:"display_name"`
-	Description                string             `json:"description,omitempty"`
-	DefaultReasoningLevel      string             `json:"default_reasoning_level,omitempty"`
-	SupportedReasoningLevels   []CodexReasoning   `json:"supported_reasoning_levels,omitempty"`
-	ShellType                  string             `json:"shell_type,omitempty"`
-	Visibility                 string             `json:"visibility,omitempty"`
-	SupportedInAPI             bool               `json:"supported_in_api,omitempty"`
-	Priority                   int                `json:"priority,omitempty"`
-	AdditionalSpeedTiers       []string           `json:"additional_speed_tiers,omitempty"`
-	ServiceTiers               []ModelServiceTier `json:"service_tiers,omitempty"`
-	DefaultServiceTier         string             `json:"default_service_tier,omitempty"`
-	AvailabilityNUX            any                `json:"availability_nux,omitempty"`
-	Upgrade                    any                `json:"upgrade,omitempty"`
-	BaseInstructions           string             `json:"base_instructions,omitempty"`
-	SupportsReasoningSummaries bool               `json:"supports_reasoning_summaries,omitempty"`
-	SupportVerbosity           bool               `json:"support_verbosity,omitempty"`
-	DefaultVerbosity           string             `json:"default_verbosity,omitempty"`
-	ApplyPatchToolType         string             `json:"apply_patch_tool_type,omitempty"`
-	WebSearchToolType          string             `json:"web_search_tool_type,omitempty"`
-	TruncationPolicy           map[string]any     `json:"truncation_policy,omitempty"`
-	SupportsParallelToolCalls  bool               `json:"supports_parallel_tool_calls,omitempty"`
-	SupportsImageDetailOrig    bool               `json:"supports_image_detail_original,omitempty"`
-	ContextWindow              int                `json:"context_window,omitempty"`
-	MaxContextWindow           *int               `json:"max_context_window,omitempty"`
-	ExperimentalSupportedTools []string           `json:"experimental_supported_tools,omitempty"`
-	InputModalities            []string           `json:"input_modalities,omitempty"`
-	SupportsSearchTool         bool               `json:"supports_search_tool,omitempty"`
+	Slug                       string                     `json:"slug"`
+	DisplayName                string                     `json:"display_name"`
+	Description                *string                    `json:"description"`
+	DefaultReasoningLevel      *string                    `json:"default_reasoning_level,omitempty"`
+	SupportedReasoningLevels   []CodexReasoning           `json:"supported_reasoning_levels"`
+	ShellType                  string                     `json:"shell_type"`
+	Visibility                 string                     `json:"visibility"`
+	SupportedInAPI             bool                       `json:"supported_in_api"`
+	Priority                   int                        `json:"priority"`
+	AdditionalSpeedTiers       []string                   `json:"additional_speed_tiers"`
+	ServiceTiers               []ModelServiceTier         `json:"service_tiers"`
+	DefaultServiceTier         *string                    `json:"default_service_tier,omitempty"`
+	AvailabilityNUX            *CodexModelAvailabilityNUX `json:"availability_nux"`
+	Upgrade                    *CodexModelUpgrade         `json:"upgrade"`
+	BaseInstructions           string                     `json:"base_instructions"`
+	ModelMessages              *CodexModelMessages        `json:"model_messages,omitempty"`
+	IncludeSkillsInstructions  bool                       `json:"include_skills_usage_instructions"`
+	SupportsReasoningSummaries bool                       `json:"supports_reasoning_summaries"`
+	DefaultReasoningSummary    string                     `json:"default_reasoning_summary"`
+	SupportVerbosity           bool                       `json:"support_verbosity"`
+	DefaultVerbosity           *string                    `json:"default_verbosity"`
+	ApplyPatchToolType         *string                    `json:"apply_patch_tool_type"`
+	WebSearchToolType          string                     `json:"web_search_tool_type"`
+	TruncationPolicy           ModelTruncationPolicy      `json:"truncation_policy"`
+	SupportsParallelToolCalls  bool                       `json:"supports_parallel_tool_calls"`
+	SupportsImageDetailOrig    bool                       `json:"supports_image_detail_original"`
+	ContextWindow              *int64                     `json:"context_window,omitempty"`
+	MaxContextWindow           *int64                     `json:"max_context_window,omitempty"`
+	AutoCompactTokenLimit      *int64                     `json:"auto_compact_token_limit,omitempty"`
+	ExperimentalSupportedTools []string                   `json:"experimental_supported_tools"`
+	InputModalities            []string                   `json:"input_modalities"`
+	SupportsSearchTool         bool                       `json:"supports_search_tool"`
+	UseResponsesLite           bool                       `json:"use_responses_lite"`
+	CompHash                   *string                    `json:"comp_hash,omitempty"`
+	EffectiveContextWindowPct  int64                      `json:"effective_context_window_percent"`
+	AutoReviewModelOverride    *string                    `json:"auto_review_model_override,omitempty"`
+	ToolMode                   *string                    `json:"tool_mode,omitempty"`
+	MultiAgentVersion          *string                    `json:"multi_agent_version,omitempty"`
 }
 
 type CodexReasoning struct {
@@ -121,38 +194,52 @@ func codexModelInfoFromMetadata(row ModelMetadata, namespacedID string) (CodexMo
 	if !metadata.HasModelCapability(row.CapabilityFlags, metadata.ModelCapabilityResponses) {
 		return CodexModelInfo{}, false
 	}
+	if row.Codex == nil {
+		return CodexModelInfo{}, false
+	}
 	serviceTiers := row.ServiceTiers
-	inputModalities := orderedModelInputModalities(row.InputModalities)
+	inputModalities := append([]string{}, row.InputModalities...)
 	hasParallelToolCalls := metadata.HasModelCapability(row.CapabilityFlags, metadata.ModelCapabilityParallelToolCalls)
-	hasVision := metadata.HasModelCapability(row.CapabilityFlags, metadata.ModelCapabilityVision)
 	return CodexModelInfo{
-		Slug:                      namespacedID,
-		DisplayName:               displayNameOrID(row.DisplayName, namespacedID),
-		Description:               "",
-		DefaultReasoningLevel:     row.DefaultReasoningLevel,
-		SupportedReasoningLevels:  row.SupportedReasoningLevels,
-		ServiceTiers:              serviceTiers,
-		DefaultServiceTier:        row.DefaultServiceTier,
-		SupportsParallelToolCalls: hasParallelToolCalls,
-		SupportsImageDetailOrig:   hasVision,
-		ContextWindow:             row.ContextLength,
-		MaxContextWindow:          row.MaxContextWindow,
-		InputModalities:           inputModalities,
+		Slug:                       namespacedID,
+		DisplayName:                displayNameOrID(row.DisplayName, namespacedID),
+		Description:                row.Codex.Description,
+		DefaultReasoningLevel:      row.DefaultReasoningLevel,
+		SupportedReasoningLevels:   row.SupportedReasoningLevels,
+		ShellType:                  row.Codex.ShellType,
+		Visibility:                 row.Codex.Visibility,
+		SupportedInAPI:             row.Codex.SupportedInAPI,
+		Priority:                   row.Codex.Priority,
+		AdditionalSpeedTiers:       append([]string{}, row.Codex.AdditionalSpeedTiers...),
+		ServiceTiers:               serviceTiers,
+		DefaultServiceTier:         row.DefaultServiceTier,
+		AvailabilityNUX:            row.Codex.AvailabilityNUX,
+		Upgrade:                    row.Codex.Upgrade,
+		BaseInstructions:           row.Codex.BaseInstructions,
+		ModelMessages:              row.Codex.ModelMessages,
+		IncludeSkillsInstructions:  row.Codex.IncludeSkillsInstructions,
+		SupportsReasoningSummaries: row.Codex.SupportsReasoningSummaries,
+		DefaultReasoningSummary:    row.Codex.DefaultReasoningSummary,
+		SupportVerbosity:           row.Codex.SupportVerbosity,
+		DefaultVerbosity:           row.Codex.DefaultVerbosity,
+		ApplyPatchToolType:         row.Codex.ApplyPatchToolType,
+		WebSearchToolType:          row.Codex.WebSearchToolType,
+		TruncationPolicy:           row.Codex.TruncationPolicy,
+		SupportsParallelToolCalls:  hasParallelToolCalls,
+		SupportsImageDetailOrig:    row.Codex.SupportsImageDetailOrig,
+		ContextWindow:              row.ContextLength,
+		MaxContextWindow:           row.MaxContextWindow,
+		AutoCompactTokenLimit:      row.Codex.AutoCompactTokenLimit,
+		InputModalities:            inputModalities,
+		ExperimentalSupportedTools: append([]string{}, row.Codex.ExperimentalSupportedTools...),
+		SupportsSearchTool:         row.Codex.SupportsSearchTool,
+		UseResponsesLite:           row.Codex.UseResponsesLite,
+		CompHash:                   row.Codex.CompHash,
+		EffectiveContextWindowPct:  row.Codex.EffectiveContextWindowPct,
+		AutoReviewModelOverride:    row.Codex.AutoReviewModelOverride,
+		ToolMode:                   row.Codex.ToolMode,
+		MultiAgentVersion:          row.Codex.MultiAgentVersion,
 	}, true
-}
-
-func orderedModelInputModalities(values []string) []string {
-	seen := map[string]bool{}
-	for _, value := range values {
-		seen[value] = true
-	}
-	out := make([]string, 0, len(seen))
-	for _, value := range []string{"text", "image"} {
-		if seen[value] {
-			out = append(out, value)
-		}
-	}
-	return out
 }
 
 func displayNameOrID(displayName, id string) string {

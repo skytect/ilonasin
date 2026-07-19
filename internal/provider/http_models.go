@@ -213,23 +213,17 @@ func normalizeModels(instance Instance, body []byte) ([]ModelMetadata, error) {
 }
 
 func normalizeCodexModels(instance Instance, body []byte) ([]ModelMetadata, error) {
-	// Mirrors OpenAI Codex rust-v0.135.0:
-	// codex-rs/codex-api/src/endpoint/models.rs decodes ModelsResponse,
-	// whose envelope is protocol/src/openai_models.rs ModelsResponse { models }.
-	var resp struct {
-		Models []map[string]any `json:"models"`
-	}
-	if err := jsonUnmarshal(body, &resp); err != nil {
+	// Mirrors OpenAI Codex rust-v0.144.1 ModelInfo serde behavior through the
+	// typed wire DTO in codex_models_wire.go.
+	items, err := decodeCodexModels(body)
+	if err != nil {
 		return nil, err
 	}
-	if resp.Models == nil {
-		return nil, errors.New("upstream codex models list is missing")
-	}
 	now := time.Now().UTC()
-	models := make([]ModelMetadata, 0, len(resp.Models))
+	models := make([]ModelMetadata, 0, len(items))
 	seen := map[string]bool{}
-	for _, item := range resp.Models {
-		id, _ := item["slug"].(string)
+	for _, item := range items {
+		id := item.Slug.Value
 		if !validProviderModelID(id) {
 			continue
 		}
@@ -237,23 +231,7 @@ func normalizeCodexModels(instance Instance, body []byte) ([]ModelMetadata, erro
 			return nil, fmt.Errorf("upstream models contains duplicate id")
 		}
 		seen[id] = true
-		meta := ModelMetadata{
-			ProviderInstanceID: instance.ID,
-			ModelID:            id,
-			CapabilityFlags:    codexCapabilityFlags(item),
-			UpdatedAt:          now,
-		}
-		if name, ok := item["display_name"].(string); ok {
-			meta.DisplayName = safeDisplayName(name)
-		}
-		meta.ContextLength = safeInt(item["context_window"])
-		meta.MaxContextWindow = safeOptionalInt(item, "max_context_window")
-		meta.DefaultReasoningLevel = safeReasoningEffort(codexStringField(item, "default_reasoning_level"))
-		meta.SupportedReasoningLevels = codexReasoningLevels(item)
-		meta.DefaultServiceTier = safeCodexServiceTierID(codexStringField(item, "default_service_tier"))
-		meta.ServiceTiers = codexServiceTiers(item)
-		meta.InputModalities = codexInputModalities(item)
-		models = append(models, meta)
+		models = append(models, item.providerModelMetadata(instance.ID, now))
 	}
 	if len(models) == 0 {
 		return nil, errors.New("upstream codex models list is empty")
@@ -264,131 +242,13 @@ func normalizeCodexModels(instance Instance, body []byte) ([]ModelMetadata, erro
 	return models, nil
 }
 
-func codexCapabilityFlags(item map[string]any) string {
-	flags := []string{
-		metadata.ModelCapabilityChat,
-		metadata.ModelCapabilityResponses,
-		metadata.ModelCapabilityStream,
-		metadata.ModelCapabilityTools,
-	}
-	if safeReasoningEffort(codexStringField(item, "default_reasoning_level")) != "" || len(codexReasoningLevels(item)) > 0 {
-		flags = append(flags, metadata.ModelCapabilityReasoning)
-	}
-	if codexBoolField(item, "supports_parallel_tool_calls") {
-		flags = append(flags, metadata.ModelCapabilityParallelToolCalls)
-	}
-	if hasCodexServiceTier(item) {
-		flags = append(flags, metadata.ModelCapabilityServiceTier)
-	}
-	if hasCodexVisionCapability(item) {
-		flags = append(flags, metadata.ModelCapabilityVision)
-	}
-	return metadata.FormatModelCapabilities(flags...)
-}
-
-func codexReasoningLevels(item map[string]any) []ModelReasoningLevel {
-	out := make([]ModelReasoningLevel, 0, len(codexArrayField(item, "supported_reasoning_levels")))
-	seen := map[string]bool{}
-	for _, raw := range codexArrayField(item, "supported_reasoning_levels") {
-		level, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		effort := safeReasoningEffort(codexStringField(level, "effort"))
-		if effort == "" || seen[effort] {
-			continue
-		}
-		seen[effort] = true
-		out = append(out, ModelReasoningLevel{
-			Effort:      effort,
-			Description: safeReasoningDescription(codexStringField(level, "description")),
-		})
-	}
-	return out
-}
-
-func hasCodexServiceTier(item map[string]any) bool {
-	return len(codexServiceTiers(item)) > 0
-}
-
-func codexServiceTiers(item map[string]any) []ModelServiceTier {
-	var out []ModelServiceTier
-	seen := map[string]bool{}
-	for _, raw := range codexArrayField(item, "service_tiers") {
-		tier, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		id := safeCodexServiceTierID(codexStringField(tier, "id"))
-		if id == "" || seen[id] {
-			continue
-		}
-		seen[id] = true
-		out = append(out, ModelServiceTier{
-			ID:          id,
-			Name:        safeBoundedText(codexStringField(tier, "name"), 256),
-			Description: safeBoundedText(codexStringField(tier, "description"), 1024),
-		})
-	}
-	return out
-}
-
-func safeCodexServiceTierID(value string) string {
-	switch value {
-	case "priority", "flex":
-		return value
-	default:
-		return ""
-	}
-}
-
-func codexInputModalities(item map[string]any) []string {
-	seen := map[string]bool{}
-	for _, raw := range codexArrayField(item, "input_modalities") {
-		value, ok := raw.(string)
-		if !ok {
-			continue
-		}
-		switch value {
-		case "text", "image":
-			seen[value] = true
-		}
-	}
-	out := make([]string, 0, len(seen))
-	for _, value := range []string{"text", "image"} {
-		if seen[value] {
-			out = append(out, value)
-		}
-	}
-	return out
-}
-
-func containsString(values []string, needle string) bool {
-	for _, value := range values {
-		if value == needle {
+func oneOf(value string, allowed ...string) bool {
+	for _, candidate := range allowed {
+		if value == candidate {
 			return true
 		}
 	}
 	return false
-}
-
-func hasCodexVisionCapability(item map[string]any) bool {
-	return containsString(codexInputModalities(item), "image")
-}
-
-func codexStringField(item map[string]any, key string) string {
-	value, _ := item[key].(string)
-	return value
-}
-
-func codexBoolField(item map[string]any, key string) bool {
-	value, _ := item[key].(bool)
-	return value
-}
-
-func codexArrayField(item map[string]any, key string) []any {
-	value, _ := item[key].([]any)
-	return value
 }
 
 func validProviderModelID(id string) bool {
@@ -430,46 +290,27 @@ func safeBoundedText(value string, maxLen int) string {
 	return value
 }
 
-func safeInt(value any) int {
+func safeInt(value any) *int64 {
+	var integer int64
 	switch v := value.(type) {
 	case json.Number:
-		i, err := v.Int64()
-		if err == nil && i > 0 && i <= int64(^uint(0)>>1) {
-			return int(i)
+		parsed, err := v.Int64()
+		if err != nil {
+			return nil
 		}
+		integer = parsed
 	case float64:
-		if v > 0 && v == float64(int(v)) {
-			return int(v)
+		if v != float64(int64(v)) {
+			return nil
 		}
-	}
-	return 0
-}
-
-func safeOptionalInt(item map[string]any, key string) *int {
-	value, ok := item[key]
-	if !ok {
+		integer = int64(v)
+	default:
 		return nil
 	}
-	i, ok := safeNonNegativeInt(value)
-	if !ok {
+	if integer <= 0 {
 		return nil
 	}
-	return &i
-}
-
-func safeNonNegativeInt(value any) (int, bool) {
-	switch v := value.(type) {
-	case json.Number:
-		i, err := v.Int64()
-		if err == nil && i >= 0 && i <= int64(^uint(0)>>1) {
-			return int(i), true
-		}
-	case float64:
-		if v >= 0 && v == float64(int(v)) {
-			return int(v), true
-		}
-	}
-	return 0, false
+	return &integer
 }
 
 func (a HTTPChatAdapter) modelTimeout() time.Duration {

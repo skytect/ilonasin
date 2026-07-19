@@ -46,7 +46,12 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request, _ credenti
 			}
 			if errors.Is(err, credentials.ErrOAuthRefreshFailed) {
 				attempted++
-				failedWithoutCache++
+				fallback, ok := s.modelDiscoveryFallback(instance, cacheByProvider[instance.ID])
+				if !ok {
+					failedWithoutCache++
+				} else {
+					all = append(all, fallback...)
+				}
 				continue
 			}
 			writeError(w, http.StatusInternalServerError, "upstream credential resolver failed", "api_error", "credential_resolver_failed")
@@ -59,12 +64,12 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request, _ credenti
 			discoverer, ok = s.models.ForProvider(instance.Type)
 		}
 		if !ok {
-			cached := cacheByProvider[instance.ID]
-			if len(cached) == 0 {
+			fallback, ok := s.modelDiscoveryFallback(instance, cacheByProvider[instance.ID])
+			if !ok {
 				failedWithoutCache++
 				continue
 			}
-			all = append(all, providerModelsFromCacheRows(cached)...)
+			all = append(all, fallback...)
 			continue
 		}
 		attempt := s.discoverModelsWithCredentials(ctx, instance, discoverer, credentialsSet)
@@ -78,15 +83,18 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request, _ credenti
 					return
 				}
 			}
+			if instance.Type == "codex" {
+				s.lastGoodCodexModels.put(instance.ID, attempt.models)
+			}
 			all = append(all, attempt.models...)
 			continue
 		}
-		cached := cacheByProvider[instance.ID]
-		if len(cached) == 0 {
+		fallback, ok := s.modelDiscoveryFallback(instance, cacheByProvider[instance.ID])
+		if !ok {
 			failedWithoutCache++
 			continue
 		}
-		all = append(all, providerModelsFromCacheRows(cached)...)
+		all = append(all, fallback...)
 	}
 	if len(all) == 0 && attempted > 0 && failedWithoutCache == attempted {
 		s.logHTTP(r, http.StatusBadGateway, "models_route", "model_discovery_failed")
@@ -102,6 +110,16 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request, _ credenti
 		)
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) modelDiscoveryFallback(instance provider.Instance, persisted []metadata.ModelCacheRow) ([]provider.ModelMetadata, bool) {
+	if instance.Type == "codex" {
+		return s.lastGoodCodexModels.get(instance.ID)
+	}
+	if len(persisted) == 0 {
+		return nil, false
+	}
+	return providerModelsFromCacheRows(persisted), true
 }
 
 func (s *Server) discoverModelsWithCredentials(ctx context.Context, instance provider.Instance, discoverer provider.ModelDiscoverer, credentialsSet []provider.BearerCredential) modelDiscoveryAttempt {

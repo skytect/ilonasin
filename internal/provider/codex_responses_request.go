@@ -576,21 +576,8 @@ func (a HTTPChatAdapter) resolveCodexResponsesModel(ctx context.Context, req Cha
 		)
 		return codexResponsesModel{}, codexModelDiscoveryFailure(errorClass, status, readErr)
 	}
-	var parsed struct {
-		Models []struct {
-			Slug                      string `json:"slug"`
-			BaseInstructions          string `json:"base_instructions"`
-			SupportsParallelToolCalls bool   `json:"supports_parallel_tool_calls"`
-			DefaultReasoningLevel     string `json:"default_reasoning_level"`
-			SupportedReasoningLevels  []struct {
-				Effort string `json:"effort"`
-			} `json:"supported_reasoning_levels"`
-			ServiceTiers []struct {
-				ID string `json:"id"`
-			} `json:"service_tiers"`
-		} `json:"models"`
-	}
-	if err := jsonUnmarshal(body, &parsed); err != nil {
+	parsed, err := decodeCodexModels(body)
+	if err != nil {
 		errorClass := "upstream_invalid_response"
 		logProviderHTTP(ctx, a.Logger, statusLevel(http.StatusBadGateway, errorClass), "provider_http",
 			slog.String("endpoint", "models"),
@@ -606,30 +593,35 @@ func (a HTTPChatAdapter) resolveCodexResponsesModel(ctx context.Context, req Cha
 		)
 		return codexResponsesModel{}, codexModelDiscoveryFailure(errorClass, http.StatusBadGateway, err)
 	}
-	for _, model := range parsed.Models {
-		if model.Slug == req.UpstreamModel {
+	for _, model := range parsed {
+		if model.Slug.Value == req.UpstreamModel {
 			serviceTiers := map[string]bool{}
-			for _, tier := range model.ServiceTiers {
-				if tier.ID != "" {
-					serviceTiers[tier.ID] = true
+			for _, tier := range model.ServiceTiers.Value {
+				if tier.ID.Value != "" {
+					serviceTiers[tier.ID.Value] = true
 				}
 			}
-			reasoningEfforts := make([]string, 0, len(model.SupportedReasoningLevels))
-			for _, level := range model.SupportedReasoningLevels {
-				if level.Effort != "" {
-					reasoningEfforts = append(reasoningEfforts, level.Effort)
-				}
+			reasoningEfforts := make([]string, len(model.SupportedReasoningLevels.Value))
+			for i, level := range model.SupportedReasoningLevels.Value {
+				reasoningEfforts[i] = string(level.Effort.Value)
 			}
 			return codexResponsesModel{
-				BaseInstructions:          strings.TrimSpace(model.BaseInstructions),
-				SupportsParallelToolCalls: model.SupportsParallelToolCalls,
+				BaseInstructions:          strings.TrimSpace(model.BaseInstructions.Value),
+				SupportsParallelToolCalls: model.SupportsParallelToolCalls.Value,
 				ServiceTiers:              serviceTiers,
-				DefaultReasoningEffort:    model.DefaultReasoningLevel,
+				DefaultReasoningEffort:    stringValueFromWire(model.DefaultReasoningLevel),
 				SupportedReasoningEfforts: reasoningEfforts,
 			}, nil
 		}
 	}
 	return codexResponsesModel{SupportsParallelToolCalls: true, ServiceTiers: map[string]bool{}}, nil
+}
+
+func stringValueFromWire(value *codexWireReasoningEffort) string {
+	if value == nil {
+		return ""
+	}
+	return string(*value)
 }
 
 func (model codexResponsesModel) reasoningEffort(requested string) string {

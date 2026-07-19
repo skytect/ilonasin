@@ -47,7 +47,7 @@ func (s *Store) ReplaceModelCache(ctx context.Context, providerInstanceID string
 				input_modalities_json, updated_at
 			) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`, model.ProviderInstanceID, model.ModelID, model.DisplayName, model.CapabilityFlags,
-			nullableInt(model.ContextLength), nullableIntPtr(model.MaxContextWindow),
+			nullableInt64Ptr(model.ContextLength), nullableInt64Ptr(model.MaxContextWindow),
 			model.DefaultReasoningLevel, reasoningLevels, model.DefaultServiceTier, serviceTiers,
 			inputModalities, model.UpdatedAt.UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
@@ -59,7 +59,7 @@ func (s *Store) ReplaceModelCache(ctx context.Context, providerInstanceID string
 func (s *Store) ListModelCache(ctx context.Context) ([]metadata.ModelCacheRow, error) {
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT provider_instance_id, model_id, display_name, capability_flags,
-			COALESCE(context_length, 0), max_context_window, default_reasoning_level,
+			context_length, max_context_window, default_reasoning_level,
 			supported_reasoning_levels_json, default_service_tier, service_tiers_json,
 			input_modalities_json, updated_at
 		FROM model_cache
@@ -73,14 +73,18 @@ func (s *Store) ListModelCache(ctx context.Context) ([]metadata.ModelCacheRow, e
 	for rows.Next() {
 		var model metadata.ModelCacheRow
 		var updated, reasoningLevelsJSON, serviceTiersJSON, inputModalitiesJSON string
-		var maxContextWindow sql.NullInt64
+		var contextLength, maxContextWindow sql.NullInt64
 		if err := rows.Scan(&model.ProviderInstanceID, &model.ModelID, &model.DisplayName,
-			&model.CapabilityFlags, &model.ContextLength, &maxContextWindow, &model.DefaultReasoningLevel,
+			&model.CapabilityFlags, &contextLength, &maxContextWindow, &model.DefaultReasoningLevel,
 			&reasoningLevelsJSON, &model.DefaultServiceTier, &serviceTiersJSON, &inputModalitiesJSON, &updated); err != nil {
 			return nil, err
 		}
-		if maxContextWindow.Valid && maxContextWindow.Int64 >= 0 && maxContextWindow.Int64 <= int64(^uint(0)>>1) {
-			value := int(maxContextWindow.Int64)
+		if contextLength.Valid {
+			value := contextLength.Int64
+			model.ContextLength = &value
+		}
+		if maxContextWindow.Valid {
+			value := maxContextWindow.Int64
 			model.MaxContextWindow = &value
 		}
 		updatedAt, err := parseSQLiteTime(updated)
@@ -94,6 +98,13 @@ func (s *Store) ListModelCache(ctx context.Context) ([]metadata.ModelCacheRow, e
 		out = append(out, metadata.NormalizeModelCacheRow(model))
 	}
 	return out, rows.Err()
+}
+
+func nullableInt64Ptr(value *int64) any {
+	if value == nil {
+		return nil
+	}
+	return *value
 }
 
 func encodeModelCacheServiceTiers(values []metadata.ModelServiceTier) (string, error) {

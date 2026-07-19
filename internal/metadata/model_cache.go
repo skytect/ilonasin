@@ -10,8 +10,8 @@ type ModelCacheRow struct {
 	ModelID                  string
 	DisplayName              string
 	CapabilityFlags          string
-	ContextLength            int
-	MaxContextWindow         *int
+	ContextLength            *int64
+	MaxContextWindow         *int64
 	DefaultReasoningLevel    string
 	SupportedReasoningLevels []ModelReasoningLevel
 	DefaultServiceTier       string
@@ -36,12 +36,6 @@ func NormalizeModelCacheRow(row ModelCacheRow) ModelCacheRow {
 	row.ModelID = strings.TrimSpace(row.ModelID)
 	row.DisplayName = strings.TrimSpace(row.DisplayName)
 	row.CapabilityFlags = strings.TrimSpace(row.CapabilityFlags)
-	if row.ContextLength < 0 {
-		row.ContextLength = 0
-	}
-	if row.MaxContextWindow != nil && *row.MaxContextWindow < 0 {
-		row.MaxContextWindow = nil
-	}
 	row.DefaultReasoningLevel = normalizeModelReasoningEffort(row.DefaultReasoningLevel)
 	row.SupportedReasoningLevels = NormalizeModelReasoningLevels(row.SupportedReasoningLevels)
 	row.DefaultServiceTier = normalizeModelServiceTierID(row.DefaultServiceTier)

@@ -278,7 +278,10 @@ request fields, not model suffixes.
 For Codex Chat Completions, Codex-specific controls live under explicit provider
 options:
 
-- `provider_options.codex.reasoning.effort` for reasoning effort,
+- top-level `reasoning_effort` is the standard Chat Completions reasoning-effort
+  field and maps to Codex reasoning effort,
+- `provider_options.codex.reasoning.effort` is the Codex-specific equivalent;
+  clients must not send both effort fields,
 - `provider_options.codex.reasoning.summary` for reasoning summary behavior,
 - `provider_options.codex.verbosity` for text verbosity,
 - `provider_options.codex.service_tier` for Codex-specific service tier

@@ -36,6 +36,7 @@ type ChatCompletionRequest struct {
 	User                *string                `json:"user,omitempty"`
 	PromptCacheKey      string                 `json:"-"`
 	ServiceTier         *string                `json:"service_tier,omitempty"`
+	ReasoningEffort     *string                `json:"reasoning_effort,omitempty"`
 	SessionID           *string                `json:"session_id,omitempty"`
 	Metadata            map[string]string      `json:"metadata,omitempty"`
 	Logprobs            *bool                  `json:"logprobs,omitempty"`
@@ -109,6 +110,9 @@ func DecodeChatCompletion(r io.Reader) (ChatCompletionRequest, error) {
 		return ChatCompletionRequest{}, err
 	}
 	if err := validateRawServiceTier(raw); err != nil {
+		return ChatCompletionRequest{}, err
+	}
+	if err := validateRawReasoningEffort(raw); err != nil {
 		return ChatCompletionRequest{}, err
 	}
 	if err := validateRawSessionID(raw); err != nil {

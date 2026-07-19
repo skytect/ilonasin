@@ -34,7 +34,7 @@ func chatValidationPolicyForInstance(instance Instance) (chatValidationPolicy, b
 		}, true
 	case "codex":
 		codexUnsupportedOpenRouterFields := []string{"top_k", "min_p", "top_a", "repetition_penalty", "seed", "logit_bias", "session_id", "metadata"}
-		unsupported := []string{"prediction", "user", "logprobs", "top_logprobs", "max_tokens", "max_completion_tokens", "temperature", "top_p", "presence_penalty", "frequency_penalty", "stop", "response_format"}
+		unsupported := []string{"prediction", "user", "logprobs", "top_logprobs", "max_tokens", "temperature", "top_p", "presence_penalty", "frequency_penalty", "stop"}
 		unsupported = append(unsupported, codexUnsupportedOpenRouterFields...)
 		return chatValidationPolicy{
 			providerType:                "codex",
@@ -75,12 +75,15 @@ func (a HTTPChatAdapter) ValidateChatRequest(instance Instance, req openai.ChatC
 		if err := validateCodexTopLevelReasoningEffort(req); err != nil {
 			return err
 		}
+		if err := validateCodexTopLevelResponseFormat(req); err != nil {
+			return err
+		}
 	} else if req.HasField("reasoning_effort") {
 		return fmt.Errorf("reasoning_effort is not supported")
 	}
 	if policy.validateCodexToolChoice && req.HasField("tool_choice") {
 		choice, ok := req.ToolChoice.(string)
-		if !ok || choice != "auto" {
+		if !ok || (choice != "auto" && choice != "none" && choice != "required") {
 			return fmt.Errorf("tool_choice is not supported")
 		}
 	}
@@ -115,6 +118,17 @@ func validateCodexTopLevelReasoningEffort(req openai.ChatCompletionRequest) erro
 	reasoning, _ := opts["reasoning"].(map[string]any)
 	if _, ok := reasoning["effort"]; ok {
 		return fmt.Errorf("reasoning_effort and provider_options.codex.reasoning.effort are mutually exclusive")
+	}
+	return nil
+}
+
+func validateCodexTopLevelResponseFormat(req openai.ChatCompletionRequest) error {
+	if !req.HasField("response_format") || !req.HasField("provider_options") {
+		return nil
+	}
+	opts, _ := req.ReasoningOptions["codex"].(map[string]any)
+	if _, ok := opts["format"]; ok {
+		return fmt.Errorf("response_format and provider_options.codex.format are mutually exclusive")
 	}
 	return nil
 }

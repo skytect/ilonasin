@@ -886,7 +886,7 @@ func validateRawMessages(raw json.RawMessage) error {
 				return fmt.Errorf("messages[%d].%s is unsupported", i, key)
 			}
 		case "tool":
-			if key, ok := firstUnsupportedRawField(msg, "role", "content", "tool_call_id"); ok {
+			if key, ok := firstUnsupportedRawField(msg, "role", "content", "tool_call_id", "name"); ok {
 				return fmt.Errorf("messages[%d].%s is unsupported", i, key)
 			}
 		default:
@@ -931,6 +931,15 @@ func validateRawMessages(raw json.RawMessage) error {
 				return err
 			} else if id == "" {
 				return fmt.Errorf("messages[%d].tool_call_id is required", i)
+			}
+			if rawName, ok := msg["name"]; ok {
+				name, err := requiredRawString(rawName, fmt.Sprintf("messages[%d].name", i))
+				if err != nil {
+					return err
+				}
+				if !isFunctionName(name) {
+					return fmt.Errorf("messages[%d].name is invalid", i)
+				}
 			}
 		}
 	}

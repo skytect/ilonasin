@@ -1,10 +1,11 @@
 # Codex Compatibility Audit
 
-Date: 2026-07-13
+Date: 2026-07-19
 
-Audited source base: `HEAD` `d155dd9` on the current branch, with branch
-changes reviewed from `origin/main..HEAD`. This document refresh is separate
-from the source evidence.
+Audited source scope: `origin/main` at `db0574c` plus the current branch's
+Hindsight-to-Codex compatibility commit and July 19 live Hindsight 0.6.1
+request/response evidence. Earlier checklist entries retain their stated
+source-only or live-verification qualifications.
 
 This checklist is evidence for compatibility decisions, not a runtime gate.
 It must not become an approval switch, permission system, or permanent test
@@ -30,7 +31,8 @@ compatibility.
 | Dynamic Codex client version and matching outbound User-Agent | SOURCE-READY-NOT-LIVE-VERIFIED | `internal/provider/codex_version.go`: `CachedCodexClientVersionResolver`, `HTTPChatAdapter.codexClientVersion`; `internal/provider/codex_headers.go`: `addCodexRequestHeaders`, `codexUserAgent`; `internal/provider/http_models.go`: `modelsURL` adds `client_version`. |
 | Model metadata exact reasoning/default/max context/service tiers/modalities | SOURCE-READY-NOT-LIVE-VERIFIED | `internal/provider/http_models.go`: `normalizeCodexModels`, `codexCapabilityFlags`, `codexReasoningLevels`, `codexServiceTiers`, `codexInputModalities`; `internal/openai/models_response.go`: `ModelsResponseFromMetadata`, `codexModelInfoFromMetadata`; `internal/metadata/model_cache.go`: normalized persisted fields. |
 | Unverified Codex metadata omitted | PASS | `internal/provider/http_models.go`: Codex metadata is copied only from upstream model fields; unknown service tiers/modalities are dropped by `safeCodexServiceTierID` and `codexInputModalities`. |
-| Translated Chat output caps explicitly reject | PASS | `internal/provider/codex_responses_request.go`: `marshalCodexResponsesRequest` rejects Chat `max_tokens` and `max_completion_tokens` for Codex translation. |
+| Translated Chat output-cap compatibility | PASS | `internal/provider/chat_validation.go` and `internal/provider/codex_responses_request.go`: Codex Chat still rejects `max_tokens`; a valid positive `max_completion_tokens` is accepted as a compatibility hint and deliberately omitted upstream because no equivalent Codex output cap is verified. |
+| Translated Chat structured output and tool choice | PASS | `internal/openai/chat_validation.go`, `internal/provider/chat_validation.go`, and `internal/provider/codex_responses_request.go`: Chat `response_format` values `text` and `json_object` map to Responses `text.format`; string `tool_choice` values `auto`, `none`, and `required` are preserved, with `required` plus exactly one function translated to the equivalent named Responses choice for reliable enforcement after prior tool output; optional valid names on tool-result messages are accepted and omitted from Codex `function_call_output` because the call ID is authoritative. JSON Schema and caller-supplied named Chat tool choice remain outside this compatibility slice. |
 | Native Responses `max_output_tokens` pass-through boundary | SOURCE-READY-NOT-LIVE-VERIFIED | `internal/server/responses_route.go`: native Codex providers use `DecodeNativeResponsesEnvelope` only for routing metadata, then pass the raw body to `StreamResponses`; `internal/provider/codex_responses_relay.go`: native relay preserves raw body fields and forces only model/stream/store plus narrow normalizations. This remains a deliberate boundary, not Chat translation. |
 | Terminal completed/failed/incomplete/error events | PASS | `internal/provider/codex_responses_parse.go`: handles `response.completed`, `response.failed`, `response.incomplete`; `internal/provider/codex_responses_relay.go`: `handleCodexNativeResponsesData` maps `response.completed`, `response.failed`, `response.incomplete`, and `error` into summary status/error. |
 | Bounded tools `strict` | SOURCE-READY-NOT-LIVE-VERIFIED | `internal/openai/responses_tools.go`: Codex-preserved function tools accept boolean `strict`; `internal/provider/codex_responses_request.go`: `codexResponsesTools` forwards boolean function `strict`; `internal/provider/codex_responses_relay.go`: `codexNormalizeNativeTools` removes only null `strict`; broader hosted/deferred/namespaced/MCP families remain separate work. |
@@ -47,8 +49,9 @@ compatibility.
   provider-native SSE. Unsupported transcript/output families must fail locally
   instead of being lossy-converted.
 - Chat-to-Codex translation is intentionally narrower than native Responses.
-  It rejects unverified Chat output caps rather than silently dropping caller
-  intent.
+  It rejects `max_tokens`; valid positive `max_completion_tokens` is the narrow
+  compatibility exception and is deliberately omitted upstream because no
+  equivalent Codex output cap is verified.
 - Model discovery currently records provider model IDs returned by upstream.
   The served model is also captured from Codex response headers where available.
 - `strict` is implemented only for the bounded function-tool surfaces above.

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
@@ -131,6 +132,9 @@ func (s *Server) executeNativeResponses(r *http.Request, nc nativeResponsesConte
 
 func (s *Server) nativeResponsesAttempt(r *http.Request, nc nativeResponsesContext, sink *nativeResponsesSink, credential provider.BearerCredential, modelCredential provider.BearerCredential, releaseAttempt func()) (provider.ChatStreamSummary, error) {
 	defer releaseAttempt()
+	if !s.credentialModelEligibleForAttempt(r.Context(), nc.instance, nc.address.ProviderModelID, modelCredential) {
+		return provider.ChatStreamSummary{StatusCode: http.StatusServiceUnavailable, ErrorClass: "model_entitlement_unavailable", CompletionStatus: "upstream_error", PreStreamError: true}, errors.New("fresh model entitlement is unavailable")
+	}
 	return nc.adapter.StreamResponses(r.Context(), provider.ResponsesRequest{
 		Instance:        nc.instance,
 		UpstreamModel:   nc.address.ProviderModelID,

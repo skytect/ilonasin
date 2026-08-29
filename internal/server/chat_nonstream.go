@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
@@ -142,6 +143,9 @@ func (s *Server) executeNonStreamingChat(r *http.Request, nc nonStreamContext) n
 
 func (s *Server) completeChatAttempt(r *http.Request, nc nonStreamContext, credential provider.BearerCredential, modelCredential provider.BearerCredential, releaseAttempt func()) (provider.ChatResult, error) {
 	defer releaseAttempt()
+	if !s.credentialModelEligibleForAttempt(r.Context(), nc.instance, nc.address.ProviderModelID, modelCredential) {
+		return provider.ChatResult{StatusCode: http.StatusServiceUnavailable, ErrorClass: "model_entitlement_unavailable"}, errors.New("fresh model entitlement is unavailable")
+	}
 	return nc.adapter.CompleteChat(r.Context(), providerChatRequest(nc.instance, nc.address, nc.request, credential, modelCredential))
 }
 
@@ -275,7 +279,7 @@ func retryableChatAttempt(result provider.ChatResult, err error) bool {
 		return false
 	}
 	errorClass := normalizedChatErrorClass(result, normalizedChatStatus(result))
-	if errorClass == "upstream_network_error" || errorClass == "upstream_timeout" {
+	if errorClass == "upstream_network_error" || errorClass == "upstream_timeout" || errorClass == "model_entitlement_unavailable" {
 		return true
 	}
 	if errorClass != "" && errorClass != "upstream_http_error" {

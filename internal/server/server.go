@@ -2,6 +2,7 @@ package server
 
 import (
 	"log/slog"
+	"sync"
 	"time"
 
 	"ilonasin/internal/credentials"
@@ -28,6 +29,7 @@ type Server struct {
 
 	lastGoodCodexModels     ephemeralCodexModelCache
 	credentialModelCatalogs credentialModelCatalogCache
+	credentialModelRefresh  sync.Mutex
 }
 
 func New(registry ProviderRegistry, auth credentials.LocalTokenVerifier, upstreams credentials.UpstreamCredentialResolver, oauth credentials.OAuthBearerResolver, adapters provider.ChatAdapters, models provider.ModelDiscoverers, cache ModelCache, meta MetadataRecorder) *Server {

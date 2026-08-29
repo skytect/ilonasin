@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
@@ -42,7 +43,7 @@ func retryableStreamAttempt(summary provider.ChatStreamSummary, err error, sinkS
 		return false
 	}
 	switch summary.ErrorClass {
-	case "upstream_network_error", "upstream_timeout":
+	case "upstream_network_error", "upstream_timeout", "model_entitlement_unavailable":
 		return true
 	case "upstream_server_overloaded":
 		return summary.StatusCode == http.StatusBadGateway
@@ -211,6 +212,9 @@ func (s *Server) executeStreamingChat(r *http.Request, sc streamContext, sink *s
 
 func (s *Server) streamChatAttempt(r *http.Request, sc streamContext, sink *streamSink, credential provider.BearerCredential, modelCredential provider.BearerCredential, releaseAttempt func()) (provider.ChatStreamSummary, error) {
 	defer releaseAttempt()
+	if !s.credentialModelEligibleForAttempt(r.Context(), sc.instance, sc.address.ProviderModelID, modelCredential) {
+		return provider.ChatStreamSummary{StatusCode: http.StatusServiceUnavailable, ErrorClass: "model_entitlement_unavailable", CompletionStatus: "upstream_error", PreStreamError: true}, errors.New("fresh model entitlement is unavailable")
+	}
 	return sc.adapter.StreamChat(r.Context(), providerChatRequest(sc.instance, sc.address, sc.request, credential, modelCredential), sink)
 }
 

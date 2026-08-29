@@ -1,9 +1,12 @@
 package server
 
 import (
+	"crypto/sha256"
 	"strings"
 	"sync"
 	"time"
+
+	"ilonasin/internal/provider"
 )
 
 const (
@@ -19,6 +22,15 @@ const (
 type credentialModelCatalogKey struct {
 	providerInstanceID string
 	credentialID       int64
+	bearerGeneration   [sha256.Size]byte
+}
+
+func modelCatalogKey(providerInstanceID string, credential provider.BearerCredential) credentialModelCatalogKey {
+	return credentialModelCatalogKey{
+		providerInstanceID: providerInstanceID,
+		credentialID:       credential.ID,
+		bearerGeneration:   sha256.Sum256([]byte(credential.BearerToken)),
+	}
 }
 
 type credentialModelCatalogEntry struct {
@@ -42,11 +54,10 @@ func newCredentialModelCatalogCache() credentialModelCatalogCache {
 	return credentialModelCatalogCache{entries: make(map[credentialModelCatalogKey]credentialModelCatalogEntry)}
 }
 
-func (c *credentialModelCatalogCache) lookup(now time.Time, providerInstanceID string, credentialID int64) (map[string]struct{}, bool, bool) {
+func (c *credentialModelCatalogCache) lookup(now time.Time, key credentialModelCatalogKey) (map[string]struct{}, bool, bool) {
 	if c == nil {
 		return nil, false, false
 	}
-	key := credentialModelCatalogKey{providerInstanceID: providerInstanceID, credentialID: credentialID}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	entry, ok := c.entries[key]
@@ -61,32 +72,32 @@ func (c *credentialModelCatalogCache) lookup(now time.Time, providerInstanceID s
 	return entry.models, entry.known, true
 }
 
-func (c *credentialModelCatalogCache) put(now time.Time, providerInstanceID string, credentialID int64, modelIDs []string) {
-	if c == nil || credentialID == 0 || len(modelIDs) == 0 || len(modelIDs) > maxCredentialCatalogModels {
-		c.fail(now, providerInstanceID, credentialID)
+func (c *credentialModelCatalogCache) put(now time.Time, key credentialModelCatalogKey, modelIDs []string) {
+	if c == nil || key.credentialID == 0 || len(modelIDs) == 0 || len(modelIDs) > maxCredentialCatalogModels {
+		c.fail(now, key)
 		return
 	}
 	models := make(map[string]struct{}, len(modelIDs))
 	retainedBytes := 0
 	for _, modelID := range modelIDs {
 		if modelID == "" || len(modelID) > maxCredentialModelIDBytes {
-			c.fail(now, providerInstanceID, credentialID)
+			c.fail(now, key)
 			return
 		}
 		if _, exists := models[modelID]; !exists {
 			retainedBytes += len(modelID)
 			if retainedBytes > maxCredentialCatalogBytes {
-				c.fail(now, providerInstanceID, credentialID)
+				c.fail(now, key)
 				return
 			}
 			models[strings.Clone(modelID)] = struct{}{}
 		}
 	}
 	if len(models) == 0 {
-		c.fail(now, providerInstanceID, credentialID)
+		c.fail(now, key)
 		return
 	}
-	c.store(credentialModelCatalogKey{providerInstanceID: providerInstanceID, credentialID: credentialID}, credentialModelCatalogEntry{
+	c.store(key, credentialModelCatalogEntry{
 		models:    models,
 		known:     true,
 		expiresAt: now.Add(credentialModelCatalogTTL),
@@ -95,11 +106,11 @@ func (c *credentialModelCatalogCache) put(now time.Time, providerInstanceID stri
 	})
 }
 
-func (c *credentialModelCatalogCache) fail(now time.Time, providerInstanceID string, credentialID int64) {
-	if c == nil || credentialID == 0 {
+func (c *credentialModelCatalogCache) fail(now time.Time, key credentialModelCatalogKey) {
+	if c == nil || key.credentialID == 0 {
 		return
 	}
-	c.store(credentialModelCatalogKey{providerInstanceID: providerInstanceID, credentialID: credentialID}, credentialModelCatalogEntry{
+	c.store(key, credentialModelCatalogEntry{
 		expiresAt: now.Add(credentialModelCatalogFailureTTL),
 		observed:  now,
 	})

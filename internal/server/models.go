@@ -144,14 +144,15 @@ func (s *Server) discoverModelsWithCredentials(ctx context.Context, instance pro
 	for _, credential := range credentialsSet {
 		models, ok := s.discoverModelsWithCredential(ctx, instance, discoverer, credential)
 		now := s.now().UTC()
+		key := modelCatalogKey(instance.ID, credential)
 		if !ok {
-			s.credentialModelCatalogs.fail(now, instance.ID, credential.ID)
+			s.credentialModelCatalogs.fail(now, key)
 			if ctx.Err() != nil {
 				return modelDiscoveryAttempt{}
 			}
 			continue
 		}
-		s.credentialModelCatalogs.put(now, instance.ID, credential.ID, providerModelIDs(models))
+		s.credentialModelCatalogs.put(now, key, providerModelIDs(models))
 		for _, model := range models {
 			if _, exists := byID[model.ModelID]; !exists {
 				byID[model.ModelID] = model

@@ -199,6 +199,59 @@ func TestCredentialCatalogUnionExposesAccountScopedModel(t *testing.T) {
 	}
 }
 
+func TestRetryRechecksFreshEntitlementBeforeDispatch(t *testing.T) {
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	discoverer := &testCatalogDiscoverer{catalogs: map[int64][]string{
+		101: {testAccountScopedModel},
+		303: {testAccountScopedModel},
+	}, failures: map[int64]bool{}}
+	srv, instance := newCatalogRoutingServer(&now, discoverer, 101, 303)
+	eligible, err := srv.resolveModelCredentialsForModel(context.Background(), instance, testAccountScopedModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := &testRetryChatAdapter{beforeReturn: func(attempt int) {
+		if attempt != 1 {
+			return
+		}
+		now = now.Add(credentialModelCatalogTTL + time.Nanosecond)
+		discoverer.mu.Lock()
+		discoverer.failures[101] = true
+		discoverer.failures[303] = true
+		discoverer.mu.Unlock()
+	}}
+	req, _ := http.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	exec := srv.executeNonStreamingChat(req, nonStreamContext{
+		start:       now,
+		token:       credentials.VerifiedLocalToken{ID: 7},
+		address:     routing.ModelAddress{ProviderInstanceID: instance.ID, ProviderModelID: testAccountScopedModel},
+		instance:    instance,
+		credentials: eligible,
+		adapter:     adapter,
+		request:     openai.ChatCompletionRequest{AffinityKey: "expiry-test"},
+	})
+	if len(adapter.attempts) != 1 {
+		t.Fatalf("stale entitlement reached upstream retry: attempts=%v", adapter.attempts)
+	}
+	if exec.final.result.ErrorClass != "model_entitlement_unavailable" {
+		t.Fatalf("expected fail-closed entitlement error, got %+v", exec.final.result)
+	}
+}
+
+func TestBearerGenerationCannotReuseCatalogProof(t *testing.T) {
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	cache := newCredentialModelCatalogCache()
+	first := provider.BearerCredential{ID: 101, BearerToken: "first-generation"}
+	second := provider.BearerCredential{ID: 101, BearerToken: "second-generation"}
+	cache.put(now, modelCatalogKey("pragnition-codex", first), []string{testAccountScopedModel})
+	if _, known, cached := cache.lookup(now, modelCatalogKey("pragnition-codex", first)); !cached || !known {
+		t.Fatal("first bearer generation lost its catalog proof")
+	}
+	if _, _, cached := cache.lookup(now, modelCatalogKey("pragnition-codex", second)); cached {
+		t.Fatal("new bearer generation reused stale catalog proof")
+	}
+}
+
 func credentialIDs(values []provider.BearerCredential) []int64 {
 	ids := make([]int64, 0, len(values))
 	for _, value := range values {
@@ -217,7 +270,8 @@ func containsProviderModel(models []provider.ModelMetadata, modelID string) bool
 }
 
 type testRetryChatAdapter struct {
-	attempts []int64
+	attempts     []int64
+	beforeReturn func(attempt int)
 }
 
 func (a *testRetryChatAdapter) ValidateChatRequest(provider.Instance, openai.ChatCompletionRequest) error {
@@ -226,6 +280,9 @@ func (a *testRetryChatAdapter) ValidateChatRequest(provider.Instance, openai.Cha
 
 func (a *testRetryChatAdapter) CompleteChat(_ context.Context, req provider.ChatRequest) (provider.ChatResult, error) {
 	a.attempts = append(a.attempts, req.Credential.ID)
+	if a.beforeReturn != nil {
+		a.beforeReturn(len(a.attempts))
+	}
 	if len(a.attempts) == 1 {
 		return provider.ChatResult{StatusCode: http.StatusBadGateway, UpstreamStatusCode: http.StatusServiceUnavailable, ErrorClass: "upstream_http_error"}, errors.New("retryable availability failure")
 	}

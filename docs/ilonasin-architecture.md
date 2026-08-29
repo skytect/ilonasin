@@ -322,6 +322,12 @@ Credential pooling is constrained:
 - same provider model,
 - eligible credentials attached to that provider instance.
 
+For provider models whose availability is account-scoped, eligibility must come
+from a bounded-freshness live model-catalog observation for each credential.
+Unknown, stale, or failed observations are ineligible, and retries must remain
+inside the catalog-eligible subset. Shared models keep the normal pool behavior
+without mandatory per-request catalog discovery.
+
 No cross-provider fallback by default.
 
 No cross-model fallback by default.

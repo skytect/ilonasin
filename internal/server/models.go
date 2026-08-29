@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"sort"
 
 	"ilonasin/internal/credentials"
 	"ilonasin/internal/metadata"
@@ -123,42 +124,80 @@ func (s *Server) modelDiscoveryFallback(instance provider.Instance, persisted []
 }
 
 func (s *Server) discoverModelsWithCredentials(ctx context.Context, instance provider.Instance, discoverer provider.ModelDiscoverer, credentialsSet []provider.BearerCredential) modelDiscoveryAttempt {
+	union := false
+	if policy, ok := discoverer.(provider.CredentialCatalogUnionPolicy); ok {
+		union = policy.RequiresCredentialCatalogUnion(instance)
+	}
+	if !union {
+		for _, credential := range credentialsSet {
+			if models, ok := s.discoverModelsWithCredential(ctx, instance, discoverer, credential); ok {
+				return modelDiscoveryAttempt{models: models, live: true}
+			}
+			if ctx.Err() != nil {
+				return modelDiscoveryAttempt{}
+			}
+		}
+		return modelDiscoveryAttempt{}
+	}
+
+	byID := make(map[string]provider.ModelMetadata)
 	for _, credential := range credentialsSet {
-		if ctx.Err() != nil {
-			return modelDiscoveryAttempt{}
-		}
-		result, err := discoverer.ListModels(ctx, provider.ModelRequest{
-			Instance:   instance,
-			Credential: credential,
-		})
-		s.recordHealth(ctx, healthFromModelDiscovery(instance, credential, result, err))
-		if ctx.Err() != nil {
-			return modelDiscoveryAttempt{}
-		}
-		if err == nil && len(result.Models) > 0 {
-			return modelDiscoveryAttempt{models: result.Models, live: true}
-		}
-		if !s.shouldRefreshOAuthAfterModel401(instance, result) {
+		models, ok := s.discoverModelsWithCredential(ctx, instance, discoverer, credential)
+		now := s.now().UTC()
+		if !ok {
+			s.credentialModelCatalogs.fail(now, instance.ID, credential.ID)
+			if ctx.Err() != nil {
+				return modelDiscoveryAttempt{}
+			}
 			continue
 		}
-		refreshed, refreshErr := s.refreshOAuthCredentialForRetryIfBearer(ctx, credential)
-		if refreshErr != nil {
-			continue
-		}
-		if ctx.Err() != nil {
-			return modelDiscoveryAttempt{}
-		}
-		result, err = discoverer.ListModels(ctx, provider.ModelRequest{
-			Instance:   instance,
-			Credential: refreshed,
-		})
-		s.recordHealth(ctx, healthFromModelDiscovery(instance, refreshed, result, err))
-		if ctx.Err() != nil {
-			return modelDiscoveryAttempt{}
-		}
-		if err == nil && len(result.Models) > 0 {
-			return modelDiscoveryAttempt{models: result.Models, live: true}
+		s.credentialModelCatalogs.put(now, instance.ID, credential.ID, providerModelIDs(models))
+		for _, model := range models {
+			if _, exists := byID[model.ModelID]; !exists {
+				byID[model.ModelID] = model
+			}
 		}
 	}
-	return modelDiscoveryAttempt{}
+	if len(byID) == 0 {
+		return modelDiscoveryAttempt{}
+	}
+	models := make([]provider.ModelMetadata, 0, len(byID))
+	for _, model := range byID {
+		models = append(models, model)
+	}
+	sort.Slice(models, func(i, j int) bool { return models[i].ModelID < models[j].ModelID })
+	return modelDiscoveryAttempt{models: models, live: true}
+}
+
+func (s *Server) discoverModelsWithCredential(ctx context.Context, instance provider.Instance, discoverer provider.ModelDiscoverer, credential provider.BearerCredential) ([]provider.ModelMetadata, bool) {
+	if ctx.Err() != nil {
+		return nil, false
+	}
+	result, err := discoverer.ListModels(ctx, provider.ModelRequest{
+		Instance:   instance,
+		Credential: credential,
+	})
+	s.recordHealth(ctx, healthFromModelDiscovery(instance, credential, result, err))
+	if ctx.Err() != nil {
+		return nil, false
+	}
+	if err == nil && len(result.Models) > 0 {
+		return result.Models, true
+	}
+	if !s.shouldRefreshOAuthAfterModel401(instance, result) {
+		return nil, false
+	}
+	refreshed, refreshErr := s.refreshOAuthCredentialForRetryIfBearer(ctx, credential)
+	if refreshErr != nil || ctx.Err() != nil {
+		return nil, false
+	}
+	result, err = discoverer.ListModels(ctx, provider.ModelRequest{
+		Instance:   instance,
+		Credential: refreshed,
+	})
+	s.recordHealth(ctx, healthFromModelDiscovery(instance, refreshed, result, err))
+	if ctx.Err() != nil || err != nil || len(result.Models) == 0 {
+		return nil, false
+	}
+	return result.Models, true
 }

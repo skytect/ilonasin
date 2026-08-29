@@ -21,6 +21,26 @@ type ModelDiscoverer interface {
 	ListModels(ctx context.Context, req ModelRequest) (ModelResult, error)
 }
 
+// ModelAvailabilityPolicy identifies models whose availability is scoped to an
+// individual credential rather than shared by every credential for an instance.
+// Routers must prove availability from that credential's live model catalog.
+type ModelAvailabilityPolicy interface {
+	ModelAvailabilityScope(instance Instance, modelID string) ModelAvailabilityScope
+}
+
+// CredentialCatalogUnionPolicy reports whether model discovery must union the
+// live catalogs of every credential to avoid hiding account-scoped models.
+type CredentialCatalogUnionPolicy interface {
+	RequiresCredentialCatalogUnion(instance Instance) bool
+}
+
+type ModelAvailabilityScope uint8
+
+const (
+	ModelAvailabilityShared ModelAvailabilityScope = iota
+	ModelAvailabilityCredentialCatalog
+)
+
 type ModelDiscoverers interface {
 	ForProvider(providerType string) (ModelDiscoverer, bool)
 }

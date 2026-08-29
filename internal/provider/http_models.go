@@ -9,12 +9,28 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strings"
 	"time"
 
 	"ilonasin/internal/metadata"
 )
 
 const MaxUpstreamModelsBodyBytes int64 = 64 << 20
+
+func (a HTTPChatAdapter) ModelAvailabilityScope(instance Instance, modelID string) ModelAvailabilityScope {
+	return BuiltInModelAvailabilityScope(instance, modelID)
+}
+
+func BuiltInModelAvailabilityScope(instance Instance, modelID string) ModelAvailabilityScope {
+	if instance.Type == "codex" && strings.HasPrefix(modelID, "gpt-daybreak-") {
+		return ModelAvailabilityCredentialCatalog
+	}
+	return ModelAvailabilityShared
+}
+
+func (a HTTPChatAdapter) RequiresCredentialCatalogUnion(instance Instance) bool {
+	return instance.Type == "codex"
+}
 
 func (a HTTPChatAdapter) ListModels(ctx context.Context, req ModelRequest) (ModelResult, error) {
 	start := time.Now()

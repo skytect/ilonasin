@@ -95,7 +95,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request, token c
 			slog.Bool("stream", true),
 		)
 	}
-	credentialsSet, err := s.resolveModelCredentials(r.Context(), instance)
+	credentialsSet, err := s.resolveModelCredentialsForModel(r.Context(), instance, addr.ProviderModelID)
 	if err != nil {
 		writeOpenAICredentialUnavailable(w, func(status int, errorClass string) {
 			requestMeta := responsesRequestMetadataBase(start, token, addr, instance, responsesReq)
@@ -172,7 +172,7 @@ func (s *Server) handleNativeResponsesRoute(w http.ResponseWriter, r *http.Reque
 			slog.Bool("native_route", true),
 		)
 	}
-	credentialsSet, err := s.resolveModelCredentials(r.Context(), instance)
+	credentialsSet, err := s.resolveModelCredentialsForModel(r.Context(), instance, addr.ProviderModelID)
 	if err != nil {
 		writeOpenAICredentialUnavailable(w, func(status int, errorClass string) {
 			s.recordNativeResponsesEarly(r, start, token, addr, instance, envelope, status, errorClass)

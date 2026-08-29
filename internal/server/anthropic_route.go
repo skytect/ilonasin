@@ -77,7 +77,7 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request,
 		writeAnthropicError(w, preflight.Status, preflight.Message)
 		return
 	}
-	credentialsSet, err := s.resolveModelCredentials(r.Context(), instance)
+	credentialsSet, err := s.resolveModelCredentialsForModel(r.Context(), instance, addr.ProviderModelID)
 	if err != nil {
 		s.recordAnthropicEarly(r, start, token, addr, instance, chatReq, req, http.StatusUnauthorized, "credential_unavailable")
 		s.logHTTP(r, http.StatusUnauthorized, "anthropic_route", "credential_unavailable")

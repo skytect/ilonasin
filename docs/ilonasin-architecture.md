@@ -250,8 +250,22 @@ class.
 
 Generic OpenAI-compatible routes may also accept a bare provider model ID as a
 compatibility alias when the model cache has exactly one exact match for that
-ID. If zero providers match, or more than one provider matches, the request must
+ID among configured providers. The persisted catalog is available immediately
+after startup. If it has no unique match, the router performs one bounded
+catalog refresh and retries resolution. Model listings and concurrent misses
+share that refresh; each caller can cancel its own wait. A short global cooldown
+limits repeated failed lookups without storing client-supplied model keys.
+If zero providers match, or more than one provider matches, the request must
 fail with `invalid_model`; the router must not guess across providers.
+
+Only complete credential-catalog unions replace persisted provider snapshots
+and the complete ephemeral Codex fallback. Partial discovery can expose newly
+observed models to the current lookup, but cannot erase known provider/model
+addresses. Successful complete refreshes can remove retired models. These
+addresses are routing hints only; account-scoped models still require fresh
+per-credential entitlement evidence before dispatch and retry.
+Every Codex model uses credential-catalog eligibility, without a hardcoded
+model-name list. Other provider types retain their existing availability policy.
 
 For `openrouter/deepseek/deepseek-v4-pro`:
 

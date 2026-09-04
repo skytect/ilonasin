@@ -33,6 +33,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request, token c
 	if err != nil {
 		s.writeOpenAIInvalidModel(w, r, "responses_route", err.Error(), func(status int, errorClass string) {
 			requestMeta := nativeResponsesRequestMetadataBase(start, token, routing.ModelAddress{}, provider.Instance{}, envelope)
+			requestMeta.RequestedModel = safeMetadataAddress(envelope.Model)
 			requestMeta.HTTPStatus = status
 			requestMeta.ErrorClass = errorClass
 			requestMeta.TotalLatencyMS = time.Since(start).Milliseconds()

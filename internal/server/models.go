@@ -13,96 +13,28 @@ import (
 )
 
 type modelDiscoveryAttempt struct {
-	models []provider.ModelMetadata
-	live   bool
+	models   []provider.ModelMetadata
+	live     bool
+	complete bool
 }
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request, _ credentials.VerifiedLocalToken) {
-	ctx := r.Context()
-	cacheByProvider := map[string][]metadata.ModelCacheRow{}
-	if s.cache != nil {
-		cached, err := s.cache.ListModelCache(ctx)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "model cache is unavailable", "api_error", "model_cache_unavailable")
+	catalog, err := s.refreshModelCatalog(r.Context())
+	if err != nil {
+		if r.Context().Err() != nil {
 			return
 		}
-		for _, row := range cached {
-			cacheByProvider[row.ProviderInstanceID] = append(cacheByProvider[row.ProviderInstanceID], row)
+		status, code := http.StatusBadGateway, "model_discovery_failed"
+		if errors.Is(err, errModelCacheUnavailable) {
+			status, code = http.StatusInternalServerError, "model_cache_unavailable"
+		} else if errors.Is(err, errModelCredentialResolver) {
+			status, code = http.StatusInternalServerError, "credential_resolver_failed"
 		}
-	}
-	var all []provider.ModelMetadata
-	attempted := 0
-	failedWithoutCache := 0
-	for _, instance := range s.registry.List() {
-		if ctx.Err() != nil {
-			return
-		}
-		if !instance.ModelDiscovery {
-			continue
-		}
-		credentialsSet, err := s.resolveModelCredentials(ctx, instance)
-		if err != nil {
-			if errors.Is(err, credentials.ErrNoEligibleCredential) {
-				continue
-			}
-			if errors.Is(err, credentials.ErrOAuthRefreshFailed) {
-				attempted++
-				fallback, ok := s.modelDiscoveryFallback(instance, cacheByProvider[instance.ID])
-				if !ok {
-					failedWithoutCache++
-				} else {
-					all = append(all, fallback...)
-				}
-				continue
-			}
-			writeError(w, http.StatusInternalServerError, "upstream credential resolver failed", "api_error", "credential_resolver_failed")
-			return
-		}
-		attempted++
-		var discoverer provider.ModelDiscoverer
-		ok := false
-		if s.models != nil {
-			discoverer, ok = s.models.ForProvider(instance.Type)
-		}
-		if !ok {
-			fallback, ok := s.modelDiscoveryFallback(instance, cacheByProvider[instance.ID])
-			if !ok {
-				failedWithoutCache++
-				continue
-			}
-			all = append(all, fallback...)
-			continue
-		}
-		attempt := s.discoverModelsWithCredentials(ctx, instance, discoverer, credentialsSet)
-		if ctx.Err() != nil {
-			return
-		}
-		if attempt.live && len(attempt.models) > 0 {
-			if s.cache != nil {
-				if err := s.cache.ReplaceModelCache(ctx, instance.ID, modelCacheRowsFromProvider(attempt.models)); err != nil {
-					writeError(w, http.StatusInternalServerError, "model cache is unavailable", "api_error", "model_cache_unavailable")
-					return
-				}
-			}
-			if instance.Type == "codex" {
-				s.lastGoodCodexModels.put(instance.ID, attempt.models)
-			}
-			all = append(all, attempt.models...)
-			continue
-		}
-		fallback, ok := s.modelDiscoveryFallback(instance, cacheByProvider[instance.ID])
-		if !ok {
-			failedWithoutCache++
-			continue
-		}
-		all = append(all, fallback...)
-	}
-	if len(all) == 0 && attempted > 0 && failedWithoutCache == attempted {
-		s.logHTTP(r, http.StatusBadGateway, "models_route", "model_discovery_failed")
-		writeError(w, http.StatusBadGateway, "model discovery failed", "api_error", "model_discovery_failed")
+		s.logHTTP(r, status, "models_route", code)
+		writeError(w, status, err.Error(), "api_error", code)
 		return
 	}
-	resp := modelsResponseFromMetadata(all)
+	resp := modelsResponseFromMetadata(catalog.models)
 	if s.logger != nil {
 		s.logAttrs(r, levelForStatus(http.StatusOK, ""), "models route complete",
 			slog.String("event", "models_route"),
@@ -131,7 +63,7 @@ func (s *Server) discoverModelsWithCredentials(ctx context.Context, instance pro
 	if !union {
 		for _, credential := range credentialsSet {
 			if models, ok := s.discoverModelsWithCredential(ctx, instance, discoverer, credential); ok {
-				return modelDiscoveryAttempt{models: models, live: true}
+				return modelDiscoveryAttempt{models: models, live: true, complete: true}
 			}
 			if ctx.Err() != nil {
 				return modelDiscoveryAttempt{}
@@ -140,12 +72,38 @@ func (s *Server) discoverModelsWithCredentials(ctx context.Context, instance pro
 		return modelDiscoveryAttempt{}
 	}
 
+	complete := true
 	byID := make(map[string]provider.ModelMetadata)
-	for _, credential := range credentialsSet {
-		models, ok := s.discoverModelsWithCredential(ctx, instance, discoverer, credential)
+	// Discover account-scoped catalogs concurrently with bounded worker count.
+	// One slow credential must not consume the entire shared refresh budget
+	// before the other credentials have even been queried.
+	type credentialResult struct {
+		models []provider.ModelMetadata
+		live   bool
+	}
+	results := make([]chan credentialResult, len(credentialsSet))
+	workers := make(chan struct{}, 4)
+	for i, credential := range credentialsSet {
+		results[i] = make(chan credentialResult, 1)
+		go func(out chan<- credentialResult, credential provider.BearerCredential) {
+			select {
+			case workers <- struct{}{}:
+				defer func() { <-workers }()
+			case <-ctx.Done():
+				out <- credentialResult{}
+				return
+			}
+			models, live := s.discoverModelsWithCredential(ctx, instance, discoverer, credential)
+			out <- credentialResult{models: models, live: live}
+		}(results[i], credential)
+	}
+	for i, credential := range credentialsSet {
+		result := <-results[i]
+		models, ok := result.models, result.live
 		now := s.now().UTC()
 		key := modelCatalogKey(instance.ID, credential)
 		if !ok {
+			complete = false
 			s.credentialModelCatalogs.fail(now, key)
 			if ctx.Err() != nil {
 				return modelDiscoveryAttempt{}
@@ -167,10 +125,12 @@ func (s *Server) discoverModelsWithCredentials(ctx context.Context, instance pro
 		models = append(models, model)
 	}
 	sort.Slice(models, func(i, j int) bool { return models[i].ModelID < models[j].ModelID })
-	return modelDiscoveryAttempt{models: models, live: true}
+	return modelDiscoveryAttempt{models: models, live: true, complete: complete}
 }
 
 func (s *Server) discoverModelsWithCredential(ctx context.Context, instance provider.Instance, discoverer provider.ModelDiscoverer, credential provider.BearerCredential) ([]provider.ModelMetadata, bool) {
+	ctx, cancel := context.WithTimeout(ctx, modelCatalogCredentialTimeout)
+	defer cancel()
 	if ctx.Err() != nil {
 		return nil, false
 	}

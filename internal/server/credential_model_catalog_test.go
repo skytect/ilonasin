@@ -169,6 +169,7 @@ func TestSharedModelRoutingDoesNotRequireCatalogDiscovery(t *testing.T) {
 	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
 	discoverer := &testCatalogDiscoverer{catalogs: map[int64][]string{101: {"gpt-5.6-sol"}, 202: {"gpt-5.6-sol"}}}
 	srv, instance := newCatalogRoutingServer(&now, discoverer, 101, 202)
+	instance.Type = "deepseek"
 
 	got, err := srv.resolveModelCredentialsForModel(context.Background(), instance, "gpt-5.6-sol")
 	if err != nil || len(got) != 2 {

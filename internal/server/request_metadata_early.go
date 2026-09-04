@@ -14,6 +14,7 @@ func earlyChatRequestMetadata(start time.Time, token credentials.VerifiedLocalTo
 	out := metadata.Request{
 		StartedAt:       start,
 		ClientTokenID:   token.ID,
+		RequestedModel:  safeMetadataAddress(req.Model),
 		Endpoint:        endpoint,
 		Stream:          req.Stream,
 		MessageCount:    len(req.Messages) + len(req.CodexResponsesInput),

@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
-	"strings"
 	"time"
 
 	"ilonasin/internal/metadata"
@@ -21,8 +20,10 @@ func (a HTTPChatAdapter) ModelAvailabilityScope(instance Instance, modelID strin
 	return BuiltInModelAvailabilityScope(instance, modelID)
 }
 
-func BuiltInModelAvailabilityScope(instance Instance, modelID string) ModelAvailabilityScope {
-	if instance.Type == "codex" && strings.HasPrefix(modelID, "gpt-daybreak-") {
+func BuiltInModelAvailabilityScope(instance Instance, _ string) ModelAvailabilityScope {
+	// Codex model availability is account-scoped. Consult the advertised
+	// catalog for every model rather than maintaining a model-name allowlist.
+	if instance.Type == "codex" {
 		return ModelAvailabilityCredentialCatalog
 	}
 	return ModelAvailabilityShared

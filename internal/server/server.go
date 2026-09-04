@@ -30,6 +30,7 @@ type Server struct {
 	lastGoodCodexModels     ephemeralCodexModelCache
 	credentialModelCatalogs credentialModelCatalogCache
 	credentialModelRefresh  sync.Mutex
+	catalogRefresh          modelCatalogRefresh
 }
 
 func New(registry ProviderRegistry, auth credentials.LocalTokenVerifier, upstreams credentials.UpstreamCredentialResolver, oauth credentials.OAuthBearerResolver, adapters provider.ChatAdapters, models provider.ModelDiscoverers, cache ModelCache, meta MetadataRecorder) *Server {

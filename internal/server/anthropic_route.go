@@ -79,9 +79,10 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request,
 	}
 	credentialsSet, err := s.resolveModelCredentialsForModel(r.Context(), instance, addr.ProviderModelID, addr.AccountSelector)
 	if err != nil {
-		s.recordAnthropicEarly(r, start, token, addr, instance, chatReq, req, http.StatusUnauthorized, "credential_unavailable")
-		s.logHTTP(r, http.StatusUnauthorized, "anthropic_route", "credential_unavailable")
-		writeAnthropicError(w, http.StatusUnauthorized, "no eligible upstream credential is available")
+		failure := prepareCredentialFailure(w, err)
+		s.recordAnthropicEarly(r, start, token, addr, instance, chatReq, req, failure.Status, failure.ErrorClass)
+		s.logHTTP(r, failure.Status, "anthropic_route", failure.ErrorClass)
+		writeAnthropicError(w, failure.Status, failure.Message)
 		return
 	}
 	nc := nonStreamContext{

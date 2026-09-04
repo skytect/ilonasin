@@ -12,9 +12,9 @@ import (
 )
 
 const (
-	modelCatalogRefreshTimeout    = 30 * time.Second
+	modelCatalogRefreshTimeout    = 90 * time.Second
 	modelCatalogRefreshCooldown   = time.Second
-	modelCatalogCredentialTimeout = 10 * time.Second
+	modelCatalogCredentialTimeout = 30 * time.Second
 )
 
 var (

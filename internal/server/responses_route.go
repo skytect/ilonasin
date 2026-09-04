@@ -98,7 +98,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request, token c
 	}
 	credentialsSet, err := s.resolveModelCredentialsForModel(r.Context(), instance, addr.ProviderModelID, addr.AccountSelector)
 	if err != nil {
-		writeOpenAICredentialUnavailable(w, func(status int, errorClass string) {
+		writeOpenAICredentialFailure(w, err, func(status int, errorClass string) {
 			requestMeta := responsesRequestMetadataBase(start, token, addr, instance, responsesReq)
 			requestMeta.HTTPStatus = status
 			requestMeta.ErrorClass = errorClass
@@ -175,7 +175,7 @@ func (s *Server) handleNativeResponsesRoute(w http.ResponseWriter, r *http.Reque
 	}
 	credentialsSet, err := s.resolveModelCredentialsForModel(r.Context(), instance, addr.ProviderModelID, addr.AccountSelector)
 	if err != nil {
-		writeOpenAICredentialUnavailable(w, func(status int, errorClass string) {
+		writeOpenAICredentialFailure(w, err, func(status int, errorClass string) {
 			s.recordNativeResponsesEarly(r, start, token, addr, instance, envelope, status, errorClass)
 		})
 		return

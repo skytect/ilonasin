@@ -142,7 +142,7 @@ func TestAccountScopedModelFailsClosedWithoutDiscoveryCapability(t *testing.T) {
 	srv := NewWithClock(nil, nil, nil, oauth, nil, nil, nil, nil, func() time.Time { return now })
 
 	got, err := srv.resolveModelCredentialsForModel(context.Background(), instance, testAccountScopedModel)
-	if !errors.Is(err, credentials.ErrNoEligibleCredential) || len(got) != 0 {
+	if !errors.Is(err, errModelEntitlementUnavailable) || len(got) != 0 {
 		t.Fatalf("expected missing discovery capability to fail closed, got credentials=%v err=%v", credentialIDs(got), err)
 	}
 }
@@ -160,7 +160,7 @@ func TestAccountScopedModelStaleFailedDiscoveryFailsClosed(t *testing.T) {
 	discoverer.failures[101] = true
 	discoverer.mu.Unlock()
 	got, err := srv.resolveModelCredentialsForModel(context.Background(), instance, testAccountScopedModel)
-	if !errors.Is(err, credentials.ErrNoEligibleCredential) || len(got) != 0 {
+	if !errors.Is(err, errModelEntitlementUnavailable) || len(got) != 0 {
 		t.Fatalf("expected stale failed discovery to fail closed, got credentials=%v err=%v", credentialIDs(got), err)
 	}
 }

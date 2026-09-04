@@ -284,8 +284,8 @@ func TestPartialCatalogPreservesAliasesWithoutGrantingEntitlement(t *testing.T) 
 		}
 	}
 	eligible, err := srv.resolveModelCredentialsForModel(context.Background(), instance, testAccountScopedModel)
-	if !errors.Is(err, credentials.ErrNoEligibleCredential) || len(eligible) != 0 {
-		t.Fatalf("retained alias granted failed credential entitlement: IDs=%v err=%v", credentialIDs(eligible), err)
+	if err != nil || len(eligible) != 1 || eligible[0].ID != 202 {
+		t.Fatalf("transient refresh erased unexpired credential entitlement: IDs=%v err=%v", credentialIDs(eligible), err)
 	}
 	discoverer.mu.Lock()
 	discoverer.failures[202] = false
@@ -337,7 +337,7 @@ func TestSlowCredentialPreservesSnapshotAndDiscoversNewAlias(t *testing.T) {
 	discoverer.catalogs[202] = []string{"new-model"}
 	discoverer.mu.Unlock()
 	srv.models = provider.StaticModelDiscoverers{"codex": &slowResolutionDiscoverer{testCatalogDiscoverer: discoverer, slowID: 101}}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), modelCatalogCredentialTimeout+5*time.Second)
 	defer cancel()
 	addr, err := srv.resolveModelAddress(ctx, "new-model")
 	if err != nil || addr.ProviderInstanceID != instance.ID || addr.ProviderModelID != "new-model" {
@@ -405,7 +405,7 @@ func TestBareHTTPModelPersistsAcrossServerRecreation(t *testing.T) {
 		w := httptest.NewRecorder()
 		srv.Handler().ServeHTTP(w, req)
 		if pass == 1 {
-			if w.Code != http.StatusUnauthorized || !strings.Contains(w.Body.String(), "credential_unavailable") || len(adapter.requests) != 0 {
+			if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "model_entitlement_unavailable") || w.Header().Get("Retry-After") != "30" || len(adapter.requests) != 0 {
 				t.Fatalf("persisted alias bypassed fresh Codex entitlement: status=%d body=%s requests=%d", w.Code, w.Body.String(), len(adapter.requests))
 			}
 			continue

@@ -103,26 +103,35 @@ func (c *credentialModelCatalogCache) put(now time.Time, key credentialModelCata
 		expiresAt: now.Add(credentialModelCatalogTTL),
 		observed:  now,
 		bytes:     retainedBytes,
-	})
+	}, false)
 }
 
 func (c *credentialModelCatalogCache) fail(now time.Time, key credentialModelCatalogKey) {
+	c.recordFailure(now, key, false)
+}
+
+func (c *credentialModelCatalogCache) recordFailure(now time.Time, key credentialModelCatalogKey, transient bool) {
 	if c == nil || key.credentialID == 0 {
 		return
 	}
 	c.store(key, credentialModelCatalogEntry{
 		expiresAt: now.Add(credentialModelCatalogFailureTTL),
 		observed:  now,
-	})
+	}, transient)
 }
 
-func (c *credentialModelCatalogCache) store(key credentialModelCatalogKey, entry credentialModelCatalogEntry) {
+func (c *credentialModelCatalogCache) store(key credentialModelCatalogKey, entry credentialModelCatalogEntry, preserveFresh bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.entries == nil {
 		c.entries = make(map[credentialModelCatalogKey]credentialModelCatalogEntry)
 	}
 	if previous, exists := c.entries[key]; exists {
+		// A failed refresh cannot extend proof lifetime or erase still-valid
+		// evidence for the same bearer generation during a transient outage.
+		if preserveFresh && previous.known && entry.observed.Before(previous.expiresAt) {
+			return
+		}
 		c.bytes -= previous.bytes
 		delete(c.entries, key)
 	}

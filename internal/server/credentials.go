@@ -10,6 +10,8 @@ import (
 	"ilonasin/internal/provider"
 )
 
+var errModelEntitlementUnavailable = errors.New("model eligibility is temporarily unavailable")
+
 func (s *Server) resolveModelCredentials(ctx context.Context, instance provider.Instance) ([]provider.BearerCredential, error) {
 	if instance.APIKey {
 		credentialsSet, err := s.upstreams.ResolveAPIKeys(ctx, instance.ID)
@@ -66,19 +68,24 @@ func (s *Server) resolveModelCredentialsForModel(ctx context.Context, instance p
 	if err != nil {
 		return nil, err
 	}
+	if len(credentialsSet) == 0 {
+		return nil, credentials.ErrNoEligibleCredential
+	}
 	discoverer, scope, discovererAvailable := s.modelAvailabilityScope(instance, modelID)
 	if scope != provider.ModelAvailabilityCredentialCatalog {
 		return credentialsSet, nil
 	}
 	if !discovererAvailable {
-		return nil, credentials.ErrNoEligibleCredential
+		return nil, errModelEntitlementUnavailable
 	}
 
 	credentialsSet = s.refreshMissingCredentialModelCatalogs(ctx, instance, discoverer, credentialsSet)
 	eligible := make([]provider.BearerCredential, 0, len(credentialsSet))
+	unknown := false
 	for _, credential := range credentialsSet {
 		catalog, known, cached := s.credentialModelCatalogs.lookup(s.now().UTC(), modelCatalogKey(instance.ID, credential))
 		if !cached || !known {
+			unknown = true
 			continue
 		}
 		if modelCatalogAdvertises(catalog, modelID, selectors) {
@@ -86,6 +93,9 @@ func (s *Server) resolveModelCredentialsForModel(ctx context.Context, instance p
 		}
 	}
 	if len(eligible) == 0 {
+		if unknown {
+			return nil, errModelEntitlementUnavailable
+		}
 		return nil, credentials.ErrNoEligibleCredential
 	}
 	return eligible, nil

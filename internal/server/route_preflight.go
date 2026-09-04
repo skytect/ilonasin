@@ -1,7 +1,10 @@
 package server
 
 import (
+	"errors"
 	"net/http"
+	"strconv"
+	"time"
 
 	"ilonasin/internal/openai"
 	"ilonasin/internal/provider"
@@ -41,9 +44,30 @@ func (s *Server) writeOpenAIUnsupportedRequest(w http.ResponseWriter, r *http.Re
 	writeError(w, http.StatusBadRequest, message, "invalid_request_error", "unsupported_request")
 }
 
-func writeOpenAICredentialUnavailable(w http.ResponseWriter, record func(status int, errorClass string)) {
-	record(http.StatusUnauthorized, "credential_unavailable")
-	writeError(w, http.StatusUnauthorized, "no eligible upstream credential is available", "invalid_request_error", "credential_unavailable")
+func prepareCredentialFailure(w http.ResponseWriter, err error) routePreflightResult {
+	if errors.Is(err, errModelEntitlementUnavailable) {
+		w.Header().Set("Retry-After", strconv.FormatInt(int64(credentialModelCatalogFailureTTL/time.Second), 10))
+		return routePreflightResult{
+			Status:     http.StatusServiceUnavailable,
+			ErrorClass: "model_entitlement_unavailable",
+			Message:    errModelEntitlementUnavailable.Error(),
+		}
+	}
+	return routePreflightResult{
+		Status:     http.StatusUnauthorized,
+		ErrorClass: "credential_unavailable",
+		Message:    "no eligible upstream credential is available",
+	}
+}
+
+func writeOpenAICredentialFailure(w http.ResponseWriter, err error, record func(status int, errorClass string)) {
+	failure := prepareCredentialFailure(w, err)
+	errorType := "invalid_request_error"
+	if failure.Status == http.StatusServiceUnavailable {
+		errorType = "api_error"
+	}
+	record(failure.Status, failure.ErrorClass)
+	writeError(w, failure.Status, failure.Message, errorType, failure.ErrorClass)
 }
 
 func (s *Server) writeOpenAIProviderNotConfigured(w http.ResponseWriter, r *http.Request, routeEvent string, record func(status int, errorClass string)) {

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"net/http"
 	"sync"
 	"time"
 
@@ -12,6 +13,7 @@ type credentialModelObservation struct {
 	credential provider.BearerCredential
 	models     []provider.ModelMetadata
 	live       bool
+	transient  bool
 }
 
 type credentialModelFlight struct {
@@ -61,7 +63,7 @@ func (s *Server) observeCredentialModels(ctx context.Context, instance provider.
 			if observation.live {
 				s.credentialModelCatalogs.put(s.now().UTC(), observedKey, providerModelIDs(observation.models))
 			} else {
-				s.credentialModelCatalogs.fail(s.now().UTC(), observedKey)
+				s.credentialModelCatalogs.recordFailure(s.now().UTC(), observedKey, observation.transient)
 			}
 			state.mu.Lock()
 			flight.observation = observation
@@ -82,9 +84,11 @@ func (s *Server) observeCredentialModels(ctx context.Context, instance provider.
 func (s *Server) fetchCredentialModels(ctx context.Context, instance provider.Instance, discoverer provider.ModelDiscoverer, credential provider.BearerCredential) credentialModelObservation {
 	observation := credentialModelObservation{credential: credential}
 	result, err := discoverer.ListModels(ctx, provider.ModelRequest{Instance: instance, Credential: credential})
+	observation.live = ctx.Err() == nil && err == nil && len(result.Models) > 0
+	observation.transient = transientModelDiscoveryFailure(ctx, result)
 	s.recordModelDiscoveryHealth(ctx, instance, credential, result, err)
-	if ctx.Err() == nil && err == nil && len(result.Models) > 0 {
-		observation.models, observation.live = result.Models, true
+	if observation.live {
+		observation.models = result.Models
 		return observation
 	}
 	if ctx.Err() != nil || !s.shouldRefreshOAuthAfterModel401(instance, result) {
@@ -96,11 +100,33 @@ func (s *Server) fetchCredentialModels(ctx context.Context, instance provider.In
 	}
 	observation.credential = refreshed
 	result, err = discoverer.ListModels(ctx, provider.ModelRequest{Instance: instance, Credential: refreshed})
+	observation.live = ctx.Err() == nil && err == nil && len(result.Models) > 0
+	observation.transient = transientModelDiscoveryFailure(ctx, result)
 	s.recordModelDiscoveryHealth(ctx, instance, refreshed, result, err)
-	if ctx.Err() == nil && err == nil && len(result.Models) > 0 {
-		observation.models, observation.live = result.Models, true
+	if observation.live {
+		observation.models = result.Models
 	}
 	return observation
+}
+
+func transientModelDiscoveryFailure(ctx context.Context, result provider.ModelResult) bool {
+	// Authentication and other definitive client rejections override a deadline
+	// that happened to expire while their response was being processed.
+	if result.StatusCode >= 400 && result.StatusCode < 500 {
+		return result.StatusCode == http.StatusRequestTimeout || result.StatusCode == http.StatusTooManyRequests
+	}
+	switch result.ErrorClass {
+	case "upstream_invalid_response", "upstream_body_too_large", "provider_config_error", "upstream_request_error":
+		return false
+	}
+	if ctx.Err() != nil || result.StatusCode >= 500 {
+		return true
+	}
+	switch result.ErrorClass {
+	case "upstream_timeout", "upstream_network_error", "client_disconnected":
+		return true
+	}
+	return false
 }
 
 func (s *Server) recordModelDiscoveryHealth(ctx context.Context, instance provider.Instance, credential provider.BearerCredential, result provider.ModelResult, err error) {

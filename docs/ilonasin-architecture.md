@@ -369,7 +369,7 @@ Credential pooling is constrained:
 
 For provider models whose availability is account-scoped, eligibility must come
 from a bounded-freshness live model-catalog observation for each credential.
-Unknown, stale, or failed observations are ineligible, and retries must remain
+Unknown or stale observations are ineligible, and retries must remain
 inside the catalog-eligible subset. Shared models keep the normal pool behavior
 without mandatory per-request catalog discovery.
 
@@ -377,7 +377,14 @@ Model listings and request eligibility use the same per-credential discovery
 path. Concurrent callers share in-flight discovery for a credential and bearer
 generation; each can cancel its own wait. Network calls do not hold a global
 discovery lock. Successful observations populate the bounded model-ID proof
-cache; failures invalidate eligibility briefly. OAuth refresh returns the
+cache. Transient refresh failures preserve unexpired proof for the same bearer
+generation without extending its five-minute lifetime. Definitive rejections
+and invalid catalogs invalidate proof; successful catalogs replace it. Missing
+proof after failed discovery returns retryable HTTP 503 with a 30-second
+Retry-After instead of an authentication error. Known catalogs excluding the
+requested model and unavailable credentials retain their existing rejection.
+Discovery allows 30 seconds per credential and 90 seconds per catalog refresh.
+Health persistence cannot change a completed discovery result. OAuth refresh returns the
 updated bearer identity for both proof caching and request dispatch. Full model
 metadata is retained by active discovery callers and the existing bounded Codex
 listing fallback, not by a second long-lived credential metadata cache.

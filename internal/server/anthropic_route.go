@@ -34,7 +34,7 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request,
 		writeAnthropicError(w, status, err.Error())
 		return
 	}
-	addr, err := s.resolveAnthropicModelAddress(req.Model)
+	addr, err := s.resolveModelAddress(r.Context(), req.Model)
 	if err != nil {
 		_ = s.record(r.Context(), earlyAnthropicRequestMetadata(start, token, req, http.StatusBadRequest, "invalid_model"))
 		s.logHTTP(r, http.StatusBadRequest, "anthropic_route", "invalid_model")
@@ -77,7 +77,7 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request,
 		writeAnthropicError(w, preflight.Status, preflight.Message)
 		return
 	}
-	credentialsSet, err := s.resolveModelCredentialsForModel(r.Context(), instance, addr.ProviderModelID)
+	credentialsSet, err := s.resolveModelCredentialsForModel(r.Context(), instance, addr.ProviderModelID, addr.AccountSelector)
 	if err != nil {
 		s.recordAnthropicEarly(r, start, token, addr, instance, chatReq, req, http.StatusUnauthorized, "credential_unavailable")
 		s.logHTTP(r, http.StatusUnauthorized, "anthropic_route", "credential_unavailable")
@@ -137,10 +137,6 @@ func (s *Server) handleAnthropicMessages(w http.ResponseWriter, r *http.Request,
 	}
 	writeJSON(w, http.StatusOK, resp)
 	s.recordNonStreamingChat(r, nc, exec, status, errorClass)
-}
-
-func (s *Server) resolveAnthropicModelAddress(model string) (routing.ModelAddress, error) {
-	return routing.ParseModelAddress(model)
 }
 
 func (s *Server) recordAnthropicEarly(r *http.Request, start time.Time, token credentials.VerifiedLocalToken, addr routing.ModelAddress, instance provider.Instance, chatReq openai.ChatCompletionRequest, req anthropic.Request, status int, errorClass string) {

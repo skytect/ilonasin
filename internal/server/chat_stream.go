@@ -212,9 +212,14 @@ func (s *Server) executeStreamingChat(r *http.Request, sc streamContext, sink *s
 
 func (s *Server) streamChatAttempt(r *http.Request, sc streamContext, sink *streamSink, credential provider.BearerCredential, modelCredential provider.BearerCredential, releaseAttempt func()) (provider.ChatStreamSummary, error) {
 	defer releaseAttempt()
-	if !s.credentialModelEligibleForAttempt(r.Context(), sc.instance, sc.address.ProviderModelID, modelCredential) {
+	modelCredential, eligible := s.credentialModelEligibleForAttempt(r.Context(), sc.instance, sc.address.ProviderModelID, modelCredential, sc.address.AccountSelector)
+	if !eligible {
 		return provider.ChatStreamSummary{StatusCode: http.StatusServiceUnavailable, ErrorClass: "model_entitlement_unavailable", CompletionStatus: "upstream_error", PreStreamError: true}, errors.New("fresh model entitlement is unavailable")
 	}
+	if credential.ID == modelCredential.ID {
+		credential = modelCredential
+	}
+
 	return sc.adapter.StreamChat(r.Context(), providerChatRequest(sc.instance, sc.address, sc.request, credential, modelCredential), sink)
 }
 

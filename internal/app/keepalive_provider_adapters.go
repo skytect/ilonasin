@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"errors"
+	"strings"
 
 	"ilonasin/internal/metadata"
 	"ilonasin/internal/openai"
@@ -73,12 +75,25 @@ func (a keepaliveProviderRegistryAdapter) List() []keepaliveProvider {
 
 type keepaliveChatAdapter struct {
 	adapter provider.ChatAdapter
+	models  provider.ModelDiscoverer
 }
 
 func (a keepaliveChatAdapter) CompleteKeepaliveChat(ctx context.Context, req keepaliveChatRequest) (keepaliveChatResult, error) {
+	catalog, err := a.models.ListModels(ctx, provider.ModelRequest{
+		Instance:   providerInstanceFromKeepalive(req.Provider),
+		Credential: providerBearerCredentialFromKeepalive(req.Credential),
+	})
+	if err != nil {
+		return keepaliveChatResult{StatusCode: catalog.StatusCode, ErrorClass: firstNonEmpty(catalog.ErrorClass, "model_discovery_failed")}, err
+	}
+	model, err := selectKeepaliveModel(catalog.Models, req.UpstreamModel)
+	if err != nil {
+		return keepaliveChatResult{ErrorClass: "model_unavailable"}, err
+	}
+	req.Request.Model = model
 	result, err := a.adapter.CompleteChat(ctx, provider.ChatRequest{
 		Instance:      providerInstanceFromKeepalive(req.Provider),
-		UpstreamModel: req.UpstreamModel,
+		UpstreamModel: model,
 		Request:       req.Request,
 		Credential:    providerChatCredentialFromKeepalive(req.Credential),
 	})
@@ -87,6 +102,35 @@ func (a keepaliveChatAdapter) CompleteKeepaliveChat(ctx context.Context, req kee
 		ErrorClass: result.ErrorClass,
 		Usage:      result.Usage,
 	}, err
+}
+
+func selectKeepaliveModel(models []provider.ModelMetadata, configured string) (string, error) {
+	configured = strings.TrimSpace(configured)
+	var selected *provider.ModelMetadata
+	for i := range models {
+		model := &models[i]
+		if _, selector := provider.AccountSelectorFromModelID(model.ModelID); selector {
+			continue
+		}
+		if configured != "" {
+			if model.ModelID == configured {
+				return model.ModelID, nil
+			}
+			continue
+		}
+		if model.ModelID == "" || model.Codex == nil || model.Codex.Visibility != "list" {
+			continue
+		}
+		// Follow the provider's model-picker priority, with a stable tie break.
+		if selected == nil || model.Codex.Priority < selected.Codex.Priority ||
+			(model.Codex.Priority == selected.Codex.Priority && model.ModelID < selected.ModelID) {
+			selected = model
+		}
+	}
+	if selected != nil {
+		return selected.ModelID, nil
+	}
+	return "", errors.New("no advertised keepalive model available")
 }
 
 type keepaliveUsageAdapter struct {
@@ -160,11 +204,11 @@ func keepaliveProviderRegistryFromProvider(registry provider.Registry) keepalive
 	return keepaliveProviderRegistryAdapter{registry: registry}
 }
 
-func keepaliveChatClientFromProvider(adapter provider.ChatAdapter) keepaliveChatClient {
-	if adapter == nil {
+func keepaliveChatClientFromProvider(adapter provider.ChatAdapter, models provider.ModelDiscoverer) keepaliveChatClient {
+	if adapter == nil || models == nil {
 		return nil
 	}
-	return keepaliveChatAdapter{adapter: adapter}
+	return keepaliveChatAdapter{adapter: adapter, models: models}
 }
 
 func keepaliveUsageClientFromProvider(client provider.CodexSubscriptionUsageClient) keepaliveUsageClient {

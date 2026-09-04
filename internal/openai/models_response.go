@@ -96,9 +96,10 @@ type ModelsResponse struct {
 }
 
 type ModelListItem struct {
-	ID      string `json:"id"`
-	Object  string `json:"object"`
-	OwnedBy string `json:"owned_by"`
+	ID            string `json:"id"`
+	Object        string `json:"object"`
+	OwnedBy       string `json:"owned_by"`
+	ContextLength *int64 `json:"context_length,omitempty"`
 }
 
 type CodexModelInfo struct {
@@ -155,9 +156,10 @@ func ModelsResponseFromMetadata(rows []ModelMetadata) ModelsResponse {
 	for _, row := range rows {
 		id := row.ProviderInstanceID + "/" + row.ModelID
 		data = append(data, ModelListItem{
-			ID:      id,
-			Object:  "model",
-			OwnedBy: row.ProviderInstanceID,
+			ID:            id,
+			Object:        "model",
+			OwnedBy:       row.ProviderInstanceID,
+			ContextLength: row.ContextLength,
 		})
 		if codex, ok := codexModelInfoFromMetadata(row, id); ok {
 			codexModels = append(codexModels, codex)

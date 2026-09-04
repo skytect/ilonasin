@@ -2,7 +2,6 @@ package server
 
 import (
 	"log/slog"
-	"sync"
 	"time"
 
 	"ilonasin/internal/credentials"
@@ -29,7 +28,7 @@ type Server struct {
 
 	lastGoodCodexModels     ephemeralCodexModelCache
 	credentialModelCatalogs credentialModelCatalogCache
-	credentialModelRefresh  sync.Mutex
+	credentialDiscovery     credentialModelDiscovery
 	catalogRefresh          modelCatalogRefresh
 }
 

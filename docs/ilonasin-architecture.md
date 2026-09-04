@@ -259,11 +259,14 @@ If zero providers match, or more than one provider matches, the request must
 fail with `invalid_model`; the router must not guess across providers.
 
 Only complete credential-catalog unions replace persisted provider snapshots
-and the complete ephemeral Codex fallback. Partial discovery can expose newly
-observed models to the current lookup, but cannot erase known provider/model
-addresses. Successful complete refreshes can remove retired models. These
-addresses are routing hints only; account-scoped models still require fresh
-per-credential entitlement evidence before dispatch and retry.
+and the complete ephemeral Codex fallback. Partial discovery merges safe model
+metadata into the persisted address cache without erasing known provider/model
+addresses. Newly observed ambiguity therefore remains visible to later requests
+and after restart. Resolution after a refresh uses its combined observations;
+an older unique cache entry cannot override a newly discovered second provider.
+Successful complete refreshes can remove retired models. These addresses are
+routing hints only; account-scoped models still require fresh per-credential
+entitlement evidence before dispatch and retry.
 Every Codex model uses credential-catalog eligibility, without a hardcoded
 model-name list. Other provider types retain their existing availability policy.
 
@@ -283,6 +286,34 @@ For `codex/gpt-5.5`:
 - provider model ID: `gpt-5.5`
 
 Provider classes are inferred from the configured provider instance.
+
+### Account Selectors
+
+Codex account cohorts can be selected independently of the requested model by
+appending a final `/daybreak-<name>` segment:
+
+```text
+gpt-5.6-sol/daybreak-blue
+gpt-6-astra/daybreak-red
+codex/gpt-5.6-sol/daybreak-blue
+```
+
+The suffix is an account constraint. Ilonasin strips it before provider dispatch
+and sends the base model unchanged. Provider-qualified addresses remain
+supported. Bare addresses must identify a unique Codex provider with discovery
+evidence for the requested base model and cohort. Non-Codex providers reject
+the selector.
+
+Cohort names come from upstream `gpt-daybreak-<name>-latest` catalog markers,
+without a model or colour allowlist. Names use lowercase letters, digits, or
+hyphens. Each eligible credential must advertise both the base model and the
+matching marker in its own fresh catalog. A union of two accounts advertising
+one requirement each is insufficient. An unavailable cohort fails closed;
+retries retain both requirements and cannot broaden the account pool.
+
+Requested-model metadata retains the suffix, while resolved-model metadata
+identifies the base model sent upstream. The cohort marker is not used as a
+replacement inference model for a suffixed request.
 
 ### Modes and Reasoning Effort
 
@@ -341,6 +372,15 @@ from a bounded-freshness live model-catalog observation for each credential.
 Unknown, stale, or failed observations are ineligible, and retries must remain
 inside the catalog-eligible subset. Shared models keep the normal pool behavior
 without mandatory per-request catalog discovery.
+
+Model listings and request eligibility use the same per-credential discovery
+path. Concurrent callers share in-flight discovery for a credential and bearer
+generation; each can cancel its own wait. Network calls do not hold a global
+discovery lock. Successful observations populate the bounded model-ID proof
+cache; failures invalidate eligibility briefly. OAuth refresh returns the
+updated bearer identity for both proof caching and request dispatch. Full model
+metadata is retained by active discovery callers and the existing bounded Codex
+listing fallback, not by a second long-lived credential metadata cache.
 
 No cross-provider fallback by default.
 
@@ -430,6 +470,27 @@ never require clients to send a session field. When no safe client signal is
 available, pooling still spreads traffic across eligible credentials using the
 verified local token identity, requested route, in-flight pressure, and cursor
 state.
+
+### Subscription Keepalive
+
+`[subscription_keepalive].enabled` opts into short scheduled requests on each
+resolved Codex OAuth credential. The default schedule is `07:00`, `12:00`,
+`17:00`, and `22:00`. `timezone` defaults to `local` and accepts an IANA timezone;
+invalid zones fail configuration loading. Slot matching and daily completion
+keys use that configured timezone.
+
+Before each keepalive request, discover the account's advertised catalog with
+the resolved bearer. If `model` is configured, require that exact advertised
+model. Otherwise choose the visible model with lowest upstream picker priority,
+using its model ID as a deterministic tie break. Daybreak cohort markers are
+excluded from this model selection. Failed discovery or missing eligibility
+skips the ping; no fixed fallback model is substituted.
+
+Keepalive leaves reasoning and verbosity to upstream defaults. There is no
+hardcoded model, assumed model price, or forced reasoning level. Successful
+requests refresh subscription usage. The Codex wire output cap remains
+unverified, so enabled keepalive reports `enabled_uncapped`; the short prompt
+does not enforce a token limit.
 
 ### Observability and Logging
 

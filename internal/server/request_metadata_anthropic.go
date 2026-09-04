@@ -21,7 +21,7 @@ func anthropicCountTokensMetadata(start time.Time, token credentials.VerifiedLoc
 		ToolCount:                 len(req.Tools),
 		ImageCount:                anthropic.RequestImageCount(req),
 		RequestedProviderInstance: safeMetadataAddress(addr.ProviderInstanceID),
-		RequestedModel:            safeMetadataAddress(addr.ProviderModelID),
+		RequestedModel:            safeMetadataAddress(addr.RequestedModel()),
 		ResolvedProviderInstance:  safeMetadataAddress(addr.ProviderInstanceID),
 		ResolvedModel:             safeMetadataAddress(addr.ProviderModelID),
 		MaxOutputTokens:           req.MaxOutputTokens(),

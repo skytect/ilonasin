@@ -138,13 +138,18 @@ func providerRegistryConfig(cfg config.Config) provider.RegistryConfig {
 	return provider.RegistryConfig{Providers: providers}
 }
 
-func subscriptionKeepaliveSettingsFromConfig(cfg config.SubscriptionKeepaliveConfig) subscriptionKeepaliveSettings {
+func subscriptionKeepaliveSettingsFromConfig(cfg config.SubscriptionKeepaliveConfig) (subscriptionKeepaliveSettings, error) {
+	location, err := config.SubscriptionKeepaliveLocation(cfg.Timezone)
+	if err != nil {
+		return subscriptionKeepaliveSettings{}, err
+	}
 	return subscriptionKeepaliveSettings{
 		Enabled:           cfg.Enabled,
+		Location:          location,
 		ScheduleTimes:     config.SubscriptionKeepaliveScheduleTimes(cfg.ScheduleTimes),
 		Model:             cfg.Model,
 		OutputCapVerified: config.SubscriptionKeepaliveOutputCapVerified(cfg),
-	}
+	}, nil
 }
 
 func loadConfig(path, homeDir string, createDefault bool) (config.Config, string, error) {

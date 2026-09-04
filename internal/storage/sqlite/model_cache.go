@@ -11,6 +11,14 @@ import (
 )
 
 func (s *Store) ReplaceModelCache(ctx context.Context, providerInstanceID string, models []metadata.ModelCacheRow) error {
+	return s.writeModelCache(ctx, providerInstanceID, models, true)
+}
+
+func (s *Store) MergeModelCache(ctx context.Context, providerInstanceID string, models []metadata.ModelCacheRow) error {
+	return s.writeModelCache(ctx, providerInstanceID, models, false)
+}
+
+func (s *Store) writeModelCache(ctx context.Context, providerInstanceID string, models []metadata.ModelCacheRow, replace bool) error {
 	if len(models) == 0 {
 		return fmt.Errorf("model cache replacement requires at least one model")
 	}
@@ -19,8 +27,10 @@ func (s *Store) ReplaceModelCache(ctx context.Context, providerInstanceID string
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `DELETE FROM model_cache WHERE provider_instance_id = ?`, providerInstanceID); err != nil {
-		return err
+	if replace {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM model_cache WHERE provider_instance_id = ?`, providerInstanceID); err != nil {
+			return err
+		}
 	}
 	for _, model := range models {
 		model = metadata.NormalizeModelCacheRow(model)
@@ -40,7 +50,7 @@ func (s *Store) ReplaceModelCache(ctx context.Context, providerInstanceID string
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO model_cache(
+			INSERT OR REPLACE INTO model_cache(
 				provider_instance_id, model_id, display_name, capability_flags,
 				context_length, max_context_window, default_reasoning_level,
 				supported_reasoning_levels_json, default_service_tier, service_tiers_json,

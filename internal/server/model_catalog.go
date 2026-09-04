@@ -43,6 +43,20 @@ type modelCatalogRefresh struct {
 	last   *modelCatalogFlight
 }
 
+// Both complete and partial observations persist safe routing hints. Prompt
+// metadata and credential entitlement remain outside this address cache.
+func (s *Server) modelResolutionRows(ctx context.Context) ([]metadata.ModelCacheRow, error) {
+	var rows []metadata.ModelCacheRow
+	if s.cache != nil {
+		var err error
+		rows, err = s.cache.ListModelCache(ctx)
+		if err != nil {
+			return nil, errModelCacheUnavailable
+		}
+	}
+	return rows, nil
+}
+
 // refreshModelCatalog coalesces listings and bare-name misses into one bounded
 // discovery pass. Callers can cancel their wait without cancelling other callers.
 // A single short cooldown also bounds repeated misses without retaining user keys.
@@ -91,8 +105,8 @@ func (s *Server) refreshModelCatalog(ctx context.Context) (modelCatalog, error) 
 
 func (s *Server) discoverModelCatalog(ctx context.Context) (modelCatalog, error) {
 	cacheByProvider := map[string][]metadata.ModelCacheRow{}
-	if s.cache != nil {
-		cached, err := s.cache.ListModelCache(ctx)
+	{
+		cached, err := s.modelResolutionRows(ctx)
 		if err != nil {
 			return modelCatalog{}, errModelCacheUnavailable
 		}
@@ -171,7 +185,13 @@ func (s *Server) discoverModelCatalog(ctx context.Context) (modelCatalog, error)
 		if attempt.live {
 			catalog.models = append(catalog.models, attempt.models...)
 			if !attempt.complete {
-				catalog.addresses = append(catalog.addresses, modelCacheRowsFromProvider(attempt.models)...)
+				rows := modelCacheRowsFromProvider(attempt.models)
+				if s.cache != nil {
+					if err := s.cache.MergeModelCache(ctx, instance.ID, rows); err != nil {
+						return modelCatalog{}, errModelCacheUnavailable
+					}
+				}
+				catalog.addresses = append(catalog.addresses, rows...)
 			}
 			attempted++
 			continue

@@ -97,20 +97,16 @@ func (s *Server) discoverModelsWithCredentials(ctx context.Context, instance pro
 			out <- credentialResult{models: models, live: live}
 		}(results[i], credential)
 	}
-	for i, credential := range credentialsSet {
+	for i := range credentialsSet {
 		result := <-results[i]
 		models, ok := result.models, result.live
-		now := s.now().UTC()
-		key := modelCatalogKey(instance.ID, credential)
 		if !ok {
 			complete = false
-			s.credentialModelCatalogs.fail(now, key)
 			if ctx.Err() != nil {
 				return modelDiscoveryAttempt{}
 			}
 			continue
 		}
-		s.credentialModelCatalogs.put(now, key, providerModelIDs(models))
 		for _, model := range models {
 			if _, exists := byID[model.ModelID]; !exists {
 				byID[model.ModelID] = model
@@ -129,36 +125,6 @@ func (s *Server) discoverModelsWithCredentials(ctx context.Context, instance pro
 }
 
 func (s *Server) discoverModelsWithCredential(ctx context.Context, instance provider.Instance, discoverer provider.ModelDiscoverer, credential provider.BearerCredential) ([]provider.ModelMetadata, bool) {
-	ctx, cancel := context.WithTimeout(ctx, modelCatalogCredentialTimeout)
-	defer cancel()
-	if ctx.Err() != nil {
-		return nil, false
-	}
-	result, err := discoverer.ListModels(ctx, provider.ModelRequest{
-		Instance:   instance,
-		Credential: credential,
-	})
-	s.recordHealth(ctx, healthFromModelDiscovery(instance, credential, result, err))
-	if ctx.Err() != nil {
-		return nil, false
-	}
-	if err == nil && len(result.Models) > 0 {
-		return result.Models, true
-	}
-	if !s.shouldRefreshOAuthAfterModel401(instance, result) {
-		return nil, false
-	}
-	refreshed, refreshErr := s.refreshOAuthCredentialForRetryIfBearer(ctx, credential)
-	if refreshErr != nil || ctx.Err() != nil {
-		return nil, false
-	}
-	result, err = discoverer.ListModels(ctx, provider.ModelRequest{
-		Instance:   instance,
-		Credential: refreshed,
-	})
-	s.recordHealth(ctx, healthFromModelDiscovery(instance, refreshed, result, err))
-	if ctx.Err() != nil || err != nil || len(result.Models) == 0 {
-		return nil, false
-	}
-	return result.Models, true
+	observation := s.observeCredentialModels(ctx, instance, discoverer, credential, true)
+	return observation.models, observation.live
 }

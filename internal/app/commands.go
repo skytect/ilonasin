@@ -40,7 +40,10 @@ func Serve(opts Options) error {
 	}
 	captureUpstreamIO := rt.IOLogger != nil
 	secretRefresh := ioSecretRefreshHook(ctx, rt.IOLogger, rt.Store)
-	keepalive := subscriptionKeepaliveSettingsFromConfig(rt.Config.SubscriptionKeepalive)
+	keepalive, err := subscriptionKeepaliveSettingsFromConfig(rt.Config.SubscriptionKeepalive)
+	if err != nil {
+		return err
+	}
 	auth := credentials.Service{Repo: rt.Store}
 	if rt.IOLogger != nil {
 		auth.EphemeralSecretAdded = rt.IOLogger.AddEphemeralSecret
@@ -95,7 +98,7 @@ func Serve(opts Options) error {
 	modelAdapters["codex"] = codexAdapter
 	responseAdapters := responsesAdapters(providerClient, rt.IOLogger, captureUpstreamIO, rt.Logger)
 	responseAdapters["codex"] = codexAdapter
-	stopKeepalive := startSubscriptionKeepalive(ctx, keepalive, keepaliveProviderRegistryFromProvider(rt.Registry), upstreams, keepaliveUsageClientFromProvider(codexAdapter), keepaliveChatClientFromProvider(codexAdapter), rt.Logger)
+	stopKeepalive := startSubscriptionKeepalive(ctx, keepalive, keepaliveProviderRegistryFromProvider(rt.Registry), upstreams, keepaliveUsageClientFromProvider(codexAdapter), keepaliveChatClientFromProvider(codexAdapter, codexAdapter), rt.Logger)
 	keepaliveStopped := false
 	stopKeepaliveOnce := func() {
 		if keepaliveStopped {

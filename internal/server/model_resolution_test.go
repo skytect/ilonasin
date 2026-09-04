@@ -54,6 +54,27 @@ func (c *resolutionModelCache) ReplaceModelCache(_ context.Context, id string, r
 	return nil
 }
 
+func (c *resolutionModelCache) MergeModelCache(_ context.Context, id string, rows []metadata.ModelCacheRow) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	byID := make(map[string]metadata.ModelCacheRow)
+	for _, row := range rows {
+		byID[row.ModelID] = row
+	}
+	for i, row := range c.rows {
+		if row.ProviderInstanceID == id {
+			if updated, ok := byID[row.ModelID]; ok {
+				c.rows[i] = updated
+				delete(byID, row.ModelID)
+			}
+		}
+	}
+	for _, row := range byID {
+		c.rows = append(c.rows, row)
+	}
+	return nil
+}
+
 func newResolutionServer(discoverer provider.ModelDiscoverer, cache ModelCache, ids ...int64) (*Server, provider.Instance) {
 	instance := provider.Instance{ID: "catalog-provider", Type: "codex", OAuth: true, Chat: true, ModelDiscovery: true}
 	resolved := make([]credentials.ResolvedOAuthBearerCredential, 0, len(ids))
@@ -250,7 +271,7 @@ func TestPartialCatalogPreservesAliasesWithoutGrantingEntitlement(t *testing.T) 
 		t.Fatal("partial live catalog lost newly observed model")
 	}
 	rows, _ := cache.ListModelCache(context.Background())
-	if !resolutionHasRow(rows, instance.ID, "old-shared") || !resolutionHasRow(rows, instance.ID, testAccountScopedModel) || resolutionHasRow(rows, instance.ID, "new-shared") {
+	if !resolutionHasRow(rows, instance.ID, "old-shared") || !resolutionHasRow(rows, instance.ID, testAccountScopedModel) || !resolutionHasRow(rows, instance.ID, "new-shared") {
 		t.Fatalf("partial discovery replaced complete persisted catalog: %+v", rows)
 	}
 	previous, ok := srv.lastGoodCodexModels.get(instance.ID)
@@ -323,7 +344,7 @@ func TestSlowCredentialPreservesSnapshotAndDiscoversNewAlias(t *testing.T) {
 		t.Fatalf("slow credential blocked healthy credential alias: address=%+v err=%v", addr, err)
 	}
 	rows, err := cache.ListModelCache(context.Background())
-	if err != nil || !resolutionHasRow(rows, instance.ID, "old-model") || resolutionHasRow(rows, instance.ID, "new-model") {
+	if err != nil || !resolutionHasRow(rows, instance.ID, "old-model") || !resolutionHasRow(rows, instance.ID, "new-model") {
 		t.Fatalf("timed-out catalog replaced complete persisted snapshot: rows=%+v err=%v", rows, err)
 	}
 	previous, ok := srv.lastGoodCodexModels.get(instance.ID)
@@ -339,7 +360,7 @@ type resolutionHTTPAdapter struct {
 
 func (a *resolutionHTTPAdapter) CompleteChat(_ context.Context, req provider.ChatRequest) (provider.ChatResult, error) {
 	a.requests = append(a.requests, req)
-	return provider.ChatResult{StatusCode: http.StatusOK, ContentType: "application/json", Body: []byte(`{"id":"test","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)}, nil
+	return provider.ChatResult{StatusCode: http.StatusOK, ContentType: "application/json", Body: []byte(`{"id":"test","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)}, nil
 }
 
 func TestBareHTTPModelPersistsAcrossServerRecreation(t *testing.T) {

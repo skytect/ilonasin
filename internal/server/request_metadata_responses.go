@@ -21,7 +21,7 @@ func responsesRequestMetadataBase(start time.Time, token credentials.VerifiedLoc
 		ToolCount:                 len(req.Tools),
 		ImageCount:                openai.ResponsesRequestImageCount(req),
 		RequestedProviderInstance: safeMetadataAddress(addr.ProviderInstanceID),
-		RequestedModel:            safeMetadataAddress(addr.ProviderModelID),
+		RequestedModel:            safeMetadataAddress(addr.RequestedModel()),
 		ResolvedProviderInstance:  safeMetadataAddress(addr.ProviderInstanceID),
 		ResolvedModel:             safeMetadataAddress(addr.ProviderModelID),
 	}
@@ -40,7 +40,7 @@ func nativeResponsesRequestMetadataBase(start time.Time, token credentials.Verif
 		ToolCount:                 req.ToolCount,
 		ImageCount:                req.ImageCount,
 		RequestedProviderInstance: safeMetadataAddress(addr.ProviderInstanceID),
-		RequestedModel:            safeMetadataAddress(addr.ProviderModelID),
+		RequestedModel:            safeMetadataAddress(addr.RequestedModel()),
 		ResolvedProviderInstance:  safeMetadataAddress(addr.ProviderInstanceID),
 		ResolvedModel:             safeMetadataAddress(addr.ProviderModelID),
 	}

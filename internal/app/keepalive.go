@@ -29,6 +29,7 @@ type keepaliveRunner struct {
 
 type subscriptionKeepaliveSettings struct {
 	Enabled           bool
+	Location          *time.Location
 	ScheduleTimes     []string
 	Model             string
 	OutputCapVerified bool
@@ -75,6 +76,9 @@ func (r *keepaliveRunner) loop(ctx context.Context) {
 
 func (r *keepaliveRunner) runDue(ctx context.Context) {
 	now := r.now()
+	if r.settings.Location != nil {
+		now = now.In(r.settings.Location)
+	}
 	slot := keepaliveSlot(now, r.settings.ScheduleTimes)
 	if slot == "" {
 		return
@@ -142,9 +146,6 @@ func (r *keepaliveRunner) runCredential(ctx context.Context, now time.Time, slot
 
 func keepaliveRequest(model string) openai.ChatCompletionRequest {
 	model = strings.TrimSpace(model)
-	if model == "" {
-		model = "gpt-5.5"
-	}
 	content, _ := json.Marshal(keepalivePrompt)
 	return openai.ChatCompletionRequest{
 		Model: model,
@@ -152,15 +153,6 @@ func keepaliveRequest(model string) openai.ChatCompletionRequest {
 			Role:    "user",
 			Content: content,
 		}},
-		ReasoningOptions: map[string]any{
-			"codex": map[string]any{
-				"reasoning": map[string]any{"effort": "minimal"},
-				"verbosity": "low",
-			},
-		},
-		PresentFields: map[string]bool{
-			"provider_options": true,
-		},
 	}
 }
 

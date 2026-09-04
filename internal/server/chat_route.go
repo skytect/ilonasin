@@ -81,7 +81,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request, t
 			slog.Bool("stream", req.Stream),
 		)
 	}
-	credentialsSet, err := s.resolveModelCredentialsForModel(r.Context(), instance, addr.ProviderModelID)
+	credentialsSet, err := s.resolveModelCredentialsForModel(r.Context(), instance, addr.ProviderModelID, addr.AccountSelector)
 	if err != nil {
 		writeOpenAICredentialUnavailable(w, func(status int, errorClass string) {
 			requestMeta := requestMetadataBase(start, token, addr, instance, req, metadataEndpointChatCompletions, req.Stream)

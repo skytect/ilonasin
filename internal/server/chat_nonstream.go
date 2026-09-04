@@ -143,9 +143,14 @@ func (s *Server) executeNonStreamingChat(r *http.Request, nc nonStreamContext) n
 
 func (s *Server) completeChatAttempt(r *http.Request, nc nonStreamContext, credential provider.BearerCredential, modelCredential provider.BearerCredential, releaseAttempt func()) (provider.ChatResult, error) {
 	defer releaseAttempt()
-	if !s.credentialModelEligibleForAttempt(r.Context(), nc.instance, nc.address.ProviderModelID, modelCredential) {
+	modelCredential, eligible := s.credentialModelEligibleForAttempt(r.Context(), nc.instance, nc.address.ProviderModelID, modelCredential, nc.address.AccountSelector)
+	if !eligible {
 		return provider.ChatResult{StatusCode: http.StatusServiceUnavailable, ErrorClass: "model_entitlement_unavailable"}, errors.New("fresh model entitlement is unavailable")
 	}
+	if credential.ID == modelCredential.ID {
+		credential = modelCredential
+	}
+
 	return nc.adapter.CompleteChat(r.Context(), providerChatRequest(nc.instance, nc.address, nc.request, credential, modelCredential))
 }
 

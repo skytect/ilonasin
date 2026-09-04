@@ -1,6 +1,17 @@
 package config
 
-import "strings"
+import (
+	"strings"
+	"time"
+)
+
+func SubscriptionKeepaliveLocation(zone string) (*time.Location, error) {
+	zone = strings.TrimSpace(zone)
+	if zone == "" || strings.EqualFold(zone, "local") {
+		return time.Local, nil
+	}
+	return time.LoadLocation(zone)
+}
 
 func DefaultSubscriptionKeepaliveScheduleTimes() []string {
 	return []string{"07:00", "12:00", "17:00", "22:00"}

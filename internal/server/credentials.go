@@ -61,7 +61,7 @@ func (s *Server) resolveModelCredentials(ctx context.Context, instance provider.
 	return nil, credentials.ErrNoEligibleCredential
 }
 
-func (s *Server) resolveModelCredentialsForModel(ctx context.Context, instance provider.Instance, modelID string) ([]provider.BearerCredential, error) {
+func (s *Server) resolveModelCredentialsForModel(ctx context.Context, instance provider.Instance, modelID string, selectors ...string) ([]provider.BearerCredential, error) {
 	credentialsSet, err := s.resolveModelCredentials(ctx, instance)
 	if err != nil {
 		return nil, err
@@ -74,14 +74,14 @@ func (s *Server) resolveModelCredentialsForModel(ctx context.Context, instance p
 		return nil, credentials.ErrNoEligibleCredential
 	}
 
-	s.refreshMissingCredentialModelCatalogs(ctx, instance, discoverer, credentialsSet)
+	credentialsSet = s.refreshMissingCredentialModelCatalogs(ctx, instance, discoverer, credentialsSet)
 	eligible := make([]provider.BearerCredential, 0, len(credentialsSet))
 	for _, credential := range credentialsSet {
 		catalog, known, cached := s.credentialModelCatalogs.lookup(s.now().UTC(), modelCatalogKey(instance.ID, credential))
 		if !cached || !known {
 			continue
 		}
-		if _, advertised := catalog[modelID]; advertised {
+		if modelCatalogAdvertises(catalog, modelID, selectors) {
 			eligible = append(eligible, credential)
 		}
 	}
@@ -91,21 +91,33 @@ func (s *Server) resolveModelCredentialsForModel(ctx context.Context, instance p
 	return eligible, nil
 }
 
-func (s *Server) credentialModelEligibleForAttempt(ctx context.Context, instance provider.Instance, modelID string, credential provider.BearerCredential) bool {
+func (s *Server) credentialModelEligibleForAttempt(ctx context.Context, instance provider.Instance, modelID string, credential provider.BearerCredential, selectors ...string) (provider.BearerCredential, bool) {
 	discoverer, scope, discovererAvailable := s.modelAvailabilityScope(instance, modelID)
 	if scope != provider.ModelAvailabilityCredentialCatalog {
-		return true
+		return credential, true
 	}
 	if !discovererAvailable {
-		return false
+		return credential, false
 	}
-	s.refreshMissingCredentialModelCatalogs(ctx, instance, discoverer, []provider.BearerCredential{credential})
+	credential = s.refreshMissingCredentialModelCatalogs(ctx, instance, discoverer, []provider.BearerCredential{credential})[0]
 	catalog, known, cached := s.credentialModelCatalogs.lookup(s.now().UTC(), modelCatalogKey(instance.ID, credential))
 	if !cached || !known {
-		return false
+		return credential, false
 	}
-	_, advertised := catalog[modelID]
-	return advertised
+	return credential, modelCatalogAdvertises(catalog, modelID, selectors)
+}
+
+func modelCatalogAdvertises(catalog map[string]struct{}, modelID string, selectors []string) bool {
+	selector := ""
+	if len(selectors) > 0 {
+		selector = selectors[0]
+	}
+	for _, required := range provider.ModelCatalogRequirements(modelID, selector) {
+		if _, advertised := catalog[required]; !advertised {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Server) modelAvailabilityScope(instance provider.Instance, modelID string) (provider.ModelDiscoverer, provider.ModelAvailabilityScope, bool) {
@@ -124,50 +136,43 @@ func (s *Server) modelAvailabilityScope(instance provider.Instance, modelID stri
 	return discoverer, scope, true
 }
 
-func (s *Server) refreshMissingCredentialModelCatalogs(ctx context.Context, instance provider.Instance, discoverer provider.ModelDiscoverer, credentialsSet []provider.BearerCredential) {
-	s.credentialModelRefresh.Lock()
-	defer s.credentialModelRefresh.Unlock()
-
+func (s *Server) refreshMissingCredentialModelCatalogs(ctx context.Context, instance provider.Instance, discoverer provider.ModelDiscoverer, credentialsSet []provider.BearerCredential) []provider.BearerCredential {
 	now := s.now().UTC()
-	missing := make([]provider.BearerCredential, 0, len(credentialsSet))
-	for _, credential := range credentialsSet {
+	out := append([]provider.BearerCredential(nil), credentialsSet...)
+	missing := make([]int, 0, len(credentialsSet))
+	for i, credential := range credentialsSet {
 		if _, _, cached := s.credentialModelCatalogs.lookup(now, modelCatalogKey(instance.ID, credential)); !cached {
-			missing = append(missing, credential)
+			missing = append(missing, i)
 		}
 	}
 	if len(missing) == 0 {
-		return
+		return out
 	}
 	type result struct {
+		index      int
 		credential provider.BearerCredential
-		models     []provider.ModelMetadata
-		live       bool
 	}
 	results := make(chan result, len(missing))
 	workers := make(chan struct{}, 4)
-	for _, credential := range missing {
-		go func(credential provider.BearerCredential) {
+	for _, index := range missing {
+		go func(index int) {
+			credential := credentialsSet[index]
 			select {
 			case workers <- struct{}{}:
 				defer func() { <-workers }()
 			case <-ctx.Done():
-				results <- result{credential: credential}
+				results <- result{index: index, credential: credential}
 				return
 			}
-			models, live := s.discoverModelsWithCredential(ctx, instance, discoverer, credential)
-			results <- result{credential: credential, models: models, live: live}
-		}(credential)
+			observation := s.observeCredentialModels(ctx, instance, discoverer, credential, false)
+			results <- result{index: index, credential: observation.credential}
+		}(index)
 	}
 	for range missing {
 		result := <-results
-		observedAt := s.now().UTC()
-		key := modelCatalogKey(instance.ID, result.credential)
-		if !result.live {
-			s.credentialModelCatalogs.fail(observedAt, key)
-			continue
-		}
-		s.credentialModelCatalogs.put(observedAt, key, providerModelIDs(result.models))
+		out[result.index] = result.credential
 	}
+	return out
 }
 
 func providerModelIDs(models []provider.ModelMetadata) []string {

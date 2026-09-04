@@ -117,6 +117,9 @@ func load(path, homeDir string, explicit bool, createDefault bool) (Config, stri
 		return Config{}, "", fmt.Errorf("logging outputs must not be empty")
 	}
 	cfg.applyDefaults(homeDir)
+	if _, err := SubscriptionKeepaliveLocation(cfg.SubscriptionKeepalive.Timezone); err != nil {
+		return Config{}, "", fmt.Errorf("subscription_keepalive.timezone: %w", err)
+	}
 	cfg.Paths.DataDir = canonicalPath(home.ExpandPath(cfg.Paths.DataDir, homeDir))
 	cfg.Paths.Database = canonicalPath(home.ExpandPath(cfg.Paths.Database, homeDir))
 	cfg.Paths.LogDir = canonicalPath(home.ExpandPath(cfg.Paths.LogDir, homeDir))

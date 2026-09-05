@@ -55,6 +55,8 @@ func subscriptionUsageAggregates(rows []SubscriptionUsageRow, now time.Time) []S
 		secondarySum         float64
 		primaryWindowCount   int
 		secondaryWindowCount int
+		primaryMinutes       int
+		secondaryMinutes     int
 		freshAccountCount    int
 		primaryLabel         string
 		secondaryLabel       string
@@ -91,6 +93,7 @@ func subscriptionUsageAggregates(rows []SubscriptionUsageRow, now time.Time) []S
 			case "primary":
 				b.primarySum += window.UsedPercent
 				if window.WindowMinutes > 0 || window.ResetAt != nil {
+					b.primaryMinutes = commonPoolWindowMinutes(b.primaryMinutes, window.WindowMinutes, b.primaryWindowCount)
 					b.primaryWindowCount++
 					if b.primaryLabel == "" {
 						b.primaryLabel = window.Label
@@ -100,6 +103,7 @@ func subscriptionUsageAggregates(rows []SubscriptionUsageRow, now time.Time) []S
 			case "secondary":
 				b.secondarySum += window.UsedPercent
 				if window.WindowMinutes > 0 || window.ResetAt != nil {
+					b.secondaryMinutes = commonPoolWindowMinutes(b.secondaryMinutes, window.WindowMinutes, b.secondaryWindowCount)
 					b.secondaryWindowCount++
 					if b.secondaryLabel == "" {
 						b.secondaryLabel = window.Label
@@ -113,6 +117,15 @@ func subscriptionUsageAggregates(rows []SubscriptionUsageRow, now time.Time) []S
 	for _, b := range buckets {
 		if b.agg.AccountCount > 0 {
 			b.agg.Windows = subscriptionUsagePoolWindows(b.agg, b.freshAccountCount, b.primarySum, b.secondarySum, b.primaryWindowCount, b.secondaryWindowCount, b.primaryLabel, b.secondaryLabel, b.primaryReset, b.secondaryReset)
+			for i := range b.agg.Windows {
+				window := &b.agg.Windows[i]
+				if window.Kind == "primary" && b.primaryMinutes > 0 && b.primaryWindowCount == b.freshAccountCount {
+					window.WindowMinutes = b.primaryMinutes
+				}
+				if window.Kind == "secondary" && b.secondaryMinutes > 0 && b.secondaryWindowCount == b.freshAccountCount {
+					window.WindowMinutes = b.secondaryMinutes
+				}
+			}
 			if b.agg.LimitID == "codex" {
 				banked := b.banked
 				b.agg.BankedResetInventory = &banked
@@ -127,6 +140,16 @@ func subscriptionUsageAggregates(rows []SubscriptionUsageRow, now time.Time) []S
 		return out[i].LimitID < out[j].LimitID
 	})
 	return out
+}
+
+func commonPoolWindowMinutes(current, next, count int) int {
+	if count == 0 {
+		return next
+	}
+	if current != next {
+		return -1
+	}
+	return current
 }
 
 func subscriptionUsageBankedResetInventoryRow(in metadata.BankedResetInventory) SubscriptionUsageBankedResetInventory {

@@ -31,6 +31,7 @@ type nativeResponsesSink struct {
 	server  *Server
 	request *http.Request
 	started bool
+	pool    <-chan PoolUsage
 }
 
 func (s *Server) handleNativeResponses(w http.ResponseWriter, r *http.Request, nc nativeResponsesContext) {
@@ -44,7 +45,7 @@ func (s *Server) handleNativeResponses(w http.ResponseWriter, r *http.Request, n
 		writeError(w, http.StatusInternalServerError, "streaming is not available for this response writer", "api_error", "client_stream_unavailable")
 		return
 	}
-	sink := &nativeResponsesSink{w: w, flusher: flusher, server: s, request: r}
+	sink := &nativeResponsesSink{w: w, flusher: flusher, server: s, request: r, pool: s.nativePoolUsage(r, nc)}
 	exec := s.executeNativeResponses(r, nc, sink)
 	final := exec.final
 	summary := final.summary
@@ -173,6 +174,9 @@ func (s *nativeResponsesSink) start() {
 	header.Set("Content-Type", "text/event-stream")
 	header.Set("Cache-Control", "no-cache")
 	header.Set("Connection", "keep-alive")
+	if s.pool != nil {
+		writePoolUsageHeaders(header, <-s.pool, time.Now())
+	}
 	s.w.WriteHeader(http.StatusOK)
 	s.started = true
 }

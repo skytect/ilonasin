@@ -478,6 +478,26 @@ available, pooling still spreads traffic across eligible credentials using the
 verified local token identity, requested route, in-flight pressure, and cursor
 state.
 
+### Subscription Usage Display
+
+Successful native Responses streams expose included Codex quota through
+`x-codex-primary-*` and `x-codex-secondary-*` response headers. The displayed
+Ilonasin pool uses the route's model- and account-selector-eligible credentials,
+including accounts temporarily blocked by quota. Daybreak selectors require the
+same per-account catalog evidence as inference; provider-wide unions do not
+establish pool membership.
+
+The compatibility percentage is `100 * total_used / total_capacity` from the
+existing summed account percentage-point aggregates. It is equal-account pool
+utilization, not an estimate of token capacity across different subscription
+plans. The reset timestamp is the next observed account reset. Purchased
+credits and separate metered model buckets are not combined with included quota.
+Missing, stale, or incompatible windows are omitted. Management refreshes stale
+eligible snapshots on demand, concurrently with inference and within a bounded
+deadline; quota reads cannot change routing or commit a response before its
+first successful event. The existing management and TUI summative totals remain
+unchanged.
+
 ### Subscription Keepalive
 
 `[subscription_keepalive].enabled` opts into short scheduled requests on each

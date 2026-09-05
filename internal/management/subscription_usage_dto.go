@@ -41,6 +41,7 @@ type SubscriptionUsageWindow struct {
 type SubscriptionUsagePoolWindow struct {
 	Kind                        string     `json:"kind"`
 	Label                       string     `json:"label"`
+	WindowMinutes               int        `json:"window_minutes"`
 	AccountCount                int        `json:"account_count"`
 	FreshAccountCount           int        `json:"fresh_account_count"`
 	StaleCount                  int        `json:"stale_count"`

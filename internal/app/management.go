@@ -18,6 +18,7 @@ type managementRuntime struct {
 	socketPath string
 	owner      management.SocketOwner
 	server     *http.Server
+	poolUsage  *subscriptionPoolUsage
 }
 
 type ioRetentionStatus struct {
@@ -35,7 +36,7 @@ func startManagementServer(ctx context.Context, homeDir, configPath, databasePat
 	if ioLogger != nil {
 		tokens.EphemeralSecretAdded = ioLogger.AddEphemeralSecret
 	}
-	return startManagementServerWithService(ctx, homeDir, configPath, databasePath, management.Service{
+	service := management.Service{
 		Runtime: management.RuntimeStatus{
 			Bind:       bind,
 			CaptureIO:  ioLogger != nil,
@@ -56,7 +57,13 @@ func startManagementServer(ctx context.Context, homeDir, configPath, databasePat
 		Observability:     store,
 		Pruner:            store,
 		Now:               time.Now,
-	})
+	}
+	runtime, err := startManagementServerWithService(ctx, homeDir, configPath, databasePath, service)
+	if err != nil {
+		return runtime, err
+	}
+	runtime.poolUsage = &subscriptionPoolUsage{ctx: ctx, service: service, reads: make(map[string]*subscriptionPoolRead)}
+	return runtime, nil
 }
 
 func managementProviderInstances(registry provider.Registry) []management.ProviderInstance {

@@ -21,6 +21,7 @@ type Server struct {
 	cache     ModelCache
 	meta      MetadataRecorder
 	quota     QuotaReader
+	poolUsage PoolUsageReader
 	pressure  *credentialPressureTracker
 	logger    *slog.Logger
 	ioLogger  *logging.IOLogger
@@ -57,5 +58,10 @@ func (s *Server) WithIOLogger(logger *logging.IOLogger) *Server {
 
 func (s *Server) WithResponsesAdapters(adapters provider.ResponsesAdapters) *Server {
 	s.responses = adapters
+	return s
+}
+
+func (s *Server) WithPoolUsageReader(reader PoolUsageReader) *Server {
+	s.poolUsage = reader
 	return s
 }

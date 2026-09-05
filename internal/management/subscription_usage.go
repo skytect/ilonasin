@@ -113,6 +113,7 @@ func (s Service) refreshCredentialUsage(ctx context.Context, instance ProviderIn
 			result, err = s.UsageClient.FetchSubscriptionUsage(ctx, req)
 		}
 	}
+	now = time.Now().UTC()
 	if err != nil {
 		class := result.ErrorClass
 		if class == "" {

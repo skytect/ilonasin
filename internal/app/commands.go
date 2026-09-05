@@ -112,6 +112,7 @@ func Serve(opts Options) error {
 		WithLogger(rt.Logger).
 		WithIOLogger(rt.IOLogger).
 		WithResponsesAdapters(responseAdapters).
+		WithPoolUsageReader(mgmt.poolUsage).
 		Handler()
 	srv := &http.Server{
 		Addr:              rt.Config.Server.Bind,

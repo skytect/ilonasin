@@ -57,7 +57,7 @@ func writePoolUsageHeaders(header http.Header, usage PoolUsage, now time.Time) {
 	}
 	// Reuse the default bucket so changing model/cohort replaces the previous
 	// pool in Codex instead of leaving old cohort buckets on its status card.
-	header.Set("x-codex-limit-name", fmt.Sprintf("Ilonasin pool (%d accounts; next account reset)", usage.AccountCount))
+	header.Set("x-codex-limit-name", fmt.Sprintf("Pool (%d accounts)", usage.AccountCount))
 	for kind, window := range map[string]*PoolUsageWindow{"primary": usage.Primary, "secondary": usage.Secondary} {
 		if window == nil || math.IsNaN(window.UsedPercent) || math.IsInf(window.UsedPercent, 0) {
 			continue

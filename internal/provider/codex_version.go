@@ -13,10 +13,10 @@ import (
 )
 
 const (
-	// Mirrors OpenAI Codex rust-v0.135.0 at the time this compatibility layer
-	// was introduced. It remains the safe fallback when live version discovery is
-	// unavailable.
-	CodexClientVersion = "0.135.0"
+	// Keep the fallback aligned with the installed Codex client. Older client
+	// versions return an incomplete /models catalog and hide currently usable
+	// models such as GPT-5.6 Sol and GPT-6 Astra.
+	CodexClientVersion = "0.153.3"
 
 	DefaultCodexVersionRegistryURL     = "https://registry.npmjs.org/@openai/codex/latest"
 	DefaultCodexVersionCacheTTL        = time.Hour

@@ -94,6 +94,50 @@ func decodeContentBlock(raw map[string]json.RawMessage, field string) (ContentBl
 			return ContentBlock{}, err
 		}
 		return ContentBlock{Type: "tool_result", ToolUseID: id, ToolContent: content}, nil
+	case "thinking":
+		if key, ok := firstUnsupportedAnthropicField(raw, "type", "thinking", "signature", "cache_control"); ok {
+			return ContentBlock{}, fmt.Errorf("%s.%s is unsupported", field, key)
+		}
+		var thinking, signature string
+		if err := decodeRequiredRawString(raw["thinking"], field+".thinking", &thinking); err != nil {
+			return ContentBlock{}, err
+		}
+		if err := decodeRequiredRawString(raw["signature"], field+".signature", &signature); err != nil {
+			return ContentBlock{}, err
+		}
+		return ContentBlock{Type: "thinking"}, nil
+	case "redacted_thinking":
+		if key, ok := firstUnsupportedAnthropicField(raw, "type", "data", "cache_control"); ok {
+			return ContentBlock{}, fmt.Errorf("%s.%s is unsupported", field, key)
+		}
+		var data string
+		if err := decodeRequiredRawString(raw["data"], field+".data", &data); err != nil {
+			return ContentBlock{}, err
+		}
+		return ContentBlock{Type: "redacted_thinking"}, nil
+	case "compaction":
+		if key, ok := firstUnsupportedAnthropicField(raw, "type", "content", "encrypted_content", "signature", "tool_changes", "cache_control"); ok {
+			return ContentBlock{}, fmt.Errorf("%s.%s is unsupported", field, key)
+		}
+		var content *string
+		if rawContent, ok := raw["content"]; ok && string(bytes.TrimSpace(rawContent)) != "null" {
+			var value string
+			if err := json.Unmarshal(rawContent, &value); err != nil {
+				return ContentBlock{}, fmt.Errorf("%s.content must be a string or null", field)
+			}
+			content = &value
+		}
+		if rawEncrypted, ok := raw["encrypted_content"]; ok && string(bytes.TrimSpace(rawEncrypted)) != "null" {
+			var encrypted string
+			if err := json.Unmarshal(rawEncrypted, &encrypted); err != nil {
+				return ContentBlock{}, fmt.Errorf("%s.encrypted_content must be a string or null", field)
+			}
+		}
+		block := ContentBlock{Type: "compaction"}
+		if content != nil {
+			block.Text = *content
+		}
+		return block, nil
 	default:
 		return ContentBlock{}, fmt.Errorf("%s.type is unsupported", field)
 	}

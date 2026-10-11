@@ -81,10 +81,14 @@ func firstUnsupportedAnthropicField(raw map[string]json.RawMessage, allowed ...s
 func blocksText(blocks []ContentBlock, field string) (string, error) {
 	texts := []string{}
 	for i, block := range blocks {
-		if block.Type != "text" {
+		switch block.Type {
+		case "text", "compaction":
+			texts = append(texts, block.Text)
+		case "thinking", "redacted_thinking":
+			continue
+		default:
 			return "", fmt.Errorf("%s[%d].type is unsupported", field, i)
 		}
-		texts = append(texts, block.Text)
 	}
 	return strings.Join(texts, "\n\n"), nil
 }

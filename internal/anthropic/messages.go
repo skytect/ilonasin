@@ -34,7 +34,7 @@ func decodeMessages(raw json.RawMessage, out *[]Message) error {
 		}
 		if role == "system" {
 			for j, block := range content {
-				if block.Type != "text" {
+				if !systemCompatibleBlock(block.Type) {
 					return fmt.Errorf("messages[%d].content[%d].type is unsupported", i, j)
 				}
 			}
@@ -42,6 +42,15 @@ func decodeMessages(raw json.RawMessage, out *[]Message) error {
 		*out = append(*out, Message{Role: role, Content: content})
 	}
 	return nil
+}
+
+func systemCompatibleBlock(typ string) bool {
+	switch typ {
+	case "text", "thinking", "redacted_thinking", "compaction":
+		return true
+	default:
+		return false
+	}
 }
 
 func decodeSystem(raw json.RawMessage) ([]ContentBlock, error) {
@@ -57,7 +66,7 @@ func decodeSystem(raw json.RawMessage) ([]ContentBlock, error) {
 		return nil, err
 	}
 	for i, block := range blocks {
-		if block.Type != "text" {
+		if !systemCompatibleBlock(block.Type) {
 			return nil, fmt.Errorf("system[%d].type is unsupported", i)
 		}
 	}

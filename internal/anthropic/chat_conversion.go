@@ -107,10 +107,12 @@ func userMessageToChat(blocks []ContentBlock, index int, pending, seen map[strin
 	userParts := []map[string]any{}
 	for _, block := range blocks {
 		switch block.Type {
-		case "text":
+		case "text", "compaction":
 			if block.Text != "" {
 				userParts = append(userParts, map[string]any{"type": "text", "text": block.Text})
 			}
+		case "thinking", "redacted_thinking":
+			continue
 		case "image":
 			userParts = append(userParts, map[string]any{"type": "image_url", "image_url": map[string]any{"url": block.SourceURL}})
 		case "tool_result":
@@ -145,10 +147,12 @@ func assistantMessageToChat(blocks []ContentBlock, index int) (openai.Message, [
 	ids := []string{}
 	for _, block := range blocks {
 		switch block.Type {
-		case "text":
+		case "text", "compaction":
 			if block.Text != "" {
 				texts = append(texts, block.Text)
 			}
+		case "thinking", "redacted_thinking":
+			continue
 		case "tool_use":
 			args := string(block.ToolInput)
 			if args == "" {
